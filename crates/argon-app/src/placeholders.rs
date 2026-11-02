@@ -1,4 +1,4 @@
-use argon_core::PrId;
+use argon_core::PrKey;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, v_flex};
 use gpui_kit::{
@@ -46,17 +46,17 @@ impl Render for CenterPlaceholder {
 }
 
 pub struct PrPlaceholder {
-    id: PrId,
+    key: PrKey,
     model: Entity<InboxModel>,
     focus_handle: FocusHandle,
     _subscription: Subscription,
 }
 
 impl PrPlaceholder {
-    pub fn new(id: PrId, model: Entity<InboxModel>, cx: &mut Context<Self>) -> Self {
+    pub fn new(key: PrKey, model: Entity<InboxModel>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&model, |_, _, cx| cx.notify());
         Self {
-            id,
+            key,
             model,
             focus_handle: cx.focus_handle(),
             _subscription: subscription,
@@ -73,12 +73,12 @@ impl Focusable for PrPlaceholder {
 impl Render for PrPlaceholder {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (title, description): (SharedString, SharedString) =
-            match self.model.read(cx).pr(&self.id) {
+            match self.model.read(cx).pr(&self.key) {
                 Some(pr) => (
                     format!("#{} {}", pr.number, pr.title).into(),
                     format!("{} · {}", pr.repo, inbox::PR_DETAIL_PENDING).into(),
                 ),
-                None => (self.id.0.clone().into(), inbox::PR_NOT_LOADED.into()),
+                None => (inbox::PR_FALLBACK_TITLE.into(), inbox::PR_NOT_LOADED.into()),
             };
         placeholder_body(&self.focus_handle, title, description, cx)
     }

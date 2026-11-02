@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use argon_core::PrId;
+use argon_core::PrKey;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent, PanelInfo, PanelState};
 use gpui_kit::{
     AnyView, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -33,7 +33,7 @@ impl CenterContent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CenterItem {
     Inbox,
-    Pr(PrId),
+    Pr(PrKey),
     Settings,
 }
 
@@ -41,7 +41,7 @@ impl CenterItem {
     pub fn title(&self, cx: &App) -> SharedString {
         match self {
             Self::Inbox => "Inbox".into(),
-            Self::Pr(id) => inbox::pr_tab_title(id, cx),
+            Self::Pr(key) => inbox::pr_tab_title(key, cx),
             Self::Settings => "Configurações".into(),
         }
     }
@@ -49,6 +49,7 @@ impl CenterItem {
 
 pub enum CenterPanelEvent {
     Pinned,
+    Focused,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -63,6 +64,7 @@ pub struct CenterPanel {
     preview: bool,
     content: CenterContent,
     content_factory: CenterContentFactory,
+    _focus_subscription: Subscription,
     _inbox_subscription: Option<Subscription>,
 }
 
@@ -75,6 +77,7 @@ impl CenterPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let content = content_factory(&item, window, cx);
+        let focus_subscription = Self::watch_focus(&content, window, cx);
         let inbox_subscription = InboxModel::global(cx).map(|model| {
             cx.observe_in(&model, window, |this, _, window, cx| {
                 this.refresh_title(window, cx)
@@ -86,8 +89,19 @@ impl CenterPanel {
             preview,
             content,
             content_factory,
+            _focus_subscription: focus_subscription,
             _inbox_subscription: inbox_subscription,
         }
+    }
+
+    fn watch_focus(
+        content: &CenterContent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.on_focus_in(&content.focus_handle, window, |_, _, cx| {
+            cx.emit(CenterPanelEvent::Focused)
+        })
     }
 
     pub fn restore(
@@ -126,6 +140,7 @@ impl CenterPanel {
 
     pub fn replace(&mut self, item: CenterItem, window: &mut Window, cx: &mut Context<Self>) {
         self.content = (self.content_factory)(&item, window, cx);
+        self._focus_subscription = Self::watch_focus(&self.content, window, cx);
         self.title = item.title(cx);
         self.item = item;
         cx.notify();

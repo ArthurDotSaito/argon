@@ -4,7 +4,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::dock::{
-    BasePanelView, DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, PaneRef, PanelId,
+    BasePanelView, DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, InsertTarget, PanelId,
     PanelStyle, panel_handle, register_panel,
 };
 use gpui_kit::{
@@ -17,6 +17,7 @@ use crate::actions::{CloseActiveItem, ToggleBottomDock, ToggleLeftDock, ToggleRi
 use crate::center::{
     CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel, CenterPanelEvent,
 };
+use crate::dock_items;
 use crate::inbox::{InboxEvent, InboxModel, InboxView, ViewsPanel};
 use crate::keymap::WORKSPACE_CONTEXT;
 use crate::layout_store::{self, LAYOUT_VERSION, LayoutSaver};
@@ -68,6 +69,7 @@ pub struct Workspace {
     focus_handle: FocusHandle,
     layout_saver: LayoutSaver,
     center_subscriptions: HashMap<EntityId, Subscription>,
+    last_focused: Option<PanelId>,
     sync_status: Entity<SyncStatus>,
     inbox: Entity<InboxModel>,
     _subscriptions: [Subscription; 4],
@@ -103,6 +105,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             layout_saver: LayoutSaver::default(),
             center_subscriptions: HashMap::new(),
+            last_focused: None,
             sync_status,
             inbox,
             _subscriptions: [
@@ -153,7 +156,7 @@ impl Workspace {
 
         let panel = match target {
             Some(panel) => {
-                self.select_center_panel(&panel, window, cx);
+                self.reveal_center_panel(&panel, window, cx);
                 panel
             }
             None => self.add_center_panel(item, preview, window, cx),
@@ -181,8 +184,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            InboxEvent::OpenPr { id, preview } => {
-                self.open_item(CenterItem::Pr(id.clone()), *preview, window, cx);
+            InboxEvent::OpenPr { key, preview } => {
+                self.open_item(CenterItem::Pr(key.clone()), *preview, window, cx);
             }
             InboxEvent::ShowList => self.open_item(CenterItem::Inbox, false, window, cx),
         }
@@ -192,6 +195,9 @@ impl Workspace {
         let Some(panel) = self.active_center_panel(window, cx) else {
             return;
         };
+        if self.last_focused == Some(PanelId::from(panel.entity_id())) {
+            self.last_focused = None;
+        }
         self.dock_area
             .update(cx, |area, cx| area.remove_panel(panel, window, cx));
         self.focus_handle.focus(window, cx);
@@ -206,34 +212,53 @@ impl Workspace {
     ) -> Entity<CenterPanel> {
         let factory = self.content_factory.clone();
         let panel = cx.new(|cx| CenterPanel::new(item, preview, factory, window, cx));
+        let id = PanelId::from(panel.entity_id());
         let handle = panel_handle(panel.clone());
+        let group = self
+            .last_focused_panel(cx)
+            .and_then(|focused| dock_items::locate(self.dock_area.read(cx), focused))
+            .map(|(_, node)| node);
         self.dock_area.update(cx, |area, cx| {
-            area.add_panel_view(handle, DockPlacement::Center, None, window, cx)
+            area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
+            let added_to = dock_items::locate(area, id).map(|(_, node)| node);
+            if let Some(node) = group.filter(|node| Some(*node) != added_to) {
+                let target = InsertTarget::Tabs {
+                    node,
+                    ix: None,
+                    activate: true,
+                };
+                area.move_panel(id, target, window, cx);
+            }
         });
         self.watch_center_panels(cx);
         panel
     }
 
-    fn select_center_panel(
+    fn reveal_center_panel(
         &mut self,
         panel: &Entity<CenterPanel>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let id = PanelId::from(panel.entity_id());
-        self.dock_area
-            .update(cx, |area, cx| area.select_panel(id, window, cx));
+        self.dock_area.update(cx, |area, cx| {
+            if let Some((placement, _)) = dock_items::locate(area, id)
+                && placement != DockPlacement::Center
+                && !area.is_dock_open(placement)
+            {
+                area.toggle_dock(placement, window, cx);
+            }
+            area.select_panel(id, window, cx);
+        });
     }
 
     fn center_panels(&self, cx: &App) -> Vec<Entity<CenterPanel>> {
-        let area = self.dock_area.read(cx);
-        let Some(tree) = area.layout(DockPlacement::Center) else {
-            return Vec::new();
-        };
-        tree.panels()
-            .filter_map(|id| area.panel(id))
-            .filter_map(|panel| panel.view().downcast::<CenterPanel>().ok())
-            .collect()
+        dock_items::center_panels(self.dock_area.read(cx))
+    }
+
+    fn last_focused_panel(&self, cx: &App) -> Option<PanelId> {
+        let id = self.last_focused?;
+        self.dock_area.read(cx).panel(id).map(|_| id)
     }
 
     fn active_center_panel(&self, window: &Window, cx: &App) -> Option<Entity<CenterPanel>> {
@@ -245,14 +270,11 @@ impl Workspace {
             return Some(panel.clone());
         }
 
-        let tree = self.dock_area.read(cx).layout(DockPlacement::Center)?;
-        let mut active = None;
-        tree.root().walk(&mut |node| {
-            if let (None, PaneRef::Tabs { panels, active_ix }) = (active, node.kind()) {
-                active = panels.get(active_ix).copied();
-            }
-        });
-        let active = active?;
+        let area = self.dock_area.read(cx);
+        let active = self
+            .last_focused_panel(cx)
+            .and_then(|panel| dock_items::active_in_group_of(area, panel))
+            .or_else(|| dock_items::first_center_active(area))?;
         panels
             .into_iter()
             .find(|panel| PanelId::from(panel.entity_id()) == active)
@@ -265,12 +287,24 @@ impl Workspace {
         for panel in panels {
             self.center_subscriptions
                 .entry(panel.entity_id())
-                .or_insert_with(|| {
-                    cx.subscribe(&panel, |this, _, _: &CenterPanelEvent, cx| {
-                        this.schedule_save(cx);
-                        cx.notify();
-                    })
-                });
+                .or_insert_with(|| cx.subscribe(&panel, Self::on_center_panel_event));
+        }
+    }
+
+    fn on_center_panel_event(
+        &mut self,
+        panel: Entity<CenterPanel>,
+        event: &CenterPanelEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            CenterPanelEvent::Pinned => {
+                self.schedule_save(cx);
+                cx.notify();
+            }
+            CenterPanelEvent::Focused => {
+                self.last_focused = Some(PanelId::from(panel.entity_id()));
+            }
         }
     }
 

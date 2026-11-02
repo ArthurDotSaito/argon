@@ -1,15 +1,18 @@
-use std::sync::{PoisonError, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use argon_core::{Config, Paths};
-use argon_github::Account;
+use argon_github::{Account, GithubClient, Viewer};
+use argon_store::CachedViewer;
 use tracing::{info, warn};
 
-use super::orgs::merge_tracked;
+use super::orgs::{admin_orgs, merge_tracked, viewer_from_cache};
 
 pub(super) struct Shared {
     config: RwLock<Config>,
     accounts: RwLock<Vec<Account>>,
     admin_orgs: RwLock<Vec<String>>,
+    clients: RwLock<HashMap<String, Arc<GithubClient>>>,
 }
 
 impl Shared {
@@ -18,6 +21,7 @@ impl Shared {
             config: RwLock::new(config),
             accounts: RwLock::default(),
             admin_orgs: RwLock::default(),
+            clients: RwLock::default(),
         }
     }
 
@@ -35,13 +39,6 @@ impl Shared {
             .clone()
     }
 
-    pub(super) fn set_accounts(&self, accounts: Vec<Account>) {
-        *self
-            .accounts
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = accounts;
-    }
-
     pub(super) fn admin_orgs(&self) -> Vec<String> {
         self.admin_orgs
             .read()
@@ -49,7 +46,75 @@ impl Shared {
             .clone()
     }
 
-    pub(super) fn add_admin_orgs(&self, orgs: Vec<String>) {
+    pub(super) fn client(&self, host: &str) -> Option<Arc<GithubClient>> {
+        self.clients
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&host_key(host))
+            .cloned()
+    }
+
+    pub(super) fn register_client(
+        &self,
+        host: &str,
+        client: Arc<GithubClient>,
+    ) -> Arc<GithubClient> {
+        self.clients
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(host_key(host))
+            .or_insert(client)
+            .clone()
+    }
+
+    pub(super) fn connect(&self, host: &str, viewer: &Viewer) {
+        self.upsert_account(Account {
+            host: host.to_string(),
+            login: viewer.login.clone(),
+        });
+        self.add_admin_orgs(admin_orgs(&[(host.to_string(), viewer.clone())]));
+    }
+
+    pub(super) fn load_cached(&self, cached: &[CachedViewer]) {
+        let known = self.accounts();
+        for entry in cached {
+            if known
+                .iter()
+                .any(|account| account.host.eq_ignore_ascii_case(&entry.host))
+            {
+                continue;
+            }
+            self.connect(&entry.host, &viewer_from_cache(entry));
+        }
+        info!(viewers = cached.len(), "loaded cached gh accounts");
+    }
+
+    pub(super) fn forget(&self, host: &str) {
+        self.clients
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&host_key(host));
+        self.accounts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|account| !account.host.eq_ignore_ascii_case(host));
+    }
+
+    fn upsert_account(&self, account: Account) {
+        let mut accounts = self
+            .accounts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        match accounts
+            .iter_mut()
+            .find(|existing| existing.host.eq_ignore_ascii_case(&account.host))
+        {
+            Some(existing) => *existing = account,
+            None => accounts.push(account),
+        }
+    }
+
+    fn add_admin_orgs(&self, orgs: Vec<String>) {
         let mut admin_orgs = self
             .admin_orgs
             .write()
@@ -72,4 +137,8 @@ impl Shared {
             Err(error) => warn!(%error, "failed to save initialized config"),
         }
     }
+}
+
+fn host_key(host: &str) -> String {
+    host.to_ascii_lowercase()
 }

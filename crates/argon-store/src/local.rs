@@ -1,4 +1,4 @@
-use argon_core::PrId;
+use argon_core::PrKey;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 
@@ -25,29 +25,30 @@ impl LocalState {
 }
 
 impl Store {
-    pub fn mark_seen(&mut self, id: &PrId, updated_at: DateTime<Utc>) -> Result<()> {
+    pub fn mark_seen(&mut self, key: &PrKey, updated_at: DateTime<Utc>) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO pr_local (pr_id, last_seen_updated_at) VALUES (?1, ?2)
-             ON CONFLICT(pr_id) DO UPDATE SET last_seen_updated_at = excluded.last_seen_updated_at",
-            params![id.0, updated_at.timestamp_millis()],
+            "INSERT INTO pr_local (host, pr_id, last_seen_updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(host, pr_id) DO UPDATE
+             SET last_seen_updated_at = excluded.last_seen_updated_at",
+            params![key.host, key.id.0, updated_at.timestamp_millis()],
         )?;
         Ok(())
     }
 
-    pub fn mark_unread(&mut self, id: &PrId) -> Result<()> {
+    pub fn mark_unread(&mut self, key: &PrKey) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO pr_local (pr_id, last_seen_updated_at) VALUES (?1, NULL)
-             ON CONFLICT(pr_id) DO UPDATE SET last_seen_updated_at = NULL",
-            params![id.0],
+            "INSERT INTO pr_local (host, pr_id, last_seen_updated_at) VALUES (?1, ?2, NULL)
+             ON CONFLICT(host, pr_id) DO UPDATE SET last_seen_updated_at = NULL",
+            params![key.host, key.id.0],
         )?;
         Ok(())
     }
 
-    pub fn archive(&mut self, id: &PrId, at: DateTime<Utc>) -> Result<()> {
+    pub fn archive(&mut self, key: &PrKey, at: DateTime<Utc>) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO pr_local (pr_id, archived_at) VALUES (?1, ?2)
-             ON CONFLICT(pr_id) DO UPDATE SET archived_at = excluded.archived_at",
-            params![id.0, at.timestamp_millis()],
+            "INSERT INTO pr_local (host, pr_id, archived_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(host, pr_id) DO UPDATE SET archived_at = excluded.archived_at",
+            params![key.host, key.id.0, at.timestamp_millis()],
         )?;
         Ok(())
     }
@@ -55,11 +56,15 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use argon_core::PrId;
+    use argon_core::fixtures::{days_ago, pr_on};
+    use argon_core::{DEFAULT_HOST, PrKey};
     use chrono::{DateTime, Utc};
 
-    use crate::fixtures::{days_ago, pr};
     use crate::{LocalState, Store};
+
+    fn key(id: &str) -> PrKey {
+        PrKey::new(DEFAULT_HOST, id)
+    }
 
     fn state_of(store: &Store, id: &str) -> LocalState {
         store
@@ -74,7 +79,7 @@ mod tests {
     fn store_with(id: &str, updated_at: DateTime<Utc>) -> Store {
         let mut store = Store::open_in_memory().unwrap();
         store
-            .replace_prs("github.com", &[pr(id, "github.com", updated_at)])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, id, updated_at)])
             .unwrap();
         store
     }
@@ -90,11 +95,11 @@ mod tests {
     #[test]
     fn update_after_seen_makes_pr_unread_again() {
         let mut store = store_with("a", days_ago(3));
-        store.mark_seen(&PrId("a".into()), days_ago(3)).unwrap();
+        store.mark_seen(&key("a"), days_ago(3)).unwrap();
         assert!(!state_of(&store, "a").unread);
 
         store
-            .replace_prs("github.com", &[pr("a", "github.com", days_ago(1))])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(1))])
             .unwrap();
         assert!(state_of(&store, "a").unread);
     }
@@ -102,7 +107,7 @@ mod tests {
     #[test]
     fn mark_unread_clears_last_seen() {
         let mut store = store_with("a", days_ago(1));
-        let id = PrId("a".into());
+        let id = key("a");
         store.mark_seen(&id, days_ago(1)).unwrap();
         assert!(!state_of(&store, "a").unread);
 
@@ -113,11 +118,11 @@ mod tests {
     #[test]
     fn archived_pr_returns_with_new_activity() {
         let mut store = store_with("a", days_ago(3));
-        store.archive(&PrId("a".into()), days_ago(2)).unwrap();
+        store.archive(&key("a"), days_ago(2)).unwrap();
         assert!(state_of(&store, "a").archived);
 
         store
-            .replace_prs("github.com", &[pr("a", "github.com", days_ago(1))])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(1))])
             .unwrap();
         assert!(!state_of(&store, "a").archived);
     }
@@ -125,7 +130,7 @@ mod tests {
     #[test]
     fn archive_keeps_seen_state_independent() {
         let mut store = store_with("a", days_ago(3));
-        let id = PrId("a".into());
+        let id = key("a");
         store.mark_seen(&id, days_ago(3)).unwrap();
         store.archive(&id, days_ago(2)).unwrap();
         let state = state_of(&store, "a");

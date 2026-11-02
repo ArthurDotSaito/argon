@@ -1,8 +1,25 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_HOST: &str = "github.com";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PrKey {
+    pub host: String,
+    pub id: PrId,
+}
+
+impl PrKey {
+    pub fn new(host: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            id: PrId(id.into()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrState {
@@ -91,4 +108,13 @@ pub struct PullRequest {
     pub updated_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
     pub involvement: Involvement,
+}
+
+impl PullRequest {
+    pub fn key(&self) -> PrKey {
+        PrKey {
+            host: self.host.clone(),
+            id: self.id.clone(),
+        }
+    }
 }

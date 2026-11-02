@@ -141,7 +141,7 @@ impl InboxPane {
             .model
             .read(cx)
             .item_at(position)
-            .map(|item| item.pr.id.clone())
+            .map(|item| item.pr.key())
         else {
             return;
         };

@@ -1,11 +1,12 @@
+use argon_core::fixtures;
 use argon_core::{
-    ChecksState, Involvement, LatestReview, Mergeable, Paths, PrId, PrState, PullRequest,
-    ReviewDecision, ReviewState,
+    ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, Paths, PrId, PrState,
+    PullRequest, ReviewDecision, ReviewState,
 };
 use argon_store::Store;
 use chrono::{DateTime, Duration, Utc};
 
-const HOST: &str = "github.com";
+const ME: &str = "seed-me";
 const PR_COUNT: u64 = 1_000;
 const SPREAD_MINUTES: i64 = 60 * 24 * 60;
 const OWNERS: [&str; 4] = ["orbita-labs", "nimbus-dev", "vela-oss", "atlas-cloud"];
@@ -26,7 +27,7 @@ const LOGINS: [&str; 9] = [
     "joao-pedro",
     "renata",
     "tiago-k",
-    "seed-me",
+    ME,
 ];
 const KINDS: [&str; 6] = ["feat", "fix", "chore", "refactor", "perf", "docs"];
 const SUBJECTS: [&str; 10] = [
@@ -98,7 +99,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prs: Vec<PullRequest> = (0..PR_COUNT)
         .map(|index| fake_pr(index, now, &mut rng))
         .collect();
-    store.replace_prs(HOST, &prs)?;
+    store.replace_prs(DEFAULT_HOST, &prs)?;
+    store.save_viewer(DEFAULT_HOST, ME, &[])?;
     println!(
         "seeded {} pull requests into {}",
         prs.len(),
@@ -146,15 +148,14 @@ fn fake_pr(index: u64, now: DateTime<Utc>, rng: &mut Rng) -> PullRequest {
         .collect();
     PullRequest {
         id: PrId(format!("SEED_{index:04}")),
-        host: HOST.into(),
+        host: DEFAULT_HOST.into(),
         repo: format!("{owner}/{repo}"),
         number,
         title: format!("{kind}: {subject} ({number})"),
-        url: format!("https://{HOST}/{owner}/{repo}/pull/{number}"),
+        url: format!("https://{DEFAULT_HOST}/{owner}/{repo}/pull/{number}"),
         author: author.into(),
         is_draft: rng.chance(8),
         state,
-        base: "main".into(),
         head: format!(
             "{kind}/{}-{number}",
             subject.split(' ').next().unwrap_or(kind)
@@ -181,7 +182,6 @@ fn fake_pr(index: u64, now: DateTime<Utc>, rng: &mut Rng) -> PullRequest {
             Mergeable::Mergeable
         },
         requested_reviewers: reviewers,
-        assignees: Vec::new(),
         latest_reviews,
         head_committed_at: updated_at - Duration::minutes(30),
         created_at,
@@ -190,8 +190,9 @@ fn fake_pr(index: u64, now: DateTime<Utc>, rng: &mut Rng) -> PullRequest {
         involvement: Involvement {
             requested: rng.chance(15),
             assigned: rng.chance(5),
-            authored: author == "seed-me",
+            authored: author == ME,
             reviewed: rng.chance(10),
         },
+        ..fixtures::pr()
     }
 }

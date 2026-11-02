@@ -100,13 +100,11 @@ pub(super) fn load_items(
         .into_iter()
         .filter(|(_, state)| !state.archived)
         .collect();
-    for (pr, _) in &prs {
-        if pr.involvement.authored {
-            context
-                .logins
-                .entry(pr.host.to_lowercase())
-                .or_insert_with(|| pr.author.clone());
-        }
+    for viewer in store.viewers()? {
+        context
+            .logins
+            .entry(viewer.host.to_lowercase())
+            .or_insert(viewer.login);
     }
     let mut items: Vec<InboxItem> = prs
         .into_iter()
@@ -115,6 +113,7 @@ pub(super) fn load_items(
     items.sort_by(|a, b| {
         b.pr.updated_at
             .cmp(&a.pr.updated_at)
+            .then_with(|| a.pr.host.cmp(&b.pr.host))
             .then_with(|| a.pr.id.0.cmp(&b.pr.id.0))
     });
     Ok(items)

@@ -47,6 +47,17 @@ impl StoreHandle {
         (StoreHandle { jobs }, startup)
     }
 
+    pub fn submit(&self, f: impl FnOnce(&mut Store) + Send + 'static) {
+        let job: Job = Box::new(move |store| {
+            if panic::catch_unwind(AssertUnwindSafe(|| f(store))).is_err() {
+                tracing::error!("store job panicked");
+            }
+        });
+        if self.jobs.send(job).is_err() {
+            tracing::warn!("store thread is not running");
+        }
+    }
+
     pub async fn call<R: Send + 'static>(
         &self,
         f: impl FnOnce(&mut Store) -> R + Send + 'static,

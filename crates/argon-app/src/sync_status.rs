@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use argon_core::DEFAULT_HOST;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::UnboundedReceiver;
@@ -8,7 +9,6 @@ use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use crate::services::{Services, SyncEvent};
 
 const CLOCK_TICK: Duration = Duration::from_secs(30);
-const DEFAULT_HOST: &str = "github.com";
 const MAX_ERROR_CHARS: usize = 60;
 const SERVICES_STOPPED: &str = "sincronização parou — reinicie o Argon";
 

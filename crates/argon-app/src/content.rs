@@ -14,8 +14,8 @@ pub fn content_factory(inbox: Entity<InboxModel>) -> CenterContentFactory {
             let pane = cx.new(|cx| InboxPane::new(inbox.clone(), window, cx));
             CenterContent::new(pane, cx)
         }
-        CenterItem::Pr(id) => {
-            let view = cx.new(|cx| PrPlaceholder::new(id.clone(), inbox.clone(), cx));
+        CenterItem::Pr(key) => {
+            let view = cx.new(|cx| PrPlaceholder::new(key.clone(), inbox.clone(), cx));
             CenterContent::new(view, cx)
         }
         CenterItem::Settings => {

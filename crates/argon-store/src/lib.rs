@@ -1,9 +1,8 @@
 mod error;
-#[cfg(test)]
-mod fixtures;
 mod local;
 mod prs;
 mod schema;
+mod viewers;
 
 use std::path::Path;
 
@@ -11,6 +10,7 @@ use rusqlite::Connection;
 
 pub use error::{Result, StoreError};
 pub use local::LocalState;
+pub use viewers::{CachedOrg, CachedViewer};
 
 pub struct Store {
     conn: Connection,

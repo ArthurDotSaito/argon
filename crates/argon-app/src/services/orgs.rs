@@ -1,4 +1,30 @@
-use argon_github::Viewer;
+use argon_github::{OrgInfo, Viewer};
+use argon_store::{CachedOrg, CachedViewer};
+
+pub(super) fn viewer_from_cache(cached: &CachedViewer) -> Viewer {
+    Viewer {
+        login: cached.login.clone(),
+        orgs: cached
+            .orgs
+            .iter()
+            .map(|org| OrgInfo {
+                login: org.login.clone(),
+                can_admin: org.can_admin,
+            })
+            .collect(),
+    }
+}
+
+pub(super) fn cache_orgs(viewer: &Viewer) -> Vec<CachedOrg> {
+    viewer
+        .orgs
+        .iter()
+        .map(|org| CachedOrg {
+            login: org.login.clone(),
+            can_admin: org.can_admin,
+        })
+        .collect()
+}
 
 pub(super) fn orgs_for_host(tracked: &[String], host: &str) -> Vec<String> {
     tracked

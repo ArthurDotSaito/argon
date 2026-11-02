@@ -6,18 +6,18 @@ mod row;
 mod sections;
 mod views_panel;
 
-use argon_core::{PrId, ViewSet};
+use argon_core::{PrKey, ViewSet};
 use gpui_kit::{App, SharedString};
 
 pub use inbox_view::InboxPane;
-pub use labels::{PR_DETAIL_PENDING, PR_NOT_LOADED, needs_you_status};
+pub use labels::{PR_DETAIL_PENDING, PR_FALLBACK_TITLE, PR_NOT_LOADED, needs_you_status};
 pub use model::{InboxEvent, InboxHandle, InboxModel};
 pub use views_panel::{VIEWS_PANEL, ViewsPanel};
 
-pub fn pr_tab_title(id: &PrId, cx: &App) -> SharedString {
+pub fn pr_tab_title(key: &PrKey, cx: &App) -> SharedString {
     InboxModel::global(cx)
         .and_then(|model| {
-            let pr = model.read(cx).pr(id)?;
+            let pr = model.read(cx).pr(key)?;
             Some(labels::pr_tab_title(pr.number, &pr.title).into())
         })
         .unwrap_or_else(|| labels::PR_FALLBACK_TITLE.into())

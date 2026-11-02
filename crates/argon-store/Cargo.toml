@@ -10,5 +10,9 @@ argon-core = { path = "../argon-core" }
 chrono.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+argon-core = { path = "../argon-core", features = ["test-fixtures"] }

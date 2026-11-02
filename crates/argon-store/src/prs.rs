@@ -13,10 +13,9 @@ impl Store {
         let tx = self.conn.transaction()?;
         {
             let mut upsert = tx.prepare(
-                "INSERT INTO pull_requests (id, host, repo, number, data, updated_at, synced_at)
+                "INSERT INTO pull_requests (host, id, repo, number, data, updated_at, synced_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(id) DO UPDATE SET
-                    host = excluded.host,
+                 ON CONFLICT(host, id) DO UPDATE SET
                     repo = excluded.repo,
                     number = excluded.number,
                     data = excluded.data,
@@ -27,8 +26,8 @@ impl Store {
                 let number = i64::try_from(pr.number)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
                 upsert.execute(params![
-                    pr.id.0,
                     host,
+                    pr.id.0,
                     pr.repo,
                     number,
                     serde_json::to_string(pr)?,
@@ -50,8 +49,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT p.data, p.updated_at, l.last_seen_updated_at, l.archived_at
              FROM pull_requests p
-             LEFT JOIN pr_local l ON l.pr_id = p.id
-             ORDER BY p.updated_at DESC, p.id ASC",
+             LEFT JOIN pr_local l ON l.host = p.host AND l.pr_id = p.id
+             ORDER BY p.updated_at DESC, p.host ASC, p.id ASC",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -74,8 +73,12 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use argon_core::fixtures::{days_ago, pr_on};
+    use argon_core::{DEFAULT_HOST, PrKey};
+
     use crate::Store;
-    use crate::fixtures::{days_ago, pr};
+
+    const GHE: &str = "ghe.acme.io";
 
     fn ids(store: &Store) -> Vec<String> {
         store
@@ -89,18 +92,18 @@ mod tests {
     #[test]
     fn upsert_and_list_orders_by_updated_at_desc() {
         let mut store = Store::open_in_memory().unwrap();
-        let old = pr("old", "github.com", days_ago(5));
-        let newest = pr("newest", "github.com", days_ago(1));
-        let mid = pr("mid", "github.com", days_ago(3));
+        let old = pr_on(DEFAULT_HOST, "old", days_ago(5));
+        let newest = pr_on(DEFAULT_HOST, "newest", days_ago(1));
+        let mid = pr_on(DEFAULT_HOST, "mid", days_ago(3));
         store
-            .replace_prs("github.com", &[old, newest.clone(), mid])
+            .replace_prs(DEFAULT_HOST, &[old, newest.clone(), mid])
             .unwrap();
         assert_eq!(ids(&store), ["newest", "mid", "old"]);
 
         let mut updated = newest;
         updated.title = "Renamed".into();
         store
-            .replace_prs("github.com", std::slice::from_ref(&updated))
+            .replace_prs(DEFAULT_HOST, std::slice::from_ref(&updated))
             .unwrap();
         let listed = store.list_prs().unwrap();
         assert_eq!(listed.len(), 1);
@@ -112,15 +115,15 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         store
             .replace_prs(
-                "github.com",
+                DEFAULT_HOST,
                 &[
-                    pr("a", "github.com", days_ago(2)),
-                    pr("b", "github.com", days_ago(1)),
+                    pr_on(DEFAULT_HOST, "a", days_ago(2)),
+                    pr_on(DEFAULT_HOST, "b", days_ago(1)),
                 ],
             )
             .unwrap();
         store
-            .replace_prs("github.com", &[pr("b", "github.com", days_ago(1))])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "b", days_ago(1))])
             .unwrap();
         assert_eq!(ids(&store), ["b"]);
     }
@@ -129,12 +132,12 @@ mod tests {
     fn replace_prs_with_empty_slice_clears_only_that_host() {
         let mut store = Store::open_in_memory().unwrap();
         store
-            .replace_prs("github.com", &[pr("a", "github.com", days_ago(2))])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(2))])
             .unwrap();
         store
-            .replace_prs("ghe.acme.io", &[pr("b", "ghe.acme.io", days_ago(1))])
+            .replace_prs(GHE, &[pr_on(GHE, "b", days_ago(1))])
             .unwrap();
-        store.replace_prs("github.com", &[]).unwrap();
+        store.replace_prs(DEFAULT_HOST, &[]).unwrap();
         assert_eq!(ids(&store), ["b"]);
     }
 
@@ -142,13 +145,13 @@ mod tests {
     fn replace_prs_does_not_affect_other_hosts() {
         let mut store = Store::open_in_memory().unwrap();
         store
-            .replace_prs("github.com", &[pr("a", "github.com", days_ago(2))])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(2))])
             .unwrap();
         store
-            .replace_prs("ghe.acme.io", &[pr("b", "ghe.acme.io", days_ago(1))])
+            .replace_prs(GHE, &[pr_on(GHE, "b", days_ago(1))])
             .unwrap();
         store
-            .replace_prs("github.com", &[pr("c", "github.com", days_ago(3))])
+            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "c", days_ago(3))])
             .unwrap();
         assert_eq!(ids(&store), ["b", "c"]);
     }
@@ -156,13 +159,48 @@ mod tests {
     #[test]
     fn replace_prs_keeps_local_state_of_removed_prs() {
         let mut store = Store::open_in_memory().unwrap();
-        let first = pr("a", "github.com", days_ago(2));
+        let first = pr_on(DEFAULT_HOST, "a", days_ago(2));
         store
-            .replace_prs("github.com", std::slice::from_ref(&first))
+            .replace_prs(DEFAULT_HOST, std::slice::from_ref(&first))
             .unwrap();
-        store.mark_seen(&first.id, first.updated_at).unwrap();
-        store.replace_prs("github.com", &[]).unwrap();
-        store.replace_prs("github.com", &[first]).unwrap();
+        store.mark_seen(&first.key(), first.updated_at).unwrap();
+        store.replace_prs(DEFAULT_HOST, &[]).unwrap();
+        store.replace_prs(DEFAULT_HOST, &[first]).unwrap();
         assert!(!store.list_prs().unwrap()[0].1.unread);
+    }
+
+    #[test]
+    fn same_id_on_two_hosts_does_not_collide() {
+        let mut store = Store::open_in_memory().unwrap();
+        let on_github = pr_on(DEFAULT_HOST, "same", days_ago(2));
+        let on_ghe = pr_on(GHE, "same", days_ago(1));
+        store
+            .replace_prs(DEFAULT_HOST, std::slice::from_ref(&on_github))
+            .unwrap();
+        store
+            .replace_prs(GHE, std::slice::from_ref(&on_ghe))
+            .unwrap();
+        store
+            .mark_seen(&on_github.key(), on_github.updated_at)
+            .unwrap();
+        store.archive(&on_ghe.key(), on_ghe.updated_at).unwrap();
+
+        let listed: Vec<(PrKey, bool, bool)> = store
+            .list_prs()
+            .unwrap()
+            .into_iter()
+            .map(|(pr, state)| (pr.key(), state.unread, state.archived))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (PrKey::new(GHE, "same"), true, true),
+                (PrKey::new(DEFAULT_HOST, "same"), false, false),
+            ]
+        );
+
+        store.replace_prs(GHE, &[]).unwrap();
+        assert_eq!(ids(&store), ["same"]);
+        assert_eq!(store.list_prs().unwrap()[0].0, on_github);
     }
 }

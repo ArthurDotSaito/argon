@@ -1,6 +1,6 @@
 mod config;
-#[cfg(test)]
-mod fixtures;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod fixtures;
 mod model;
 mod paths;
 mod reason;
@@ -12,8 +12,8 @@ pub use config::{
     ReviewCfg, SyncCfg, ThemeChoice,
 };
 pub use model::{
-    ChecksState, Involvement, LatestReview, Mergeable, PrId, PrState, PullRequest, ReviewDecision,
-    ReviewState, Side,
+    ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrKey, PrState,
+    PullRequest, ReviewDecision, ReviewState, Side,
 };
 pub use paths::Paths;
 pub use reason::{Reason, reason};

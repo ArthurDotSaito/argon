@@ -3,21 +3,21 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::{Paths, PullRequest};
+use argon_core::{DEFAULT_HOST, Paths, PullRequest};
 use argon_github::{Account, GithubClient, GithubError, Viewer, discover_accounts, token_for};
 use chrono::{DateTime, Local, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::runtime::{Handle, Runtime};
 use tracing::{error, info, warn};
 
-use super::orgs::{admin_orgs, orgs_for_host};
+use super::orgs::{admin_orgs, cache_orgs, orgs_for_host};
 use super::shared::Shared;
 use super::store_handle::{StoreHandle, StoreStartup};
 
 const THREAD_NAME: &str = "argon-services";
 const RUNTIME_THREAD_NAME: &str = "argon-tokio";
 const RUNTIME_WORKERS: usize = 2;
-const DEFAULT_HOST: &str = "github.com";
 const LOCAL_STORE_HOST: &str = "argon.db";
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -33,7 +33,7 @@ pub(super) struct SyncRequest;
 
 struct Session {
     account: Account,
-    client: GithubClient,
+    client: Arc<GithubClient>,
 }
 
 enum AccountOutcome {
@@ -53,29 +53,26 @@ pub(super) struct SyncWorker {
 }
 
 impl SyncWorker {
-    pub(super) fn spawn(self) {
-        let spawned = thread::Builder::new()
-            .name(THREAD_NAME.into())
-            .spawn(move || self.run_blocking());
-        if let Err(error) = spawned {
-            error!(%error, "failed to start services thread");
-        }
-    }
-
-    fn run_blocking(self) {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(RUNTIME_WORKERS)
-            .thread_name(RUNTIME_THREAD_NAME)
-            .enable_all()
-            .build();
-        match runtime {
-            Ok(runtime) => runtime.block_on(SyncLoop::new(self).run()),
+    pub(super) fn spawn(self) -> Option<Handle> {
+        let events = self.events.clone();
+        let runtime = match build_runtime() {
+            Ok(runtime) => runtime,
             Err(error) => {
                 error!(%error, "failed to build tokio runtime");
-                _ = self.events.unbounded_send(SyncEvent::Failed {
-                    host: DEFAULT_HOST.into(),
-                    error: format!("falha ao iniciar o serviço de sincronização: {error}"),
-                });
+                _ = events.unbounded_send(startup_failure(&error));
+                return None;
+            }
+        };
+        let handle = runtime.handle().clone();
+        let spawned = thread::Builder::new()
+            .name(THREAD_NAME.into())
+            .spawn(move || runtime.block_on(SyncLoop::new(self).run()));
+        match spawned {
+            Ok(_) => Some(handle),
+            Err(error) => {
+                error!(%error, "failed to start services thread");
+                _ = events.unbounded_send(startup_failure(&error));
+                None
             }
         }
     }
@@ -221,7 +218,6 @@ impl SyncLoop {
             .map(|outcome| matches!(outcome, AccountOutcome::Expired));
         self.sessions
             .retain(|_| !expired.next().unwrap_or_default());
-        self.publish_accounts();
     }
 
     async fn save_prs(
@@ -324,8 +320,6 @@ impl SyncLoop {
             }
         }
         if !connected.is_empty() {
-            self.publish_accounts();
-            self.worker.shared.add_admin_orgs(admin_orgs(&connected));
             self.seed_orgs(&connected);
         }
     }
@@ -353,14 +347,16 @@ impl SyncLoop {
     }
 
     async fn open_session(&mut self, host: &str) -> Option<(Session, Viewer)> {
-        let token = match token_for(host).await {
-            Ok(token) => token,
-            Err(error) => {
-                self.report_connect(host, error);
-                return None;
-            }
+        let client = match self.worker.shared.client(host) {
+            Some(client) => client,
+            None => match token_for(host).await {
+                Ok(token) => Arc::new(GithubClient::new(host, token)),
+                Err(error) => {
+                    self.report_connect(host, error);
+                    return None;
+                }
+            },
         };
-        let client = GithubClient::new(host, token);
         match client.viewer().await {
             Ok(viewer) => {
                 info!(
@@ -369,6 +365,9 @@ impl SyncLoop {
                     orgs = viewer.orgs.len(),
                     "gh account connected"
                 );
+                let client = self.worker.shared.register_client(host, client);
+                self.worker.shared.connect(host, &viewer);
+                self.cache_viewer(host, &viewer).await;
                 let account = Account {
                     host: host.to_string(),
                     login: viewer.login.clone(),
@@ -379,6 +378,20 @@ impl SyncLoop {
                 self.report_connect(host, error);
                 None
             }
+        }
+    }
+
+    async fn cache_viewer(&self, host: &str, viewer: &Viewer) {
+        let (host, login, orgs) = (host.to_string(), viewer.login.clone(), cache_orgs(viewer));
+        let saved = self
+            .worker
+            .store
+            .call(move |store| store.save_viewer(&host, &login, &orgs))
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|saved| saved.map_err(|error| error.to_string()));
+        if let Err(error) = saved {
+            warn!(%error, "failed to cache gh account");
         }
     }
 
@@ -403,6 +416,7 @@ impl SyncLoop {
         match error {
             GithubError::AuthMissing { .. } => {
                 warn!(host, "gh authentication missing");
+                self.worker.shared.forget(host);
                 self.emit(SyncEvent::AuthMissing { host: host.into() });
                 AccountOutcome::Expired
             }
@@ -418,14 +432,20 @@ impl SyncLoop {
             }
         }
     }
+}
 
-    fn publish_accounts(&self) {
-        let accounts = self
-            .sessions
-            .iter()
-            .map(|session| session.account.clone())
-            .collect();
-        self.worker.shared.set_accounts(accounts);
+fn build_runtime() -> std::io::Result<Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(RUNTIME_WORKERS)
+        .thread_name(RUNTIME_THREAD_NAME)
+        .enable_all()
+        .build()
+}
+
+fn startup_failure(error: &std::io::Error) -> SyncEvent {
+    SyncEvent::Failed {
+        host: DEFAULT_HOST.into(),
+        error: format!("falha ao iniciar o serviço de sincronização: {error}"),
     }
 }
 

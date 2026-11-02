@@ -3,6 +3,7 @@ mod assets;
 mod center;
 mod config_load;
 mod content;
+mod dock_items;
 mod inbox;
 mod keymap;
 mod layout_store;

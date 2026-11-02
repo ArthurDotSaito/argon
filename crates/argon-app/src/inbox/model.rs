@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
-use argon_core::{PrId, PullRequest, ViewSet};
+use argon_core::{PrKey, PullRequest, ViewSet};
 use argon_store::Store;
 use chrono::{Local, Utc};
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task};
@@ -14,7 +14,7 @@ use crate::services::{Services, SyncEvent};
 use crate::sync_status::SyncStatus;
 
 pub enum InboxEvent {
-    OpenPr { id: PrId, preview: bool },
+    OpenPr { key: PrKey, preview: bool },
     ShowList,
 }
 
@@ -25,7 +25,7 @@ impl Global for InboxHandle {}
 pub struct InboxModel {
     services: Services,
     items: Vec<InboxItem>,
-    index: HashMap<PrId, usize>,
+    index: HashMap<PrKey, usize>,
     counts: [usize; InboxView::ALL.len()],
     orgs: Vec<OrgEntry>,
     accounts: Vec<AccountEntry>,
@@ -152,8 +152,8 @@ impl InboxModel {
         self.rows_revision
     }
 
-    pub fn pr(&self, id: &PrId) -> Option<&PullRequest> {
-        let ix = *self.index.get(id)?;
+    pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
+        let ix = *self.index.get(key)?;
         self.items.get(ix).map(|item| &item.pr)
     }
 
@@ -218,17 +218,17 @@ impl InboxModel {
         self.open(self.selected, preview, cx);
     }
 
-    pub fn open_pr(&mut self, id: &PrId, preview: bool, cx: &mut Context<Self>) {
-        if let Some(position) = self.position_of(id) {
+    pub fn open_pr(&mut self, key: &PrKey, preview: bool, cx: &mut Context<Self>) {
+        if let Some(position) = self.position_of(key) {
             self.open(position, preview, cx);
         }
     }
 
-    fn position_of(&self, id: &PrId) -> Option<usize> {
+    fn position_of(&self, key: &PrKey) -> Option<usize> {
         self.sections
             .visible
             .iter()
-            .position(|ix| self.index.get(id) == Some(ix))
+            .position(|ix| self.index.get(key) == Some(ix))
     }
 
     pub fn open(&mut self, position: usize, preview: bool, cx: &mut Context<Self>) {
@@ -237,13 +237,13 @@ impl InboxModel {
         };
         self.selected = position;
         let item = &mut self.items[ix];
-        let id = item.pr.id.clone();
+        let key = item.pr.key();
         if item.unread {
             item.unread = false;
-            let (seen_id, updated_at) = (id.clone(), item.pr.updated_at);
-            self.persist(move |store| store.mark_seen(&seen_id, updated_at), cx);
+            let (seen, updated_at) = (key.clone(), item.pr.updated_at);
+            self.persist(move |store| store.mark_seen(&seen, updated_at), cx);
         }
-        cx.emit(InboxEvent::OpenPr { id, preview });
+        cx.emit(InboxEvent::OpenPr { key, preview });
         cx.notify();
     }
 
@@ -254,13 +254,13 @@ impl InboxModel {
         let neighbour = [self.selected + 1, self.selected.wrapping_sub(1)]
             .into_iter()
             .find_map(|position| self.item_at(position))
-            .map(|item| item.pr.id.clone());
+            .map(|item| item.pr.key());
         let item = self.items.remove(ix);
-        let (id, updated_at) = (item.pr.id, item.pr.updated_at);
+        let (key, updated_at) = (item.pr.key(), item.pr.updated_at);
         self.reindex();
         self.recount();
         self.rebuild(neighbour, false);
-        self.persist(move |store| store.archive(&id, updated_at), cx);
+        self.persist(move |store| store.archive(&key, updated_at), cx);
         cx.notify();
     }
 
@@ -270,11 +270,11 @@ impl InboxModel {
         };
         let item = &mut self.items[ix];
         item.unread = !item.unread;
-        let (id, updated_at) = (item.pr.id.clone(), item.pr.updated_at);
+        let (key, updated_at) = (item.pr.key(), item.pr.updated_at);
         if item.unread {
-            self.persist(move |store| store.mark_unread(&id), cx);
+            self.persist(move |store| store.mark_unread(&key), cx);
         } else {
-            self.persist(move |store| store.mark_seen(&id, updated_at), cx);
+            self.persist(move |store| store.mark_seen(&key, updated_at), cx);
         }
         cx.notify();
     }
@@ -393,7 +393,7 @@ impl InboxModel {
             .items
             .iter()
             .enumerate()
-            .map(|(ix, item)| (item.pr.id.clone(), ix))
+            .map(|(ix, item)| (item.pr.key(), ix))
             .collect();
     }
 
@@ -415,11 +415,11 @@ impl InboxModel {
     }
 
     fn refilter(&mut self, reset_scroll: bool) {
-        let kept = self.item_at(self.selected).map(|item| item.pr.id.clone());
+        let kept = self.item_at(self.selected).map(|item| item.pr.key());
         self.rebuild(kept, reset_scroll);
     }
 
-    fn rebuild(&mut self, kept: Option<PrId>, reset_scroll: bool) {
+    fn rebuild(&mut self, kept: Option<PrKey>, reset_scroll: bool) {
         let set = self.view.view_set();
         let matches = self
             .items
@@ -435,7 +435,7 @@ impl InboxModel {
         self.selected = if reset_scroll {
             0
         } else {
-            kept.and_then(|id| self.position_of(&id))
+            kept.and_then(|key| self.position_of(&key))
                 .unwrap_or(self.selected)
                 .min(last)
         };

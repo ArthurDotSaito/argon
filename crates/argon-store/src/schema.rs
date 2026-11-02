@@ -78,8 +78,94 @@ CREATE TABLE findings (
 CREATE INDEX idx_findings_session_id ON findings(session_id);
 ";
 
+const COMPOSITE_PR_KEY: &str = "
+CREATE TABLE pull_requests_v2 (
+    host TEXT NOT NULL,
+    id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    synced_at INTEGER NOT NULL,
+    PRIMARY KEY (host, id)
+);
+INSERT INTO pull_requests_v2 (host, id, repo, number, data, updated_at, synced_at)
+    SELECT host, id, repo, number, data, updated_at, synced_at FROM pull_requests;
+
+CREATE TABLE pr_local_v2 (
+    host TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    last_seen_updated_at INTEGER,
+    archived_at INTEGER,
+    PRIMARY KEY (host, pr_id)
+);
+INSERT INTO pr_local_v2 (host, pr_id, last_seen_updated_at, archived_at)
+    SELECT COALESCE((SELECT p.host FROM pull_requests p WHERE p.id = l.pr_id), 'github.com'),
+           l.pr_id, l.last_seen_updated_at, l.archived_at
+    FROM pr_local l;
+
+CREATE TABLE draft_comments_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    host TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    side TEXT NOT NULL,
+    start_line INTEGER,
+    start_side TEXT,
+    body TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('user', 'agent')),
+    session_id TEXT,
+    created_at INTEGER NOT NULL
+);
+INSERT INTO draft_comments_v2
+    (id, host, pr_id, path, line, side, start_line, start_side, body, source, session_id, created_at)
+    SELECT d.id, COALESCE((SELECT p.host FROM pull_requests p WHERE p.id = d.pr_id), 'github.com'),
+           d.pr_id, d.path, d.line, d.side, d.start_line, d.start_side, d.body, d.source,
+           d.session_id, d.created_at
+    FROM draft_comments d;
+
+CREATE TABLE draft_reviews_v2 (
+    host TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    event TEXT NOT NULL,
+    PRIMARY KEY (host, pr_id)
+);
+INSERT INTO draft_reviews_v2 (host, pr_id, body, event)
+    SELECT COALESCE((SELECT p.host FROM pull_requests p WHERE p.id = r.pr_id), 'github.com'),
+           r.pr_id, r.body, r.event
+    FROM draft_reviews r;
+
+ALTER TABLE agent_sessions ADD COLUMN host TEXT NOT NULL DEFAULT 'github.com';
+UPDATE agent_sessions
+    SET host = COALESCE((SELECT p.host FROM pull_requests p WHERE p.id = agent_sessions.pr_id), 'github.com');
+
+DROP TABLE pull_requests;
+ALTER TABLE pull_requests_v2 RENAME TO pull_requests;
+DROP TABLE pr_local;
+ALTER TABLE pr_local_v2 RENAME TO pr_local;
+DROP TABLE draft_comments;
+ALTER TABLE draft_comments_v2 RENAME TO draft_comments;
+CREATE INDEX idx_draft_comments_pr ON draft_comments(host, pr_id);
+DROP TABLE draft_reviews;
+ALTER TABLE draft_reviews_v2 RENAME TO draft_reviews;
+CREATE INDEX idx_agent_sessions_pr ON agent_sessions(host, pr_id);
+
+DROP INDEX idx_agent_events_session_seq;
+
+CREATE TABLE viewers (
+    host TEXT PRIMARY KEY NOT NULL,
+    login TEXT NOT NULL,
+    orgs TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+";
+
+const MIGRATIONS: &[M<'static>] = &[M::up(INITIAL), M::up(COMPOSITE_PR_KEY)];
+
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(INITIAL)])
+    Migrations::from_slice(MIGRATIONS)
 }
 
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
@@ -89,10 +175,109 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use argon_core::fixtures::{days_ago, pr_on};
+    use argon_core::{DEFAULT_HOST, PrKey};
+    use rusqlite::params;
+
     use super::*;
+    use crate::Store;
+
+    const GHE: &str = "ghe.acme.io";
 
     #[test]
     fn migrations_are_valid() {
         migrations().validate().unwrap();
+    }
+
+    fn version_one() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 1).unwrap();
+        conn
+    }
+
+    fn insert_v1_pr(conn: &Connection, host: &str, id: &str, days: i64) {
+        let pr = pr_on(host, id, days_ago(days));
+        conn.execute(
+            "INSERT INTO pull_requests (id, host, repo, number, data, updated_at, synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            params![
+                id,
+                host,
+                pr.repo,
+                482,
+                serde_json::to_string(&pr).unwrap(),
+                pr.updated_at.timestamp_millis()
+            ],
+        )
+        .unwrap();
+    }
+
+    fn names(conn: &Connection, kind: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = ?1 ORDER BY name")
+            .unwrap();
+        stmt.query_map([kind], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn migration_two_preserves_prs_and_local_state() {
+        let mut conn = version_one();
+        insert_v1_pr(&conn, DEFAULT_HOST, "seen", 3);
+        insert_v1_pr(&conn, GHE, "archived", 4);
+        insert_v1_pr(&conn, DEFAULT_HOST, "fresh", 1);
+        conn.execute_batch(&format!(
+            "INSERT INTO pr_local (pr_id, last_seen_updated_at, archived_at) VALUES
+                ('seen', {seen}, NULL),
+                ('archived', NULL, {archived}),
+                ('orphan', 1, NULL);
+             INSERT INTO draft_reviews (pr_id, body, event) VALUES ('archived', 'lgtm', 'APPROVE');",
+            seen = days_ago(3).timestamp_millis(),
+            archived = days_ago(2).timestamp_millis(),
+        ))
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let hosts: Vec<(String, String)> = conn
+            .prepare("SELECT host, pr_id FROM pr_local ORDER BY pr_id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            hosts,
+            [
+                (GHE.to_string(), "archived".to_string()),
+                (DEFAULT_HOST.to_string(), "orphan".to_string()),
+                (DEFAULT_HOST.to_string(), "seen".to_string()),
+            ]
+        );
+        let review_host: String = conn
+            .query_row("SELECT host FROM draft_reviews", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(review_host, GHE);
+        assert!(!names(&conn, "index").contains(&"idx_agent_events_session_seq".to_string()));
+        assert!(names(&conn, "table").contains(&"viewers".to_string()));
+
+        let store = Store { conn };
+        let listed: Vec<(PrKey, bool, bool)> = store
+            .list_prs()
+            .unwrap()
+            .into_iter()
+            .map(|(pr, state)| (pr.key(), state.unread, state.archived))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (PrKey::new(DEFAULT_HOST, "fresh"), true, false),
+                (PrKey::new(DEFAULT_HOST, "seen"), false, false),
+                (PrKey::new(GHE, "archived"), true, true),
+            ]
+        );
     }
 }

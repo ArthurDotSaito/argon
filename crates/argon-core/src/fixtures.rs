@@ -1,6 +1,8 @@
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use crate::model::{Involvement, LatestReview, Mergeable, PrId, PrState, PullRequest, ReviewState};
+use crate::model::{
+    DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrState, PullRequest, ReviewState,
+};
 
 pub const ME: &str = "me";
 
@@ -15,7 +17,7 @@ pub fn days_ago(days: i64) -> DateTime<Utc> {
 pub fn pr() -> PullRequest {
     PullRequest {
         id: PrId("PR_node".into()),
-        host: "github.com".into(),
+        host: DEFAULT_HOST.into(),
         repo: "acme/widgets".into(),
         number: 482,
         title: "Fix slot finder".into(),
@@ -40,6 +42,16 @@ pub fn pr() -> PullRequest {
         updated_at: days_ago(1),
         closed_at: None,
         involvement: Involvement::default(),
+    }
+}
+
+pub fn pr_on(host: &str, id: &str, updated_at: DateTime<Utc>) -> PullRequest {
+    PullRequest {
+        id: PrId(id.into()),
+        host: host.into(),
+        url: format!("https://{host}/acme/widgets/pull/482"),
+        updated_at,
+        ..pr()
     }
 }
 
