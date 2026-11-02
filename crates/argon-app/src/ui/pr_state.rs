@@ -10,9 +10,13 @@ pub struct StateStyle {
 }
 
 pub fn state_style(pr: &PullRequest, cx: &App) -> StateStyle {
+    state_style_for(pr.state, pr.is_draft, cx)
+}
+
+pub fn state_style_for(state: PrState, is_draft: bool, cx: &App) -> StateStyle {
     let theme = cx.theme();
-    let (icon, color, label) = match pr.state {
-        PrState::Open if pr.is_draft => (
+    let (icon, color, label) = match state {
+        PrState::Open if is_draft => (
             IconName::GitPullRequestDraft,
             theme.muted_foreground,
             "Draft",

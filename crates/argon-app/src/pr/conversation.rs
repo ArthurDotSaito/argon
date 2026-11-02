@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use argon_core::PrKey;
-use argon_github::{PrDetail, TimelineItem};
+use argon_github::PrDetail;
 use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -15,10 +15,10 @@ use gpui_kit::{
 };
 
 use super::labels;
-use super::timeline_item::{self, card, card_body, card_text, markdown, timeline_item};
+use super::timeline_item::{self, Entry, MarkdownBlock, card, card_body, card_text, timeline_item};
 use crate::services::AppServices;
 
-const CONTENT_MAX_WIDTH: f32 = 920.;
+pub const CONTENT_MAX_WIDTH: f32 = 920.;
 const COMMENT_MIN_ROWS: usize = 3;
 const COMMENT_MAX_ROWS: usize = 12;
 
@@ -38,7 +38,8 @@ pub fn count(detail: &PrDetail) -> usize {
 pub struct Conversation {
     key: PrKey,
     detail: Option<Rc<PrDetail>>,
-    timeline: Vec<usize>,
+    description: Option<MarkdownBlock>,
+    timeline: Vec<Entry>,
     input: Entity<TextareaState>,
     sending: bool,
     error: Option<SharedString>,
@@ -59,6 +60,7 @@ impl Conversation {
         Self {
             key,
             detail: None,
+            description: None,
             timeline: Vec::new(),
             input,
             sending: false,
@@ -71,7 +73,12 @@ impl Conversation {
     pub fn set_detail(&mut self, detail: Rc<PrDetail>, cx: &mut Context<Self>) {
         let mut order: Vec<usize> = (0..detail.timeline.len()).collect();
         order.sort_by_key(|ix| timeline_item::timestamp(&detail.timeline[*ix]));
-        self.timeline = order;
+        self.timeline = order
+            .into_iter()
+            .map(|ix| Entry::new(ix, &detail.timeline[ix]))
+            .collect();
+        self.description = (!detail.body.trim().is_empty())
+            .then(|| MarkdownBlock::new("pr-description".to_string(), &detail.body));
         self.detail = Some(detail);
         cx.notify();
     }
@@ -119,14 +126,13 @@ impl Conversation {
     fn description(&self, detail: &PrDetail, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let pr = &detail.pr;
-        let body = if detail.body.trim().is_empty() {
-            div()
+        let body = match &self.description {
+            Some(description) => description.view().into_any_element(),
+            None => div()
                 .italic()
                 .text_color(theme.muted_foreground)
                 .child(labels::NO_DESCRIPTION)
-                .into_any_element()
-        } else {
-            markdown("pr-description", &detail.body).into_any_element()
+                .into_any_element(),
         };
         card(
             &pr.author,
@@ -224,17 +230,14 @@ impl Render for Conversation {
             return scroller;
         };
         let now = Utc::now();
-        let items: Vec<&TimelineItem> = self
-            .timeline
-            .iter()
-            .filter_map(|ix| detail.timeline.get(*ix))
-            .collect();
         let notice = detail.truncated_timeline.then(|| self.truncated_notice(cx));
-        let timeline = v_flex().w_full().gap_3().children(
-            items
-                .into_iter()
-                .map(|item| timeline_item(item, &detail.labels, now, cx)),
-        );
+        let timeline = v_flex()
+            .w_full()
+            .gap_3()
+            .children(self.timeline.iter().filter_map(|entry| {
+                let item = detail.timeline.get(entry.ix)?;
+                Some(timeline_item(item, entry, &detail.labels, now, cx))
+            }));
         let content = v_flex()
             .w_full()
             .min_w_0()

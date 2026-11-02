@@ -87,15 +87,21 @@ pub fn review_state(state: ReviewState) -> &'static str {
     }
 }
 
+pub fn settled_review(state: Option<ReviewState>, requested: bool) -> Option<ReviewState> {
+    match state {
+        Some(ReviewState::Pending) | None => None,
+        Some(_) if requested => None,
+        settled => settled,
+    }
+}
+
 pub fn reviewer_tooltip(login: &str, state: Option<ReviewState>, requested: bool) -> String {
-    match (requested, state) {
-        (true, _) | (false, None | Some(ReviewState::Pending)) => {
-            format!("{login}: review pendente")
-        }
-        (false, Some(ReviewState::Approved)) => format!("{login}: aprovou"),
-        (false, Some(ReviewState::ChangesRequested)) => format!("{login}: pediu mudanças"),
-        (false, Some(ReviewState::Commented)) => format!("{login}: comentou"),
-        (false, Some(ReviewState::Dismissed)) => format!("{login}: review descartada"),
+    match settled_review(state, requested) {
+        None | Some(ReviewState::Pending) => format!("{login}: review pendente"),
+        Some(ReviewState::Approved) => format!("{login}: aprovou"),
+        Some(ReviewState::ChangesRequested) => format!("{login}: pediu mudanças"),
+        Some(ReviewState::Commented) => format!("{login}: comentou"),
+        Some(ReviewState::Dismissed) => format!("{login}: review descartada"),
     }
 }
 

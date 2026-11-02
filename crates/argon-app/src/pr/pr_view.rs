@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use argon_core::{PrKey, PullRequest, Side, is_ready};
+use argon_core::{PrKey, PrState, PullRequest, Side, is_ready};
 use argon_github::{MergeMethod, PrDetail};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
@@ -15,7 +15,7 @@ use gpui_kit::{
 
 use super::actions_tab::ActionsTab;
 use super::commits::CommitsTab;
-use super::conversation::{self, Conversation, ConversationEvent};
+use super::conversation::{self, CONTENT_MAX_WIDTH, Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
 use super::labels;
 use super::merge_dialog::{self, MergeTarget};
@@ -70,7 +70,14 @@ enum Load {
 pub enum MergeState {
     Idle,
     Merging,
+    Merged,
     Failed(SharedString),
+}
+
+impl MergeState {
+    pub fn is_busy(&self) -> bool {
+        matches!(self, Self::Merging | Self::Merged)
+    }
 }
 
 pub struct PrView {
@@ -78,6 +85,8 @@ pub struct PrView {
     inbox: Entity<InboxModel>,
     tab: PrTab,
     detail: Option<Rc<PrDetail>>,
+    store_pr: Option<Rc<PullRequest>>,
+    viewer_login: Option<String>,
     load: Load,
     refreshing: bool,
     epoch: u64,
@@ -108,7 +117,10 @@ impl PrView {
         let review = cx.new(|cx| ReviewTab::new(window, cx));
         let subscriptions = vec![
             cx.subscribe(&conversation, |this, _, event, cx| match event {
-                ConversationEvent::Commented => this.reload(cx),
+                ConversationEvent::Commented => {
+                    this.reload(cx);
+                    request_sync(cx);
+                }
                 ConversationEvent::OpenOnGithub => this.open_on_github(cx),
             }),
             cx.observe(&commits, |_, _, cx| cx.notify()),
@@ -116,12 +128,16 @@ impl PrView {
             cx.observe(&review, |_, _, cx| cx.notify()),
             cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
         ];
-        let seen_updated_at = inbox.read(cx).pr(&key).map(|pr| pr.updated_at);
+        let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);
+        let seen_updated_at = store_pr.as_ref().map(|pr| pr.updated_at);
+        let viewer_login = viewer_login(&key.host, cx);
         let mut this = Self {
             key,
             inbox,
             tab: PrTab::default(),
             detail: None,
+            store_pr,
+            viewer_login,
             load: Load::Loading,
             refreshing: false,
             epoch: 0,
@@ -194,6 +210,9 @@ impl PrView {
         self.refreshing = false;
         self.load = Load::Ready;
         self.seen_updated_at = self.seen_updated_at.max(Some(detail.pr.updated_at));
+        if matches!(self.merge_state, MergeState::Merged) && detail.pr.state != PrState::Open {
+            self.merge_state = MergeState::Idle;
+        }
         let detail = Rc::new(detail);
         self.conversation
             .update(cx, |tab, cx| tab.set_detail(detail.clone(), cx));
@@ -214,36 +233,44 @@ impl PrView {
     }
 
     fn on_inbox_changed(&mut self, cx: &mut Context<Self>) {
-        let updated_at = self.inbox.read(cx).pr(&self.key).map(|pr| pr.updated_at);
-        if updated_at.is_some() && updated_at > self.seen_updated_at {
-            self.seen_updated_at = updated_at;
+        let viewer_login = viewer_login(&self.key.host, cx);
+        let changed_login = viewer_login != self.viewer_login;
+        self.viewer_login = viewer_login;
+        let current = self.store_pr.as_ref().map(|pr| pr.updated_at);
+        let latest = self.inbox.read(cx).pr(&self.key).map(|pr| pr.updated_at);
+        let changed_pr = latest != current;
+        if changed_pr {
+            self.store_pr = self.inbox.read(cx).pr(&self.key).cloned().map(Rc::new);
+        }
+        if latest.is_some() && latest > self.seen_updated_at {
+            self.seen_updated_at = latest;
             self.reload(cx);
-        } else if self.detail.is_none() {
+        } else if changed_login || (changed_pr && self.detail.is_none()) {
             cx.notify();
         }
     }
 
-    fn pr<'a>(&'a self, cx: &'a App) -> Option<&'a PullRequest> {
+    fn pr(&self) -> Option<&PullRequest> {
         self.detail
             .as_ref()
             .map(|detail| &detail.pr)
-            .or_else(|| self.inbox.read(cx).pr(&self.key))
+            .or(self.store_pr.as_deref())
     }
 
-    fn can_merge(&self, pr: &PullRequest, cx: &App) -> bool {
-        if !is_ready(pr) {
+    fn can_merge(&self) -> bool {
+        let Some(pr) = self.pr() else {
             return false;
-        }
-        app_services(cx).is_some_and(|services| {
-            services.accounts().iter().any(|account| {
-                account.host.eq_ignore_ascii_case(&self.key.host)
-                    && account.login.eq_ignore_ascii_case(&pr.author)
-            })
-        })
+        };
+        !self.merge_state.is_busy()
+            && is_ready(pr)
+            && self
+                .viewer_login
+                .as_deref()
+                .is_some_and(|login| login.eq_ignore_ascii_case(&pr.author))
     }
 
-    pub fn open_on_github(&mut self, cx: &mut Context<Self>) {
-        let Some(url) = self.pr(cx).map(|pr| pr.url.clone()) else {
+    pub fn open_on_github(&mut self, _: &mut Context<Self>) {
+        let Some(url) = self.pr().map(|pr| pr.url.clone()) else {
             return;
         };
         if let Err(error) = open::that_detached(&url) {
@@ -261,12 +288,12 @@ impl PrView {
     }
 
     pub fn open_merge_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pr) = self.pr(cx) else {
-            return;
-        };
-        if matches!(self.merge_state, MergeState::Merging) || !self.can_merge(pr, cx) {
+        if !self.can_merge() {
             return;
         }
+        let Some(pr) = self.pr() else {
+            return;
+        };
         let target = MergeTarget {
             number: pr.number,
             head: pr.head.clone(),
@@ -276,7 +303,7 @@ impl PrView {
     }
 
     pub fn merge(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.merge_state, MergeState::Merging) {
+        if !self.can_merge() {
             return;
         }
         let Some(services) = app_services(cx) else {
@@ -297,11 +324,9 @@ impl PrView {
                 match result {
                     Ok(()) => {
                         tracing::info!("pull request merged");
-                        this.merge_state = MergeState::Idle;
+                        this.merge_state = MergeState::Merged;
                         this.reload(cx);
-                        if let Some(services) = app_services(cx) {
-                            services.sync_now();
-                        }
+                        request_sync(cx);
                     }
                     Err(error) => {
                         tracing::warn!(%error, "failed to merge pull request");
@@ -481,7 +506,7 @@ fn retry_button(id: &'static str, cx: &mut Context<PrView>) -> Button {
 fn skeleton() -> Div {
     v_flex()
         .w_full()
-        .max_w(px(920.))
+        .max_w(px(CONTENT_MAX_WIDTH))
         .mx_auto()
         .p_4()
         .gap_3()
@@ -497,6 +522,20 @@ fn app_services(cx: &App) -> Option<Services> {
         .map(|global| global.0.clone())
 }
 
+fn request_sync(cx: &App) {
+    if let Some(services) = app_services(cx) {
+        services.sync_now();
+    }
+}
+
+fn viewer_login(host: &str, cx: &App) -> Option<String> {
+    app_services(cx)?
+        .accounts()
+        .into_iter()
+        .find(|account| account.host.eq_ignore_ascii_case(host))
+        .map(|account| account.login)
+}
+
 impl Focusable for PrView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -506,13 +545,18 @@ impl Focusable for PrView {
 impl Render for PrView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Utc::now();
-        let head = match self.pr(cx).cloned() {
+        let detail = self.detail.clone();
+        let store_pr = self.store_pr.clone();
+        let pr = detail
+            .as_ref()
+            .map(|detail| &detail.pr)
+            .or(store_pr.as_deref());
+        let head = match pr {
             Some(pr) => {
-                let can_merge = self.can_merge(&pr, cx);
-                let detail = self.detail.clone();
+                let can_merge = self.can_merge();
                 header(
                     HeaderProps {
-                        pr: &pr,
+                        pr,
                         detail: detail.as_deref(),
                         can_merge,
                         merge_state: &self.merge_state,

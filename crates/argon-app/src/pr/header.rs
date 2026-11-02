@@ -1,4 +1,4 @@
-use argon_core::{ChecksState, PullRequest, ReviewState};
+use argon_core::{ChecksState, PrState, PullRequest, ReviewState};
 use argon_github::{Label, PrDetail};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
@@ -50,7 +50,7 @@ pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
                 .child(format!("#{}", pr.number)),
         );
     let status = match props.merge_state {
-        MergeState::Idle => None,
+        MergeState::Idle | MergeState::Merged => None,
         MergeState::Merging => Some(
             div()
                 .text_sm()
@@ -81,7 +81,12 @@ pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
                 .child(actions(&props, cx)),
         )
         .child(title)
-        .child(meta(pr, props.now, cx))
+        .child(meta(
+            pr,
+            matches!(props.merge_state, MergeState::Merged),
+            props.now,
+            cx,
+        ))
         .child(stats(pr, props.detail, cx))
         .children(status)
 }
@@ -166,9 +171,13 @@ fn ai_review_button(cx: &App) -> Stateful<Div> {
         .child(labels::AI_REVIEW)
 }
 
-fn meta(pr: &PullRequest, now: DateTime<Utc>, cx: &App) -> Div {
+fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
     let theme = cx.theme();
-    let style = ui::state_style(pr, cx);
+    let style = if merged {
+        ui::state_style_for(PrState::Merged, false, cx)
+    } else {
+        ui::state_style(pr, cx)
+    };
     let pill = h_flex()
         .gap_1()
         .px_2()
@@ -347,11 +356,9 @@ fn reviewers(pr: &PullRequest, detail: Option<&PrDetail>, cx: &App) -> Div {
         return row.child(labels::NO_REVIEWERS);
     }
     row.children(entries.into_iter().enumerate().map(|(ix, entry)| {
-        let (icon, color) = match (entry.requested, entry.state) {
-            (true, _) | (false, None | Some(ReviewState::Pending)) => {
-                (IconName::CircleDashed, theme.warning)
-            }
-            (false, Some(state)) => review_style(state, cx),
+        let (icon, color) = match labels::settled_review(entry.state, entry.requested) {
+            Some(state) => review_style(state, cx),
+            None => (IconName::CircleDashed, theme.warning),
         };
         let tooltip: SharedString =
             labels::reviewer_tooltip(&entry.login, entry.state, entry.requested).into();

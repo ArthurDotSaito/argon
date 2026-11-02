@@ -38,12 +38,63 @@ pub fn is_conversation(item: &TimelineItem) -> bool {
     )
 }
 
-pub fn markdown(id: impl Into<SharedString>, body: &str) -> TextView {
-    TextView::markdown(ElementId::Name(id.into()), body.to_string()).selectable(true)
+pub fn markdown(id: SharedString, body: SharedString) -> TextView {
+    TextView::markdown(ElementId::Name(id), body).selectable(true)
+}
+
+pub struct MarkdownBlock {
+    pub id: SharedString,
+    pub body: SharedString,
+}
+
+impl MarkdownBlock {
+    pub fn new(id: String, body: &str) -> Self {
+        Self {
+            id: id.into(),
+            body: body.to_string().into(),
+        }
+    }
+
+    pub fn view(&self) -> TextView {
+        markdown(self.id.clone(), self.body.clone())
+    }
+}
+
+pub struct Entry {
+    pub ix: usize,
+    body: Option<MarkdownBlock>,
+    comments: Vec<MarkdownBlock>,
+}
+
+impl Entry {
+    pub fn new(ix: usize, item: &TimelineItem) -> Self {
+        let (body, comments) = match item {
+            TimelineItem::Comment { id, body, .. } => (
+                Some(MarkdownBlock::new(format!("pr-comment-{id}"), body)),
+                Vec::new(),
+            ),
+            TimelineItem::Review {
+                id, body, comments, ..
+            } => (
+                (!body.trim().is_empty())
+                    .then(|| MarkdownBlock::new(format!("pr-review-{id}"), body)),
+                comments
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, comment)| {
+                        MarkdownBlock::new(format!("pr-review-{id}-comment-{ix}"), &comment.body)
+                    })
+                    .collect(),
+            ),
+            _ => (None, Vec::new()),
+        };
+        Self { ix, body, comments }
+    }
 }
 
 pub fn timeline_item(
     item: &TimelineItem,
+    entry: &Entry,
     pr_labels: &[Label],
     now: DateTime<Utc>,
     cx: &App,
@@ -51,38 +102,32 @@ pub fn timeline_item(
     let theme = cx.theme();
     match item {
         TimelineItem::Comment {
-            id,
-            author,
-            body,
-            created_at,
+            author, created_at, ..
         } => card(
             author,
             card_body(author, div().child(labels::COMMENTED), *created_at, now, cx)
-                .child(card_text(markdown(format!("pr-comment-{id}"), body))),
+                .children(entry.body.as_ref().map(|body| card_text(body.view()))),
         )
         .into_any_element(),
         TimelineItem::Review {
-            id,
             author,
             state,
-            body,
             submitted_at,
             comments,
+            ..
         } => {
             let header = h_flex()
                 .gap_1p5()
                 .items_center()
                 .child(labels::REVIEWED)
                 .child(review_pill(*state, cx));
-            let mut body_el = card_body(author, header, *submitted_at, now, cx);
-            if !body.trim().is_empty() {
-                body_el = body_el.child(card_text(markdown(format!("pr-review-{id}"), body)));
-            }
+            let mut body_el = card_body(author, header, *submitted_at, now, cx)
+                .children(entry.body.as_ref().map(|body| card_text(body.view())));
             if !comments.is_empty() {
                 let quotes = comments
                     .iter()
-                    .enumerate()
-                    .map(|(ix, comment)| review_comment(id, ix, author, comment, cx));
+                    .zip(&entry.comments)
+                    .map(|(comment, body)| review_comment(author, comment, body, cx));
                 body_el = body_el.child(v_flex().gap_2().p_3().children(quotes));
             }
             card(author, body_el).into_any_element()
@@ -319,13 +364,7 @@ fn review_pill(state: ReviewState, cx: &App) -> Div {
         .child(labels::review_state(state))
 }
 
-fn review_comment(
-    review_id: &str,
-    ix: usize,
-    author: &str,
-    comment: &ReviewComment,
-    cx: &App,
-) -> Div {
+fn review_comment(author: &str, comment: &ReviewComment, body: &MarkdownBlock, cx: &App) -> Div {
     let theme = cx.theme();
     let file = h_flex()
         .px_2()
@@ -353,10 +392,7 @@ fn review_comment(
         .border_t_1()
         .border_color(theme.border)
         .child(ui::avatar(author, 18.))
-        .child(div().flex_1().min_w_0().text_sm().child(markdown(
-            format!("pr-review-{review_id}-comment-{ix}"),
-            &comment.body,
-        )));
+        .child(div().flex_1().min_w_0().text_sm().child(body.view()));
     v_flex()
         .w_full()
         .border_1()
