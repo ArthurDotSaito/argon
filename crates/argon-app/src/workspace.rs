@@ -273,17 +273,18 @@ impl Workspace {
 
     fn on_job_log_event(
         &mut self,
-        _: &Entity<JobLogModel>,
+        model: &Entity<JobLogModel>,
         event: &JobLogEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let JobLogEvent::Reveal = event;
         self.dock_area.update(cx, |area, cx| {
+            if bottom::locate_log_panel(area).is_none() {
+                let panel = cx.new(|cx| LogPanel::new(model.clone(), window, cx));
+                area.add_panel_view(panel_handle(panel), DockPlacement::Bottom, None, window, cx);
+            }
             let Some((placement, id)) = bottom::locate_log_panel(area) else {
-                if !area.is_dock_open(DockPlacement::Bottom) {
-                    area.toggle_dock(DockPlacement::Bottom, window, cx);
-                }
                 return;
             };
             if placement != DockPlacement::Center && !area.is_dock_open(placement) {

@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use gpui_kit::SharedString;
+
 const TAB_WIDTH: usize = 8;
 const BOM: char = '\u{feff}';
 const ESC: char = '\u{1b}';
@@ -30,7 +32,7 @@ const MARKERS: [(&str, LineKind); 8] = [
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogLine {
-    pub text: String,
+    pub text: SharedString,
     pub kind: LineKind,
     pub group: Option<usize>,
 }
@@ -39,6 +41,34 @@ pub struct LogLine {
 pub struct LogDoc {
     pub lines: Vec<LogLine>,
     pub first_error: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchHits {
+    pub lines: Vec<usize>,
+    pub occurrences: usize,
+    pub capped: bool,
+}
+
+pub fn search_lines(doc: &LogDoc, query: &str, limit: usize) -> SearchHits {
+    let mut hits = SearchHits::default();
+    for (ix, line) in doc.lines.iter().enumerate() {
+        if line.kind == LineKind::GroupEnd {
+            continue;
+        }
+        let found = find_matches(&line.text, query).len();
+        if found == 0 {
+            continue;
+        }
+        hits.lines.push(ix);
+        hits.occurrences += found;
+        if hits.occurrences >= limit {
+            hits.occurrences = limit;
+            hits.capped = true;
+            break;
+        }
+    }
+    hits
 }
 
 pub fn parse_log(text: &str) -> LogDoc {
@@ -66,7 +96,7 @@ pub fn parse_log(text: &str) -> LogDoc {
             first_error = Some(ix);
         }
         lines.push(LogLine {
-            text: rest.to_string(),
+            text: SharedString::from(rest.to_string()),
             kind,
             group,
         });
@@ -166,10 +196,18 @@ pub fn strip_ansi(line: &str) -> String {
                     }
                 }
             }
+            Some(c) if is_intermediate(c) => {
+                while chars.next_if(|c| is_intermediate(*c)).is_some() {}
+                chars.next();
+            }
             _ => {}
         }
     }
     out
+}
+
+fn is_intermediate(c: char) -> bool {
+    ('\u{20}'..='\u{2f}').contains(&c)
 }
 
 fn expand_tabs(line: &str) -> String {
@@ -254,6 +292,14 @@ mod tests {
             "link end"
         );
         assert_eq!(strip_ansi("\u{1b}[2Kplain"), "plain");
+        assert_eq!(strip_ansi("\u{1b}(Bascii\u{1b})0 set"), "ascii set");
+        assert_eq!(
+            strip_ansi("\u{1b}=keypad\u{1b}>\u{1b}7saved\u{1b}8"),
+            "keypadsaved"
+        );
+        assert_eq!(strip_ansi("\u{1b}#8grid"), "grid");
+        assert_eq!(strip_ansi("trailing\u{1b}"), "trailing");
+        assert_eq!(strip_ansi("trailing\u{1b}("), "trailing");
         assert_eq!(strip_ansi("ünïcode ✓"), "ünïcode ✓");
     }
 
@@ -343,6 +389,24 @@ mod tests {
         assert_eq!(find_matches("aaaa", "aa"), vec![0..2, 2..4]);
         assert!(find_matches("abc", "").is_empty());
         assert!(find_matches("ab", "abc").is_empty());
+    }
+
+    #[test]
+    fn search_keeps_matching_lines_and_counts_occurrences() {
+        let doc = parse_log("error one error\n##[group]x\nok\n##[endgroup]\nERROR two");
+        let hits = search_lines(&doc, "error", 100);
+        assert_eq!(hits.lines, vec![0, 4]);
+        assert_eq!(hits.occurrences, 3);
+        assert!(!hits.capped);
+    }
+
+    #[test]
+    fn search_stops_at_the_occurrence_limit() {
+        let text = "aa aa\n".repeat(10);
+        let hits = search_lines(&parse_log(&text), "aa", 5);
+        assert_eq!(hits.lines, vec![0, 1, 2]);
+        assert_eq!(hits.occurrences, 5);
+        assert!(hits.capped);
     }
 
     #[test]

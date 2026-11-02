@@ -17,14 +17,13 @@ const JOB_INDENT: f32 = 30.;
 impl ActionsTab {
     pub(super) fn run_block(
         &self,
-        ix: usize,
         run: &WorkflowRun,
         now: DateTime<Utc>,
         selected_job: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Div {
         let expanded = self.is_expanded(run);
-        let header = self.run_header(ix, run, expanded, now, cx);
+        let header = self.run_header(run, expanded, now, cx);
         let theme = cx.theme();
         let warning = run.jobs_error.as_ref().map(|error| {
             h_flex()
@@ -42,10 +41,9 @@ impl ActionsTab {
             v_flex().children(
                 run.jobs
                     .iter()
-                    .enumerate()
-                    .map(|(job_ix, job)| {
+                    .map(|job| {
                         let selected = selected_job == Some(job.id);
-                        self.job_row(ix, job_ix, job, selected, now, cx)
+                        self.job_row(run.id, job, selected, now, cx)
                     })
                     .collect::<Vec<_>>(),
             )
@@ -64,7 +62,6 @@ impl ActionsTab {
 
     fn run_header(
         &self,
-        ix: usize,
         run: &WorkflowRun,
         expanded: bool,
         now: DateTime<Utc>,
@@ -79,7 +76,7 @@ impl ActionsTab {
         let duration = run_duration(run, now).unwrap_or_else(|| labels::NO_DURATION.to_string());
         let run_id = run.id;
         h_flex()
-            .id(("actions-run", ix))
+            .id(("actions-run", run.id))
             .h(px(ROW_HEIGHT))
             .px_2()
             .gap_2()
@@ -122,16 +119,16 @@ impl ActionsTab {
 
     fn job_row(
         &self,
-        run_ix: usize,
-        job_ix: usize,
+        run_id: u64,
         job: &Job,
         selected: bool,
         now: DateTime<Utc>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = cx.theme();
+        let job_id = job.id;
         let row = h_flex()
-            .id(("actions-job", run_ix * 1000 + job_ix))
+            .id(("actions-job", job_id))
             .h(px(ROW_HEIGHT - 4.))
             .pl(px(JOB_INDENT))
             .pr_3()
@@ -165,9 +162,9 @@ impl ActionsTab {
                     .text_color(theme.muted_foreground)
                     .child(job_duration(job, now)),
             )
-            .on_click(
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.open_job(run_ix, job_ix, cx)),
-            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.open_job(run_id, job_id, cx);
+            }))
     }
 }
 

@@ -1,25 +1,16 @@
 mod labels;
 mod rerun;
 mod runs;
+mod view;
 
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use argon_github::{PrDetail, RunStatus, WorkflowRun};
-use chrono::Utc;
-use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
-use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div, px,
-};
+use argon_github::{GithubError, PrDetail, RunStatus, WorkflowRun};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::{App, Context, ScrollHandle, SharedString, Subscription, Task, Window};
 
-use super::conversation::CONTENT_MAX_WIDTH;
 use crate::bottom::{JobLogModel, LogTarget, is_running};
 use crate::services::{AppServices, Services};
 
@@ -32,6 +23,11 @@ enum Rerun {
     Idle,
     Running,
     Failed(SharedString),
+}
+
+pub struct RerunTarget {
+    pub run_id: u64,
+    pub name: String,
 }
 
 pub struct ActionsTab {
@@ -50,20 +46,12 @@ pub struct ActionsTab {
     scroll: ScrollHandle,
     load_task: Option<Task<()>>,
     rerun_task: Option<Task<()>>,
-    _ticker: Task<()>,
+    ticker: Option<Task<()>>,
     _log_subscription: Option<Subscription>,
 }
 
 impl ActionsTab {
     pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
-        let ticker = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(TICK).await;
-                if this.update(cx, |this, cx| this.tick(cx)).is_err() {
-                    break;
-                }
-            }
-        });
         let log_subscription =
             JobLogModel::global(cx).map(|model| cx.observe(&model, |_, _, cx| cx.notify()));
         Self {
@@ -82,7 +70,7 @@ impl ActionsTab {
             scroll: ScrollHandle::new(),
             load_task: None,
             rerun_task: None,
-            _ticker: ticker,
+            ticker: None,
             _log_subscription: log_subscription,
         }
     }
@@ -94,6 +82,7 @@ impl ActionsTab {
             self.error = None;
             self.expanded.clear();
             self.rerun = Rerun::Idle;
+            self.sync_ticker(cx);
         }
         self.detail = Some(detail);
         self.reload(cx);
@@ -107,6 +96,7 @@ impl ActionsTab {
         if active {
             self.auto_open_failed_job(cx);
         }
+        self.sync_ticker(cx);
         cx.notify();
     }
 
@@ -163,11 +153,31 @@ impl ActionsTab {
         }
         self.runs = Some(Rc::new(runs));
         self.auto_open_failed_job(cx);
+        self.sync_ticker(cx);
     }
 
-    fn tick(&mut self, cx: &mut Context<Self>) {
-        if !self.active || !self.has_running() {
+    fn sync_ticker(&mut self, cx: &mut Context<Self>) {
+        if !(self.active && self.has_running()) {
+            self.ticker = None;
             return;
+        }
+        if self.ticker.is_some() {
+            return;
+        }
+        self.ticker = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                let keep = this.update(cx, |this, cx| this.tick(cx)).unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn tick(&mut self, cx: &mut Context<Self>) -> bool {
+        if !(self.active && self.has_running()) {
+            return false;
         }
         let visible = self
             .painted_at
@@ -179,6 +189,7 @@ impl ActionsTab {
             self.reload(cx);
         }
         cx.notify();
+        true
     }
 
     fn has_running(&self) -> bool {
@@ -222,28 +233,32 @@ impl ActionsTab {
         let Some(runs) = self.runs.clone() else {
             return;
         };
-        self.auto_opened = self.head.clone();
-        let failed = runs.iter().enumerate().find_map(|(run_ix, run)| {
-            let job_ix = run
+        let failed = runs.iter().find_map(|run| {
+            let job = run
                 .jobs
                 .iter()
-                .position(|job| job.status == RunStatus::Failure)?;
-            Some((run_ix, job_ix))
+                .find(|job| job.status == RunStatus::Failure)?;
+            Some((run.id, job.id))
         });
-        if let Some((run_ix, job_ix)) = failed {
-            self.open_job(run_ix, job_ix, cx);
+        if let Some((run_id, job_id)) = failed
+            && self.open_job(run_id, job_id, cx)
+        {
+            self.auto_opened = self.head.clone();
         }
     }
 
-    fn open_job(&mut self, run_ix: usize, job_ix: usize, cx: &mut Context<Self>) {
+    fn open_job(&mut self, run_id: u64, job_id: u64, cx: &mut Context<Self>) -> bool {
         let (Some(detail), Some(runs)) = (self.detail.as_ref(), self.runs.as_ref()) else {
-            return;
+            return false;
         };
-        let Some(run) = runs.get(run_ix) else {
-            return;
+        let Some(run) = runs.iter().find(|run| run.id == run_id) else {
+            return false;
         };
-        let Some(job) = run.jobs.get(job_ix) else {
-            return;
+        let Some(job) = run.jobs.iter().find(|job| job.id == job_id) else {
+            return false;
+        };
+        let Some(model) = JobLogModel::global(cx) else {
+            return false;
         };
         let target = LogTarget {
             host: detail.pr.host.clone(),
@@ -254,29 +269,38 @@ impl ActionsTab {
             status: job.status,
             html_url: job.html_url.clone(),
         };
-        if let Some(model) = JobLogModel::global(cx) {
-            model.update(cx, |model, cx| model.open(target, cx));
-        }
+        model.update(cx, |model, cx| model.open(target, cx));
+        true
+    }
+
+    fn can_rerun(&self, window: &mut Window, cx: &mut App) -> bool {
+        !matches!(self.rerun, Rerun::Running) && !window.has_active_dialog(cx)
     }
 
     fn confirm_rerun(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let workflows: Vec<String> = self
-            .failed_runs()
-            .into_iter()
-            .map(|run| run.name.clone())
-            .collect();
-        if workflows.is_empty() || matches!(self.rerun, Rerun::Running) {
+        if !self.can_rerun(window, cx) {
             return;
         }
-        rerun::open(cx.weak_entity(), workflows, window, cx);
+        let targets: Vec<RerunTarget> = self
+            .failed_runs()
+            .into_iter()
+            .map(|run| RerunTarget {
+                run_id: run.id,
+                name: run.name.clone(),
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        rerun::open(cx.weak_entity(), targets, window, cx);
+        cx.notify();
     }
 
-    pub fn rerun_failed(&mut self, cx: &mut Context<Self>) {
+    pub fn rerun_failed(&mut self, run_ids: Vec<u64>, cx: &mut Context<Self>) {
         let Some(detail) = self.detail.clone() else {
             return;
         };
-        let ids: Vec<u64> = self.failed_runs().iter().map(|run| run.id).collect();
-        if ids.is_empty() || matches!(self.rerun, Rerun::Running) {
+        if run_ids.is_empty() || matches!(self.rerun, Rerun::Running) {
             return;
         }
         let Some(services) = app_services(cx) else {
@@ -286,36 +310,34 @@ impl ActionsTab {
         };
         self.rerun = Rerun::Running;
         let repo = detail.pr.repo.clone();
-        let run_ids = ids.clone();
         let task = services.spawn_github(cx, detail.pr.host.clone(), move |client| async move {
+            let mut done = Vec::new();
             for id in run_ids {
-                client.rerun_failed(&repo, id).await?;
+                if let Err(error) = client.rerun_failed(&repo, id).await {
+                    return Ok::<_, GithubError>((done, Some(error.to_string())));
+                }
+                done.push(id);
             }
-            Ok(())
+            Ok((done, None))
         });
         self.rerun_task = Some(cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let succeeded = this
-                .update(cx, |this, cx| {
-                    let succeeded = match result {
-                        Ok(()) => {
-                            tracing::info!(runs = ids.len(), "failed jobs re-run requested");
-                            this.rerun = Rerun::Idle;
-                            this.mark_queued(&ids);
-                            true
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, "failed to re-run failed jobs");
-                            this.rerun =
-                                Rerun::Failed(labels::rerun_failed(&error.to_string()).into());
-                            false
-                        }
-                    };
-                    cx.notify();
-                    succeeded
-                })
-                .unwrap_or(false);
-            if succeeded {
+            let (done, error) = match task.await {
+                Ok(outcome) => outcome,
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            };
+            _ = this.update(cx, |this, cx| {
+                tracing::info!(runs = done.len(), "failed jobs re-run requested");
+                this.mark_queued(&done, cx);
+                this.rerun = match &error {
+                    Some(error) => {
+                        tracing::warn!(%error, "failed to re-run failed jobs");
+                        Rerun::Failed(labels::rerun_failed(error).into())
+                    }
+                    None => Rerun::Idle,
+                };
+                cx.notify();
+            });
+            if !done.is_empty() {
                 cx.background_executor().timer(RERUN_REFRESH_DELAY).await;
                 _ = this.update(cx, |this, cx| this.reload(cx));
             }
@@ -323,8 +345,8 @@ impl ActionsTab {
         cx.notify();
     }
 
-    fn mark_queued(&mut self, ids: &[u64]) {
-        let Some(runs) = self.runs.as_ref() else {
+    fn mark_queued(&mut self, ids: &[u64], cx: &mut Context<Self>) {
+        let Some(runs) = self.runs.as_ref().filter(|_| !ids.is_empty()) else {
             return;
         };
         let runs = runs
@@ -346,6 +368,7 @@ impl ActionsTab {
             .collect();
         self.runs = Some(Rc::new(runs));
         self.loaded_at = Some(Instant::now());
+        self.sync_ticker(cx);
     }
 
     fn open_checks(&self) {
@@ -357,192 +380,9 @@ impl ActionsTab {
             tracing::warn!(%error, url, "failed to open checks in browser");
         }
     }
-
-    fn toolbar(&self, runs: &[WorkflowRun], cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let sha = self
-            .head
-            .as_deref()
-            .map(|head| head.get(..7).unwrap_or(head))
-            .unwrap_or_default();
-        let has_failed = runs.iter().any(|run| run.status == RunStatus::Failure);
-        let rerunning = matches!(self.rerun, Rerun::Running);
-        let rerun = has_failed.then(|| {
-            Button::new("actions-rerun")
-                .icon(Icon::new(IconName::RotateCw))
-                .label(if rerunning {
-                    labels::RERUNNING
-                } else {
-                    labels::RERUN_FAILED
-                })
-                .small()
-                .outline()
-                .disabled(rerunning)
-                .on_click(
-                    cx.listener(|this, _: &ClickEvent, window, cx| this.confirm_rerun(window, cx)),
-                )
-        });
-        let refresh: AnyElement = if self.refreshing {
-            Spinner::new().small().into_any_element()
-        } else {
-            Button::new("actions-refresh")
-                .icon(Icon::new(IconName::RefreshCw))
-                .small()
-                .ghost()
-                .tooltip(labels::REFRESH)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)))
-                .into_any_element()
-        };
-        h_flex()
-            .w_full()
-            .gap_2()
-            .items_center()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(labels::summary(runs.len(), sha)),
-            )
-            .child(div().flex_1())
-            .child(refresh)
-            .children(rerun)
-            .child(
-                Button::new("actions-open-github")
-                    .icon(Icon::new(IconName::ExternalLink))
-                    .label(labels::OPEN_ON_GITHUB)
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, _| this.open_checks())),
-            )
-    }
-
-    fn banner(&self, cx: &App) -> Option<Div> {
-        let message = match &self.rerun {
-            Rerun::Failed(message) => Some(message.clone()),
-            _ => self.error.clone(),
-        }?;
-        let theme = cx.theme();
-        Some(
-            h_flex()
-                .w_full()
-                .px_3()
-                .py_1p5()
-                .gap_2()
-                .items_center()
-                .rounded(theme.radius)
-                .border_1()
-                .border_color(theme.danger.opacity(0.5))
-                .bg(theme.danger.opacity(0.08))
-                .text_sm()
-                .child(
-                    Icon::new(IconName::CircleAlert)
-                        .small()
-                        .text_color(theme.danger),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.foreground)
-                        .child(message),
-                ),
-        )
-    }
-
-    fn state_panel(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let base = v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .text_sm()
-            .text_color(theme.muted_foreground);
-        match &self.error {
-            Some(message) => base
-                .child(
-                    Icon::new(IconName::CircleAlert)
-                        .large()
-                        .text_color(theme.danger),
-                )
-                .child(
-                    div()
-                        .max_w(px(560.))
-                        .text_center()
-                        .text_color(theme.foreground)
-                        .child(message.clone()),
-                )
-                .child(
-                    Button::new("actions-retry")
-                        .icon(Icon::new(IconName::RotateCw))
-                        .label(labels::RETRY)
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx))),
-                ),
-            None => base.child(Spinner::new()).child(labels::LOADING),
-        }
-    }
 }
 
 fn app_services(cx: &App) -> Option<Services> {
     cx.try_global::<AppServices>()
         .map(|global| global.0.clone())
-}
-
-impl Render for ActionsTab {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.painted_at = Some(Instant::now());
-        let Some(runs) = self.runs.clone() else {
-            return self.state_panel(cx).into_any_element();
-        };
-        let now = Utc::now();
-        let selected_job = JobLogModel::global(cx)
-            .and_then(|model| model.read(cx).target().map(|target| target.job_id));
-        let toolbar = self.toolbar(&runs, cx);
-        let banner = self.banner(cx);
-        let body: AnyElement = if runs.is_empty() {
-            v_flex()
-                .py_8()
-                .items_center()
-                .gap_2()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(Icon::new(IconName::Play).large())
-                .child(labels::EMPTY)
-                .into_any_element()
-        } else {
-            v_flex()
-                .w_full()
-                .gap_2()
-                .children(
-                    runs.iter()
-                        .enumerate()
-                        .map(|(ix, run)| self.run_block(ix, run, now, selected_job, cx))
-                        .collect::<Vec<_>>(),
-                )
-                .into_any_element()
-        };
-        div()
-            .id("pr-actions-scroll")
-            .size_full()
-            .track_scroll(&self.scroll)
-            .overflow_y_scroll()
-            .vertical_scrollbar(&self.scroll)
-            .child(
-                v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .max_w(px(CONTENT_MAX_WIDTH))
-                    .mx_auto()
-                    .px_4()
-                    .py_4()
-                    .gap_3()
-                    .child(toolbar)
-                    .children(banner)
-                    .child(body),
-            )
-            .into_any_element()
-    }
 }

@@ -6,22 +6,27 @@ use gpui_kit::component::{
 };
 use gpui_kit::{App, ParentElement as _, Styled as _, WeakEntity, Window, div, px};
 
-use super::ActionsTab;
-use super::labels;
+use super::{ActionsTab, RerunTarget, labels};
 
 const DIALOG_WIDTH: f32 = 440.;
 
 pub fn open(
     tab: WeakEntity<ActionsTab>,
-    workflows: Vec<String>,
+    targets: Vec<RerunTarget>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let count = workflows.len();
-    let names = workflows.join(", ");
+    let count = targets.len();
+    let names = targets
+        .iter()
+        .map(|target| target.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let run_ids: Vec<u64> = targets.iter().map(|target| target.run_id).collect();
     window.open_dialog(cx, move |dialog, _, cx| {
         let theme = cx.theme();
         let confirm_tab = tab.clone();
+        let run_ids = run_ids.clone();
         let footer = DialogFooter::new()
             .child(
                 Button::new("actions-rerun-cancel")
@@ -37,7 +42,7 @@ pub fn open(
                     .small()
                     .primary()
                     .on_click(move |_, window, cx| {
-                        _ = confirm_tab.update(cx, |tab, cx| tab.rerun_failed(cx));
+                        _ = confirm_tab.update(cx, |tab, cx| tab.rerun_failed(run_ids.clone(), cx));
                         window.close_dialog(cx);
                     }),
             );

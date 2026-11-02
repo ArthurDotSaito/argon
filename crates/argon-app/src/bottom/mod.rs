@@ -22,6 +22,9 @@ const PLACEMENTS: [DockPlacement; 4] = [
 ];
 
 pub fn init(cx: &mut App) -> Entity<JobLogModel> {
+    if let Some(model) = JobLogModel::global(cx) {
+        return model;
+    }
     cx.bind_keys([
         KeyBinding::new("ctrl-f", FocusLogSearch, Some(LOG_CONTEXT)),
         KeyBinding::new("f3", NextLogMatch, Some(LOG_CONTEXT)),

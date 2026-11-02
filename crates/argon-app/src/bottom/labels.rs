@@ -20,9 +20,18 @@ pub fn title(workflow: &str, job: &str) -> String {
     format!("{workflow} / {job}")
 }
 
-pub fn match_position(current: Option<usize>, count: usize) -> String {
-    match current {
-        Some(current) => format!("{}/{count}", current + 1),
-        None => format!("{count} resultados"),
+pub const MATCH_CAP: &str = "10.000+";
+
+pub fn match_position(
+    current: Option<usize>,
+    lines: usize,
+    occurrences: usize,
+    capped: bool,
+) -> String {
+    match (current, capped) {
+        (Some(current), false) => format!("{}/{lines}", current + 1),
+        (Some(current), true) => format!("{}/{lines} · {MATCH_CAP}", current + 1),
+        (None, false) => format!("{occurrences} resultados"),
+        (None, true) => format!("{MATCH_CAP} resultados"),
     }
 }

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use argon_github::RunStatus;
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Task};
@@ -22,7 +22,7 @@ pub struct LogTarget {
 pub enum LogLoad {
     Loading,
     Failed(SharedString),
-    Ready { doc: Rc<LogDoc>, truncated: bool },
+    Ready { doc: Arc<LogDoc>, truncated: bool },
 }
 
 pub enum JobLogEvent {
@@ -124,7 +124,7 @@ impl JobLogModel {
                 }
                 this.load = match result {
                     Ok((doc, truncated)) => LogLoad::Ready {
-                        doc: Rc::new(doc),
+                        doc: Arc::new(doc),
                         truncated,
                     },
                     Err(error) => {
