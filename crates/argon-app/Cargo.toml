@@ -1,0 +1,13 @@
+[package]
+name = "argon-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "argon"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
