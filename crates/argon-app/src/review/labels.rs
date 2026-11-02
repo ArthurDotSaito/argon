@@ -11,9 +11,9 @@ pub const INLINE: &str = "Inline";
 pub const MODE_SHORTCUT: &str = "Alternar Split/Inline (s)";
 pub const DIFF_TOO_LARGE: &str = "Diff grande demais ou binário —";
 pub const DIFF_INVALID: &str = "Não foi possível exibir o diff —";
-pub const DIFF_EMPTY: &str = "Sem mudanças de conteúdo.";
-pub const NO_NEWLINE: &str = "Sem quebra de linha no fim do arquivo";
 pub const OUTDATED_COMMENTS: &str = "Comentários desatualizados";
+pub const FILE_COMMENT: &str = "Comentário no arquivo";
+pub const COMMIT_COMMENT_HINT: &str = "Para comentar, veja todos os arquivos";
 pub const RESOLVED: &str = "Conversa resolvida";
 pub const SHOW_RESOLVED: &str = "Mostrar conversa resolvida";
 pub const HIDE_RESOLVED: &str = "Ocultar";
@@ -36,6 +36,13 @@ pub fn commit_gone(oid: &str) -> String {
         "O commit {} não faz mais parte do PR (force-push)",
         short_sha(oid)
     )
+}
+
+pub fn outside_comments(count: usize) -> String {
+    match count {
+        1 => "1 comentário em arquivo fora deste diff".to_string(),
+        count => format!("{count} comentários em arquivos fora deste diff"),
+    }
 }
 
 pub fn viewed_count(viewed: usize, total: usize) -> String {

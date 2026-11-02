@@ -35,6 +35,7 @@ use crate::sync_status::SyncStatus;
 use crate::workspace::Workspace;
 
 const WINDOW_TITLE: &str = "Argon";
+const UI_LOCALE: &str = "pt-BR";
 const WINDOW_WIDTH: f32 = 1440.;
 const WINDOW_HEIGHT: f32 = 900.;
 
@@ -59,6 +60,7 @@ fn main() {
             })
             .detach();
             gpui_kit::init(cx);
+            gpui_kit::component::set_locale(UI_LOCALE);
             theme::apply_one_dark(cx);
             keymap::bind(cx);
             let (services, events) = Services::start(paths, config);

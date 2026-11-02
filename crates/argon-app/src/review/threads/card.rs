@@ -14,10 +14,30 @@ use crate::ui;
 
 const AVATAR_SIZE: f32 = 20.;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CardKind {
+    Line,
+    Outdated,
+    File,
+}
+
+pub fn outdated_header(cx: &mut App) -> AnyElement {
+    let theme = cx.theme();
+    h_flex()
+        .gap_2()
+        .items_center()
+        .text_xs()
+        .font_semibold()
+        .text_color(theme.muted_foreground)
+        .child(Icon::new(IconName::Clock).xsmall())
+        .child(labels::OUTDATED_COMMENTS)
+        .into_any_element()
+}
+
 pub fn thread_card(
     thread: &ReviewThread,
     ui_state: &Entity<ThreadUi>,
-    outdated: bool,
+    kind: CardKind,
     _: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -33,7 +53,12 @@ pub fn thread_card(
         .bg(theme.background)
         .text_sm()
         .font_family(theme.font_family.clone());
-    let card = if outdated {
+    let caption = match kind {
+        CardKind::Line => None,
+        CardKind::Outdated => Some((IconName::Clock, labels::original_line(thread.original_line))),
+        CardKind::File => Some((IconName::FileCode, labels::FILE_COMMENT.to_string())),
+    };
+    let card = if let Some((icon, caption)) = caption {
         card.child(
             h_flex()
                 .px_3()
@@ -43,8 +68,8 @@ pub fn thread_card(
                 .bg(theme.muted.opacity(0.5))
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::Clock).xsmall())
-                .child(labels::original_line(thread.original_line)),
+                .child(Icon::new(icon).xsmall())
+                .child(caption),
         )
     } else {
         card

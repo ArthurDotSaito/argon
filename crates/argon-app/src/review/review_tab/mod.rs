@@ -1,7 +1,7 @@
 mod load;
 mod view;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use argon_core::Side;
@@ -10,7 +10,7 @@ use gpui_kit::{
     AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, Window,
 };
 
-use super::diff_view::{DiffView, DiffViewEvent};
+use super::diff_view::{BlockSource, DiffView, DiffViewEvent, InlineBlock};
 use super::file_tree::{FileTree, FileTreeEvent};
 use super::labels;
 use super::threads::{ThreadUi, file_threads};
@@ -42,6 +42,8 @@ pub struct ReviewTab {
     active: bool,
     files: Files,
     loaded_head: Option<String>,
+    stale: bool,
+    outside_comments: usize,
     notice: Option<SharedString>,
     error: Option<SharedString>,
     epoch: u64,
@@ -50,7 +52,7 @@ pub struct ReviewTab {
     diff: Entity<DiffView>,
     thread_ui: Entity<ThreadUi>,
     load_task: Option<Task<()>>,
-    highlight_tasks: Vec<Task<()>>,
+    viewed_inflight: HashSet<String>,
     viewed_tasks: HashMap<String, Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -93,6 +95,8 @@ impl ReviewTab {
             active: false,
             files: Files::Idle,
             loaded_head: None,
+            stale: false,
+            outside_comments: 0,
             notice: None,
             error: None,
             epoch: 0,
@@ -101,7 +105,7 @@ impl ReviewTab {
             diff,
             thread_ui,
             load_task: None,
-            highlight_tasks: Vec::new(),
+            viewed_inflight: HashSet::new(),
             viewed_tasks: HashMap::new(),
             _subscriptions: subscriptions,
         }
@@ -119,11 +123,11 @@ impl ReviewTab {
             && matches!(self.files, Files::Ready)
             && self.loaded_head.as_deref() != Some(detail.head_oid.as_str());
         self.detail = Some(detail);
-        if head_moved {
-            self.files = Files::Idle;
-        }
+        self.stale |= head_moved;
         if self.active && matches!(self.files, Files::Idle) {
-            self.load_files(cx);
+            self.load_files(false, cx);
+        } else if self.active && self.stale {
+            self.load_files(true, cx);
         } else {
             self.sync_threads(cx);
         }
@@ -143,7 +147,9 @@ impl ReviewTab {
         self.active = active;
         self.focus_pending = active;
         if active && matches!(self.files, Files::Idle | Files::Failed(_)) {
-            self.load_files(cx);
+            self.load_files(false, cx);
+        } else if active && self.stale {
+            self.load_files(true, cx);
         }
         cx.notify();
     }
@@ -155,7 +161,7 @@ impl ReviewTab {
         }
         self.notice = None;
         if self.active && matches!(self.files, Files::Idle | Files::Failed(_)) {
-            self.load_files(cx);
+            self.load_files(false, cx);
         }
         cx.notify();
     }
@@ -163,6 +169,21 @@ impl ReviewTab {
     pub fn reveal(&mut self, path: &str, line: u32, side: Side, cx: &mut Context<Self>) {
         self.diff
             .update(cx, |diff, cx| diff.reveal(path, line, side, cx));
+    }
+
+    #[expect(
+        dead_code,
+        reason = "drafts and the inline comment editor plug in here in Task 16"
+    )]
+    pub fn set_blocks(
+        &mut self,
+        path: &str,
+        source: BlockSource,
+        blocks: Vec<InlineBlock>,
+        cx: &mut Context<Self>,
+    ) {
+        self.diff
+            .update(cx, |diff, cx| diff.set_blocks(path, source, blocks, cx));
     }
 
     fn sync_threads(&mut self, cx: &mut Context<Self>) {
@@ -181,11 +202,18 @@ impl ReviewTab {
             .map(|file| file.meta.path.clone())
             .collect();
         self.diff.update(cx, |diff, cx| {
-            for path in paths {
-                let file = threads.remove(&path).unwrap_or_default();
-                diff.set_inline_blocks(&path, file.anchored, cx);
-                diff.set_outdated_blocks(&path, file.outdated, cx);
+            for path in &paths {
+                let blocks = threads.remove(path).unwrap_or_default();
+                diff.set_blocks(path, BlockSource::Threads, blocks, cx);
             }
         });
+        self.outside_comments = match (&self.scope, &self.detail) {
+            (ReviewScope::All, Some(detail)) => detail
+                .threads
+                .iter()
+                .filter(|thread| !paths.contains(&thread.path))
+                .count(),
+            _ => 0,
+        };
     }
 }

@@ -1,32 +1,54 @@
+mod blocks;
+mod convert;
 mod header;
-mod items;
-mod layout;
 mod render;
-mod row;
-mod selection;
 
-use std::collections::{BTreeSet, HashMap};
-use std::ops::Range;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use argon_core::Side;
+use gpui_kit::component::diff::{DiffEvent, DiffLinePosition, DiffMode as KitMode, DiffState};
 use gpui_kit::{
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, ListAlignment, ListOffset,
-    ListState, SharedString, Task, Window, px,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Task,
 };
 
-pub use items::DiffMode;
-use items::{BlockAnchor, Item};
-use selection::{Drag, Flash, Selection};
+use blocks::BlockSet;
+pub use blocks::{BlockRender, BlockSource, InlineBlock};
+use convert::{gutter_range, position};
 
 use super::file_diff::FileDiff;
-use super::highlight::FileHighlights;
 
-const LIST_OVERDRAW: f32 = 600.;
-const REVEAL_CONTEXT_ROWS: usize = 6;
-const FLASH_DURATION: Duration = Duration::from_millis(1500);
+const REVEAL_CONTEXT: u32 = 4;
+const FLASH_STEPS: [(bool, u64); 5] = [
+    (true, 350),
+    (false, 200),
+    (true, 350),
+    (false, 200),
+    (true, 400),
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiffMode {
+    #[default]
+    Split,
+    Inline,
+}
+
+impl DiffMode {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Split => Self::Inline,
+            Self::Inline => Self::Split,
+        }
+    }
+
+    fn kit(self) -> KitMode {
+        match self {
+            Self::Split => KitMode::Split,
+            Self::Inline => KitMode::Unified,
+        }
+    }
+}
 
 pub enum DiffViewEvent {
     GutterClicked {
@@ -41,126 +63,104 @@ pub enum DiffViewEvent {
     },
 }
 
-pub type BlockRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
-
-#[derive(Clone)]
-pub struct InlineBlock {
-    pub anchor: (u32, Side),
-    pub start: Option<(u32, Side)>,
-    pub key: SharedString,
-    pub render: BlockRender,
-}
-
-impl InlineBlock {
-    pub fn new(anchor: (u32, Side), key: impl Into<SharedString>, render: BlockRender) -> Self {
-        Self {
-            anchor,
-            start: None,
-            key: key.into(),
-            render,
-        }
-    }
-
-    pub fn with_start(mut self, start: Option<(u32, Side)>) -> Self {
-        self.start = start.filter(|start| *start != self.anchor);
-        self
-    }
-
-    fn layout(&self) -> BlockAnchor {
-        BlockAnchor {
-            anchor: self.anchor,
-            start: self.start,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ScrollTarget {
-    File(usize),
-    Anchor {
-        file: usize,
-        anchor: (u32, Side),
-        context: usize,
-    },
-}
-
-#[derive(Default)]
-struct FileBlocks {
-    anchored: Vec<InlineBlock>,
-    outdated: Vec<InlineBlock>,
-}
-
 pub struct DiffView {
+    state: Entity<DiffState>,
     files: Vec<FileDiff>,
     index: HashMap<String, usize>,
-    blocks: HashMap<String, FileBlocks>,
+    blocks: HashMap<String, BlockSet>,
     mode: DiffMode,
-    items: Vec<Item>,
-    ranges: Vec<Range<usize>>,
-    dirty: BTreeSet<usize>,
-    list: ListState,
     ready: bool,
     viewed_enabled: bool,
-    selection: Option<Selection>,
-    drag: Option<Drag>,
-    flash: Option<Flash>,
-    flash_seq: u64,
-    pending_reveal: Option<(String, u32, Side)>,
-    pending_scroll: Option<ScrollTarget>,
+    comments_enabled: bool,
     github_url: Option<String>,
-    focus_handle: FocusHandle,
+    flash: Option<DiffLinePosition>,
+    pending_reveal: Option<(String, u32, Side)>,
+    last_line: Option<DiffLinePosition>,
     flash_task: Option<Task<()>>,
+    _subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<DiffViewEvent> for DiffView {}
 
 impl Focusable for DiffView {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.state.read(cx).focus_handle(cx)
     }
 }
 
 impl DiffView {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let mode = DiffMode::default();
+        let state = cx.new(|cx| DiffState::new(Vec::new(), cx).with_mode(mode.kit()));
+        let subscriptions = [
+            cx.subscribe(&state, |this, state, event, cx| {
+                if let DiffEvent::SelectionEnded(range) = event {
+                    this.on_selection(range, &state, cx);
+                }
+            }),
+            cx.observe(&state, |_, _, cx| cx.notify()),
+        ];
         Self {
+            state,
             files: Vec::new(),
             index: HashMap::new(),
             blocks: HashMap::new(),
-            mode: DiffMode::default(),
-            items: Vec::new(),
-            ranges: Vec::new(),
-            dirty: BTreeSet::new(),
-            list: ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW)),
+            mode,
             ready: false,
             viewed_enabled: true,
-            selection: None,
-            drag: None,
-            flash: None,
-            flash_seq: 0,
-            pending_reveal: None,
-            pending_scroll: None,
+            comments_enabled: true,
             github_url: None,
-            focus_handle: cx.focus_handle(),
+            flash: None,
+            pending_reveal: None,
+            last_line: None,
             flash_task: None,
+            _subscriptions: subscriptions,
         }
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.files.clear();
         self.index.clear();
-        self.items.clear();
-        self.ranges.clear();
-        self.dirty.clear();
-        self.selection = None;
-        self.drag = None;
         self.ready = false;
-        self.pending_scroll = None;
         self.flash = None;
-        self.list.reset(0);
+        self.flash_task = None;
+        self.pending_reveal = None;
+        self.last_line = None;
+        self.state
+            .update(cx, |state, cx| state.set_files(Vec::new(), cx));
         cx.notify();
     }
 
     pub fn set_files(&mut self, files: Vec<FileDiff>, cx: &mut Context<Self>) {
+        let reload = self.ready && !self.files.is_empty();
+        let previous: HashSet<String> = self.files.iter().map(|f| f.meta.path.clone()).collect();
+        let state = self.state.read(cx);
+        let collapsed: HashSet<String> = previous
+            .iter()
+            .filter(|path| state.is_file_collapsed(path))
+            .cloned()
+            .collect();
+        let selection = state.selected_lines();
+        let anchor = self.last_line.clone();
+        let documents: Vec<_> = files.iter().map(|file| file.document.clone()).collect();
+        self.state.update(cx, |state, cx| {
+            state.set_files(documents, cx);
+            for file in &files {
+                let path = &file.meta.path;
+                let collapse = if previous.contains(path) {
+                    collapsed.contains(path)
+                } else {
+                    file.viewed
+                };
+                state.set_file_collapsed(path, collapse, cx);
+            }
+            if reload {
+                state.set_selected_lines(selection, cx);
+                if let Some(anchor) = anchor {
+                    state.scroll_to_line(anchor, cx);
+                }
+            }
+        });
         self.index = files
             .iter()
             .enumerate()
@@ -168,9 +168,6 @@ impl DiffView {
             .collect();
         self.files = files;
         self.ready = true;
-        self.selection = None;
-        self.rebuild_all();
-        self.list.scroll_to(ListOffset::default());
         if let Some((path, line, side)) = self.pending_reveal.take() {
             self.reveal(&path, line, side, cx);
         }
@@ -190,37 +187,21 @@ impl DiffView {
         cx.notify();
     }
 
-    pub fn set_highlights(
-        &mut self,
-        path: &str,
-        highlights: Arc<FileHighlights>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(file) = self.file_mut(path) {
-            file.highlights = Some(highlights);
-            cx.notify();
-        }
+    pub fn set_comments_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.comments_enabled = enabled;
+        cx.notify();
     }
 
     pub fn set_viewed(&mut self, path: &str, viewed: bool, cx: &mut Context<Self>) {
         let Some(&ix) = self.index.get(path) else {
             return;
         };
-        let file = &mut self.files[ix];
-        if file.viewed != viewed {
-            file.viewed = viewed;
-            file.collapsed = viewed;
-            self.dirty.insert(ix);
+        if self.files[ix].viewed != viewed {
+            self.files[ix].viewed = viewed;
+            self.state
+                .update(cx, |state, cx| state.set_file_collapsed(path, viewed, cx));
         }
         cx.notify();
-    }
-
-    pub fn toggle_collapsed(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if let Some(file) = self.files.get_mut(ix) {
-            file.collapsed = !file.collapsed;
-            self.dirty.insert(ix);
-            cx.notify();
-        }
     }
 
     pub fn mode(&self) -> DiffMode {
@@ -228,64 +209,35 @@ impl DiffView {
     }
 
     pub fn set_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
-        if mode == self.mode {
-            return;
+        if mode != self.mode {
+            self.mode = mode;
+            self.state
+                .update(cx, |state, cx| state.set_mode(mode.kit(), cx));
+            cx.notify();
         }
-        let keep = self.top_anchor();
-        self.mode = mode;
-        self.rebuild_all();
-        self.pending_scroll = keep.map(|(file, anchor)| match anchor {
-            Some(anchor) => ScrollTarget::Anchor {
-                file,
-                anchor,
-                context: 0,
-            },
-            None => ScrollTarget::File(file),
-        });
-        cx.notify();
     }
 
     pub fn toggle_mode(&mut self, cx: &mut Context<Self>) {
         self.set_mode(self.mode.toggled(), cx);
     }
 
-    pub fn set_inline_blocks(
+    pub fn set_blocks(
         &mut self,
         path: &str,
+        source: BlockSource,
         blocks: Vec<InlineBlock>,
         cx: &mut Context<Self>,
     ) {
-        let entry = self.blocks.entry(path.to_string()).or_default();
-        let same_layout = layout_key(&entry.anchored) == layout_key(&blocks);
-        entry.anchored = blocks;
-        if same_layout {
-            cx.notify();
-        } else {
-            self.mark_dirty(path, cx);
-        }
-    }
-
-    pub fn set_outdated_blocks(
-        &mut self,
-        path: &str,
-        blocks: Vec<InlineBlock>,
-        cx: &mut Context<Self>,
-    ) {
-        let entry = self.blocks.entry(path.to_string()).or_default();
-        let same_layout = entry.outdated.len() == blocks.len();
-        entry.outdated = blocks;
-        if same_layout {
-            cx.notify();
-        } else {
-            self.mark_dirty(path, cx);
-        }
+        self.blocks
+            .entry(path.to_string())
+            .or_default()
+            .set(source, blocks);
+        cx.notify();
     }
 
     pub fn scroll_to_file(&mut self, path: &str, cx: &mut Context<Self>) {
-        if let Some(&ix) = self.index.get(path) {
-            self.pending_scroll = Some(ScrollTarget::File(ix));
-            cx.notify();
-        }
+        self.state
+            .update(cx, |state, cx| state.scroll_to_file(path, cx));
     }
 
     pub fn reveal(&mut self, path: &str, line: u32, side: Side, cx: &mut Context<Self>) {
@@ -293,54 +245,66 @@ impl DiffView {
             self.pending_reveal = Some((path.to_string(), line, side));
             return;
         }
-        let Some(&ix) = self.index.get(path) else {
+        let Some(file) = self.index.get(path).map(|ix| &self.files[*ix]) else {
             return;
         };
-        if self.files[ix].collapsed {
-            self.files[ix].collapsed = false;
-            self.dirty.insert(ix);
+        if !file.has_line((line, side)) {
+            self.scroll_to_file(path, cx);
+            return;
         }
-        self.pending_scroll = Some(ScrollTarget::Anchor {
-            file: ix,
-            anchor: (line, side),
-            context: REVEAL_CONTEXT_ROWS,
-        });
-        self.start_flash(ix, (line, side), cx);
+        let context = (line.saturating_sub(REVEAL_CONTEXT)..line)
+            .find(|above| file.has_line((*above, side)))
+            .unwrap_or(line);
+        let target = position(path, (line, side));
+        let scroll = position(path, (context, side));
+        self.state
+            .update(cx, |state, cx| state.scroll_to_line(scroll, cx));
+        self.start_flash(target, cx);
+    }
+
+    fn start_flash(&mut self, target: DiffLinePosition, cx: &mut Context<Self>) {
+        self.flash = Some(target.clone());
+        self.flash_task = Some(cx.spawn(async move |this, cx| {
+            for (visible, millis) in FLASH_STEPS {
+                let target = target.clone();
+                if this
+                    .update(cx, |this, cx| {
+                        this.flash = visible.then_some(target);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(millis))
+                    .await;
+            }
+            _ = this.update(cx, |this, cx| {
+                this.flash = None;
+                cx.notify();
+            });
+        }));
         cx.notify();
     }
 
-    fn file_mut(&mut self, path: &str) -> Option<&mut FileDiff> {
-        let ix = *self.index.get(path)?;
-        self.files.get_mut(ix)
-    }
-
-    fn mark_dirty(&mut self, path: &str, cx: &mut Context<Self>) {
-        if let Some(&ix) = self.index.get(path) {
-            self.dirty.insert(ix);
-            cx.notify();
+    fn on_selection(
+        &mut self,
+        range: &gpui_kit::component::diff::DiffLineRange,
+        state: &Entity<DiffState>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.comments_enabled {
+            state.update(cx, |state, cx| state.set_selected_lines(None, cx));
+            return;
         }
+        let gutter = gutter_range(range);
+        self.last_line = Some(position(&gutter.path, (gutter.line, gutter.side)));
+        cx.emit(DiffViewEvent::GutterClicked {
+            path: gutter.path,
+            line: gutter.line,
+            side: gutter.side,
+            start: gutter.start,
+        });
     }
-
-    fn block(
-        &self,
-        file: usize,
-        block: usize,
-        outdated: bool,
-    ) -> Option<(SharedString, BlockRender)> {
-        let blocks = self.blocks.get(&self.files.get(file)?.meta.path)?;
-        let list = if outdated {
-            &blocks.outdated
-        } else {
-            &blocks.anchored
-        };
-        list.get(block)
-            .map(|block| (block.key.clone(), block.render.clone()))
-    }
-}
-
-fn layout_key(blocks: &[InlineBlock]) -> Vec<(&str, BlockAnchor)> {
-    blocks
-        .iter()
-        .map(|block| (block.key.as_ref(), block.layout()))
-        .collect()
 }

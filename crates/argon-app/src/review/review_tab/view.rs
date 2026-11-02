@@ -63,6 +63,12 @@ impl ReviewTab {
     fn toolbar(&self, cx: &mut Context<Self>) -> Div {
         let mode = self.diff.read(cx).mode();
         let theme = cx.theme();
+        let hint = matches!(self.scope, ReviewScope::Commit { .. }).then(|| {
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(labels::COMMIT_COMMENT_HINT)
+        });
         let mode_button = |id: &'static str, label: &'static str, target: DiffMode| {
             Button::new(id)
                 .label(label)
@@ -94,6 +100,7 @@ impl ReviewTab {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
+            .children(hint)
             .child(div().flex_1())
             .child(split)
             .child(inline)
@@ -114,7 +121,7 @@ impl ReviewTab {
                     .hover(|style| style.underline())
                     .child(labels::RETRY)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.load_files(cx);
+                        this.load_files(false, cx);
                         cx.notify();
                     })),
             ),
@@ -188,6 +195,15 @@ impl Render for ReviewTab {
             .error
             .clone()
             .map(|error| banner(error, danger, IconName::CircleAlert, cx));
+        let info = cx.theme().info;
+        let outside = (self.outside_comments > 0).then(|| {
+            banner(
+                labels::outside_comments(self.outside_comments).into(),
+                info,
+                IconName::MessageSquare,
+                cx,
+            )
+        });
         let commit = match self.scope.clone() {
             ReviewScope::Commit { oid, headline } => Some(self.commit_banner(&oid, &headline, cx)),
             ReviewScope::All => None,
@@ -198,6 +214,7 @@ impl Render for ReviewTab {
             .children(notice)
             .children(commit)
             .children(error)
+            .children(outside)
             .child(div().flex_1().min_h_0().child(body))
     }
 }

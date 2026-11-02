@@ -1,155 +1,151 @@
-use argon_core::Side;
-use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, h_flex};
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use gpui_kit::assets::IconName;
+use gpui_kit::component::diff::{
+    Diff, DiffAnnotation, DiffDecoration, DiffHoverHighlight, DiffLinePosition,
+};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, ElementId, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Window, div, list, px,
+    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div,
 };
 
-use super::header::{file_gap, file_header, hunk_header, notice, outdated_header};
-use super::items::Item;
-use super::row::{NUMBER_WIDTH, RowCx, render_row};
-use super::{BlockRender, DiffMode, DiffView};
+use super::DiffView;
+use super::blocks::{BlockRender, place};
+use super::convert::{position, range};
+use super::header::file_header;
 use crate::actions::ToggleDiffMode;
 use crate::keymap::DIFF_VIEW_CONTEXT;
+use crate::review::file_diff::FileBody;
+use crate::review::labels;
 
-const BLOCK_PADDING: f32 = 6.;
+const RANGE_ALPHA: f32 = 0.12;
+const FLASH_ALPHA: f32 = 0.45;
+
+type Renders = HashMap<ElementId, BlockRender>;
 
 impl DiffView {
-    fn sticky_file(&self) -> Option<usize> {
-        let top = self.list.logical_scroll_top();
-        match self.items.get(top.item_ix)? {
-            Item::FileHeader { .. } if top.offset_in_item <= px(0.) => None,
-            Item::FileEnd { .. } => None,
-            item => Some(item.file()),
+    fn layers(&self, cx: &App) -> (Vec<DiffAnnotation>, Renders, Vec<DiffDecoration>) {
+        let theme = cx.theme();
+        let mut annotations = Vec::new();
+        let mut renders: Renders = HashMap::new();
+        let mut decorations = Vec::new();
+        for file in &self.files {
+            let path = file.meta.path.as_str();
+            if let Some(notice) = self.notice(file.body) {
+                let id = ElementId::Name(format!("notice-{path}").into());
+                annotations.push(DiffAnnotation::file(id.clone(), path.to_string()));
+                renders.insert(id, notice);
+            }
+            let Some(set) = self.blocks.get(path) else {
+                continue;
+            };
+            let placed = place(set, |anchor| file.has_line(anchor));
+            for (block, placed) in set.iter().zip(placed) {
+                let id = ElementId::Name(block.key.clone());
+                annotations.push(match placed.line {
+                    Some(anchor) => DiffAnnotation::line(id.clone(), position(path, anchor)),
+                    None => DiffAnnotation::file(id.clone(), path.to_string()),
+                });
+                if let (Some(end), Some(start)) = (placed.line, placed.start) {
+                    decorations.push(
+                        DiffDecoration::new(range(path, start, end))
+                            .with_background(theme.primary.opacity(RANGE_ALPHA)),
+                    );
+                }
+                renders.insert(id, block.render.clone());
+            }
         }
+        if let Some(flash) = &self.flash {
+            decorations.push(
+                DiffDecoration::new(flash_range(flash))
+                    .with_background(theme.warning.opacity(FLASH_ALPHA)),
+            );
+        }
+        (annotations, renders, decorations)
     }
+
+    fn notice(&self, body: FileBody) -> Option<BlockRender> {
+        let message: SharedString = match body {
+            FileBody::Missing => labels::DIFF_TOO_LARGE.into(),
+            FileBody::Invalid => labels::DIFF_INVALID.into(),
+            FileBody::Ready | FileBody::Empty => return None,
+        };
+        let url = self.github_url.clone();
+        Some(Rc::new(move |_, cx| {
+            notice(message.clone(), url.clone(), cx)
+        }))
+    }
+}
+
+fn flash_range(flash: &DiffLinePosition) -> gpui_kit::component::diff::DiffLineRange {
+    gpui_kit::component::diff::DiffLineRange::new(
+        flash.path().clone(),
+        flash.side(),
+        flash.line(),
+        flash.line(),
+    )
+}
+
+fn notice(message: SharedString, url: Option<String>, cx: &mut App) -> AnyElement {
+    let theme = cx.theme();
+    let link = url.map(|url| {
+        div()
+            .id("diff-notice-open")
+            .text_color(theme.link)
+            .cursor_pointer()
+            .hover(|style| style.underline())
+            .child(labels::OPEN_ON_GITHUB)
+            .on_click(move |_: &ClickEvent, _, _| {
+                if let Err(error) = open::that_detached(&url) {
+                    tracing::warn!(%error, url, "failed to open diff in browser");
+                }
+            })
+    });
+    h_flex()
+        .gap_2()
+        .items_center()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child(Icon::new(IconName::TriangleAlert).small())
+        .child(message)
+        .children(link)
+        .into_any_element()
 }
 
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.flush_dirty();
-        if let Some(target) = self.pending_scroll.take() {
-            self.apply_scroll(target);
-        }
-        let view = cx.entity();
-        let sticky = self
-            .sticky_file()
-            .map(|file| file_header(&view, self, file, true, cx));
-        let list_view = view.clone();
-        div()
-            .relative()
+        let (annotations, renders, decorations) = self.layers(cx);
+        let renders = Rc::new(renders);
+        let header_view = cx.entity();
+        let hover_view = cx.entity().downgrade();
+        let diff = Diff::new(&self.state)
+            .hover_highlight(DiffHoverHighlight::LineNumber)
+            .soft_wrap(true)
+            .annotations(annotations)
+            .render_annotation(
+                move |annotation, window, cx| match renders.get(annotation.id()) {
+                    Some(render) => render(window, cx),
+                    None => div().into_any_element(),
+                },
+            )
+            .decorations(decorations)
+            .render_header(move |document, _, cx| file_header(&header_view, document, cx))
+            .on_line_hover(move |line, _, cx| {
+                if let Some(line) = line {
+                    let line = line.clone();
+                    _ = hover_view.update(cx, |this, _| this.last_line = Some(line));
+                }
+            })
+            .flex_1()
+            .min_h_0()
+            .border_0();
+        v_flex()
             .size_full()
             .key_context(DIFF_VIEW_CONTEXT)
-            .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &ToggleDiffMode, _, cx| this.toggle_mode(cx)))
-            .on_any_mouse_down(cx.listener(|this, _, window, cx| {
-                window.focus(&this.focus_handle, cx);
-            }))
-            .child(
-                list(self.list.clone(), move |ix, window, cx| {
-                    render_item(&list_view, ix, window, cx)
-                })
-                .size_full(),
-            )
-            .vertical_scrollbar(&self.list)
-            .children(sticky.map(|header| {
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .shadow_sm()
-                    .child(header)
-            }))
+            .child(diff)
     }
-}
-
-fn render_item(
-    view: &Entity<DiffView>,
-    ix: usize,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
-    let this = view.read(cx);
-    let Some(item) = this.items.get(ix).copied() else {
-        return div().into_any_element();
-    };
-    let mode = this.mode;
-    match item {
-        Item::FileHeader { file } => file_header(view, this, file, false, cx),
-        Item::Notice { file } => notice(this, file, cx),
-        Item::OutdatedHeader { .. } => outdated_header(cx),
-        Item::FileEnd { .. } => file_gap(),
-        Item::HunkHeader { file, hunk } => match this.files[file].body.diff() {
-            Some(diff) => hunk_header(&diff.hunks[hunk], mode, cx),
-            None => div().into_any_element(),
-        },
-        Item::Row {
-            file,
-            hunk,
-            row,
-            marked,
-        } => {
-            let entry = &this.files[file];
-            let Some(diff) = entry.body.diff() else {
-                return div().into_any_element();
-            };
-            let rcx = RowCx {
-                view,
-                this,
-                file_ix: file,
-                file: entry,
-                diff,
-            };
-            render_row(&rcx, hunk, row, marked, cx)
-        }
-        Item::Outdated { file, block } => {
-            let block = this.block(file, block, true);
-            block_element(block, None, mode, window, cx)
-        }
-        Item::Floating { file, block } => {
-            let block = this.block(file, block, false);
-            block_element(block, None, mode, window, cx)
-        }
-        Item::Block { file, block, side } => {
-            let block = this.block(file, block, false);
-            block_element(block, Some(side), mode, window, cx)
-        }
-    }
-}
-
-fn block_element(
-    block: Option<(SharedString, BlockRender)>,
-    side: Option<Side>,
-    mode: DiffMode,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
-    let Some((key, render)) = block else {
-        return div().into_any_element();
-    };
-    let element = render(window, cx);
-    let theme = cx.theme();
-    let content = div().flex_1().min_w_0().child(element);
-    let spacer = || div().flex_1().min_w_0();
-    let row = h_flex()
-        .id(ElementId::Name(key))
-        .w_full()
-        .py(px(BLOCK_PADDING))
-        .pr_3()
-        .items_start()
-        .border_y_1()
-        .border_color(theme.border.opacity(0.5));
-    match (mode, side) {
-        (DiffMode::Split, Some(Side::Left)) => {
-            row.child(content.pl(px(NUMBER_WIDTH))).child(spacer())
-        }
-        (DiffMode::Split, Some(Side::Right)) => {
-            row.child(spacer()).child(content.pl(px(NUMBER_WIDTH)))
-        }
-        (DiffMode::Inline, Some(_)) => row.child(content.pl(px(NUMBER_WIDTH * 2.))),
-        (_, None) => row.pl_4().child(content),
-    }
-    .into_any_element()
 }

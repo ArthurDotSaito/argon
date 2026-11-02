@@ -7,7 +7,8 @@ use argon_core::Side;
 use argon_github::ReviewThread;
 use gpui_kit::{Context, Entity};
 
-use super::diff_view::InlineBlock;
+use super::diff_view::{BlockRender, InlineBlock};
+pub use card::CardKind;
 
 #[derive(Default)]
 pub struct ThreadUi {
@@ -34,55 +35,72 @@ pub enum Placement {
         start: Option<(u32, Side)>,
     },
     Outdated,
+    File,
 }
 
 pub fn place(thread: &ReviewThread) -> Placement {
     match thread.line {
-        Some(line) if !thread.outdated => Placement::Anchored {
+        _ if thread.outdated => Placement::Outdated,
+        Some(line) => Placement::Anchored {
             anchor: (line, thread.side),
             start: thread
                 .start_line
                 .map(|start| (start, thread.start_side.unwrap_or(thread.side)))
                 .filter(|start| *start != (line, thread.side)),
         },
-        _ => Placement::Outdated,
+        None => Placement::File,
     }
-}
-
-#[derive(Default)]
-pub struct FileThreads {
-    pub anchored: Vec<InlineBlock>,
-    pub outdated: Vec<InlineBlock>,
 }
 
 pub fn file_threads(
     threads: &[ReviewThread],
     ui: &Entity<ThreadUi>,
-) -> HashMap<String, FileThreads> {
-    let mut out: HashMap<String, FileThreads> = HashMap::new();
+) -> HashMap<String, Vec<InlineBlock>> {
+    let mut lines: HashMap<String, Vec<InlineBlock>> = HashMap::new();
+    let mut files: HashMap<String, Vec<InlineBlock>> = HashMap::new();
+    let mut outdated: HashMap<String, Vec<InlineBlock>> = HashMap::new();
     for thread in threads {
         let placement = place(thread);
-        let outdated = placement == Placement::Outdated;
+        let kind = match placement {
+            Placement::Anchored { .. } => CardKind::Line,
+            Placement::Outdated => CardKind::Outdated,
+            Placement::File => CardKind::File,
+        };
         let thread = Rc::new(thread.clone());
-        let entry = out.entry(thread.path.clone()).or_default();
         let key = format!("thread-{}", thread.id);
         let render_thread = thread.clone();
         let render_ui = ui.clone();
-        let render = Rc::new(
-            move |window: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
-                card::thread_card(&render_thread, &render_ui, outdated, window, cx)
-            },
-        );
+        let render: BlockRender = Rc::new(move |window, cx| {
+            card::thread_card(&render_thread, &render_ui, kind, window, cx)
+        });
+        let path = thread.path.clone();
         match placement {
-            Placement::Anchored { anchor, start } => entry
-                .anchored
-                .push(InlineBlock::new(anchor, key, render).with_start(start)),
-            Placement::Outdated => entry.outdated.push(InlineBlock::new(
-                (thread.original_line.unwrap_or_default(), thread.side),
-                key,
-                render,
-            )),
+            Placement::Anchored { anchor, start } => lines
+                .entry(path)
+                .or_default()
+                .push(InlineBlock::line(anchor, key, render).with_start(start)),
+            Placement::Outdated => outdated
+                .entry(path)
+                .or_default()
+                .push(InlineBlock::file(key, render)),
+            Placement::File => files
+                .entry(path)
+                .or_default()
+                .push(InlineBlock::file(key, render)),
         }
+    }
+    let mut out: HashMap<String, Vec<InlineBlock>> = HashMap::new();
+    for (path, blocks) in outdated {
+        let header = InlineBlock::file(
+            format!("thread-outdated-{path}"),
+            Rc::new(|_, cx| card::outdated_header(cx)),
+        );
+        let entry = out.entry(path).or_default();
+        entry.push(header);
+        entry.extend(blocks);
+    }
+    for (path, blocks) in files.into_iter().chain(lines) {
+        out.entry(path).or_default().extend(blocks);
     }
     out
 }
@@ -144,8 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn outdated_or_unanchored_threads_go_to_the_outdated_section() {
+    fn outdated_threads_go_to_the_outdated_section() {
         assert_eq!(place(&thread(Some(12), None, true)), Placement::Outdated);
-        assert_eq!(place(&thread(None, None, false)), Placement::Outdated);
+        assert_eq!(place(&thread(None, None, true)), Placement::Outdated);
+    }
+
+    #[test]
+    fn current_threads_without_line_are_file_comments() {
+        assert_eq!(place(&thread(None, None, false)), Placement::File);
     }
 }

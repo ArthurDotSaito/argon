@@ -12,6 +12,7 @@ pub const WORKSPACE_CONTEXT: &str = "Workspace";
 pub const INBOX_CONTEXT: &str = "Inbox";
 pub const INBOX_LIST_CONTEXT: &str = "InboxList";
 pub const DIFF_VIEW_CONTEXT: &str = "DiffView";
+const DIFF_VIEW_SHORTCUT_CONTEXT: &str = "DiffView && !Input";
 
 pub fn bind(cx: &mut App) {
     cx.bind_keys([
@@ -31,6 +32,6 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("u", ToggleRead, Some(INBOX_LIST_CONTEXT)),
         KeyBinding::new("/", FocusFilter, Some(INBOX_LIST_CONTEXT)),
         KeyBinding::new("escape", ClearFilter, Some(INBOX_CONTEXT)),
-        KeyBinding::new("s", ToggleDiffMode, Some(DIFF_VIEW_CONTEXT)),
+        KeyBinding::new("s", ToggleDiffMode, Some(DIFF_VIEW_SHORTCUT_CONTEXT)),
     ]);
 }
