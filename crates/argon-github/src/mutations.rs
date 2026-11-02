@@ -50,8 +50,8 @@ fn add_comment_variables(pr: &PrId, body: &str) -> Value {
     json!({ "input": { "subjectId": pr.0, "body": body } })
 }
 
-fn merge_variables(pr: &PrId, method: MergeMethod) -> Value {
-    json!({ "input": { "pullRequestId": pr.0, "mergeMethod": method.as_graphql() } })
+fn merge_variables(pr: &PrId, method: MergeMethod, expected_head_oid: &str) -> Value {
+    json!({ "input": { "pullRequestId": pr.0, "mergeMethod": method.as_graphql(), "expectedHeadOid": expected_head_oid } })
 }
 
 fn rerun_failed_path(repo: &str, run_id: u64) -> Result<String> {
@@ -73,9 +73,18 @@ impl GithubClient {
         require_payload(data.add_comment, "addComment")
     }
 
-    pub async fn merge(&self, pr: &PrId, method: MergeMethod) -> Result<()> {
+    pub async fn merge(
+        &self,
+        pr: &PrId,
+        method: MergeMethod,
+        expected_head_oid: &str,
+    ) -> Result<()> {
         let data: MergeData = self
-            .graphql("merge", MERGE_QUERY, merge_variables(pr, method))
+            .graphql(
+                "merge",
+                MERGE_QUERY,
+                merge_variables(pr, method, expected_head_oid),
+            )
             .await?;
         require_payload(data.merge_pull_request, "mergePullRequest")
     }
@@ -94,6 +103,8 @@ mod tests {
 
     use super::*;
     use crate::wire::Envelope;
+
+    const HEAD_OID: &str = "3fa91c0de4b27a85d6e1f09c4b7a2d83e5f61a90";
 
     fn pr() -> PrId {
         PrId("PR_kwDOOrbita0412".to_string())
@@ -116,8 +127,12 @@ mod tests {
             (MergeMethod::Rebase, "REBASE"),
         ] {
             assert_eq!(
-                merge_variables(&pr(), method),
-                json!({ "input": { "pullRequestId": "PR_kwDOOrbita0412", "mergeMethod": expected } })
+                merge_variables(&pr(), method, HEAD_OID),
+                json!({ "input": {
+                    "pullRequestId": "PR_kwDOOrbita0412",
+                    "mergeMethod": expected,
+                    "expectedHeadOid": HEAD_OID
+                } })
             );
         }
     }
