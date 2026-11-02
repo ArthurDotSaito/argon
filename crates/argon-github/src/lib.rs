@@ -13,6 +13,7 @@ mod inbox;
 mod job_log;
 mod mutations;
 mod rest;
+mod review;
 #[cfg(test)]
 mod test_server;
 mod viewed;

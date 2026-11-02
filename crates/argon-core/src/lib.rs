@@ -5,6 +5,7 @@ pub mod fixtures;
 mod model;
 mod paths;
 mod reason;
+mod review;
 mod time;
 mod views;
 
@@ -19,5 +20,9 @@ pub use model::{
 };
 pub use paths::Paths;
 pub use reason::{Reason, reason};
+pub use review::{
+    DraftComment, DraftReview, DraftSource, DraftThreadInput, ReviewError, ReviewEvent,
+    ReviewSubmission, build_submission, single_comment_submission,
+};
 pub use time::{DateBucket, date_bucket};
 pub use views::{ViewSet, classify, is_ready};
