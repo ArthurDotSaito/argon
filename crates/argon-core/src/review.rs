@@ -153,12 +153,19 @@ pub enum ReviewError {
     RequestChangesNeedsBody,
     #[error("draft {draft_id} starts after the line it ends on")]
     InvalidRange { draft_id: i64 },
+    #[error("draft {draft_id} has an empty comment")]
+    EmptyComment { draft_id: i64 },
 }
 
 fn has_inverted_range(draft: &DraftComment) -> bool {
-    draft.start_line.is_some_and(|start_line| {
-        draft.start_side.unwrap_or(draft.side) == draft.side && start_line > draft.line
-    })
+    let Some(start_line) = draft.start_line else {
+        return false;
+    };
+    match (draft.start_side.unwrap_or(draft.side), draft.side) {
+        (Side::Right, Side::Left) => true,
+        (start_side, side) if start_side == side => start_line > draft.line,
+        _ => false,
+    }
 }
 
 pub fn build_submission(
@@ -168,6 +175,9 @@ pub fn build_submission(
 ) -> Result<ReviewSubmission, ReviewError> {
     if let Some(draft) = drafts.iter().find(|draft| has_inverted_range(draft)) {
         return Err(ReviewError::InvalidRange { draft_id: draft.id });
+    }
+    if let Some(draft) = drafts.iter().find(|draft| draft.body.trim().is_empty()) {
+        return Err(ReviewError::EmptyComment { draft_id: draft.id });
     }
     let body = if body.trim().is_empty() { "" } else { body };
     match event {
@@ -408,6 +418,64 @@ mod tests {
         assert_eq!(
             build_submission("", ReviewEvent::Approve, &[defaulted_side]),
             Err(ReviewError::InvalidRange { draft_id: 4 })
+        );
+    }
+
+    #[test]
+    fn start_on_the_right_ending_on_the_left_is_invalid() {
+        let backwards = DraftComment {
+            start_line: Some(2),
+            start_side: Some(Side::Right),
+            ..draft(3, "a.ts", 9, Side::Left)
+        };
+        assert_eq!(
+            build_submission("", ReviewEvent::Comment, &[backwards]),
+            Err(ReviewError::InvalidRange { draft_id: 3 })
+        );
+    }
+
+    #[test]
+    fn blank_draft_body_names_the_draft() {
+        let blank = DraftComment {
+            body: " 
+	"
+            .to_string(),
+            ..draft(6, "a.ts", 1, Side::Right)
+        };
+        let drafts = [draft(5, "b.ts", 2, Side::Right), blank];
+        for event in [
+            ReviewEvent::Comment,
+            ReviewEvent::Approve,
+            ReviewEvent::RequestChanges,
+        ] {
+            assert_eq!(
+                build_submission("body", event, &drafts),
+                Err(ReviewError::EmptyComment { draft_id: 6 })
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_range_is_reported_before_an_empty_comment() {
+        let blank = DraftComment {
+            body: String::new(),
+            ..draft(1, "a.ts", 1, Side::Right)
+        };
+        assert_eq!(
+            build_submission("", ReviewEvent::RequestChanges, &[blank, ranged(2, 9, 4)]),
+            Err(ReviewError::InvalidRange { draft_id: 2 })
+        );
+    }
+
+    #[test]
+    fn empty_comment_is_reported_before_the_body_rules() {
+        let blank = DraftComment {
+            body: String::new(),
+            ..draft(1, "a.ts", 1, Side::Right)
+        };
+        assert_eq!(
+            build_submission("", ReviewEvent::RequestChanges, &[blank]),
+            Err(ReviewError::EmptyComment { draft_id: 1 })
         );
     }
 

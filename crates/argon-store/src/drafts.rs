@@ -97,6 +97,20 @@ impl Store {
         Ok(())
     }
 
+    pub fn clear_review(&mut self, pr: &PrKey) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM draft_comments WHERE host = ?1 AND pr_id = ?2",
+            params![pr.host, pr.id.0],
+        )?;
+        tx.execute(
+            "DELETE FROM draft_reviews WHERE host = ?1 AND pr_id = ?2",
+            params![pr.host, pr.id.0],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn count_drafts_by_pr(&self) -> Result<HashMap<PrKey, usize>> {
         let mut stmt = self
             .conn
@@ -319,6 +333,27 @@ mod tests {
 
         assert!(store.drafts(&pr).unwrap().is_empty());
         assert!(store.draft_review(&pr).unwrap().is_some());
+    }
+
+    #[test]
+    fn clear_review_removes_drafts_and_draft_review_of_that_pr_only() {
+        let mut store = Store::open_in_memory().unwrap();
+        let public = key(DEFAULT_HOST, "PR_1");
+        let enterprise = key(GHE, "PR_1");
+        for pr in [&public, &enterprise] {
+            store.add_draft(&draft(pr, "a.ts", 1)).unwrap();
+            store
+                .save_draft_review(pr, "body", ReviewEvent::Comment)
+                .unwrap();
+        }
+
+        store.clear_review(&public).unwrap();
+        store.clear_review(&public).unwrap();
+
+        assert!(store.drafts(&public).unwrap().is_empty());
+        assert_eq!(store.draft_review(&public).unwrap(), None);
+        assert_eq!(store.drafts(&enterprise).unwrap().len(), 1);
+        assert!(store.draft_review(&enterprise).unwrap().is_some());
     }
 
     #[test]
