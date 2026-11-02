@@ -168,6 +168,24 @@ mod tests {
     }
 
     #[test]
+    fn no_newline_flag_is_preserved_on_both_sides() {
+        let mut flagged = hunk(&[
+            (LineKind::Context, "c"),
+            (LineKind::Removed, "r"),
+            (LineKind::Added, "a"),
+        ]);
+        for line in &mut flagged.lines {
+            line.no_newline = true;
+        }
+        let rows = split_rows(&flagged);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].left.as_ref().unwrap().no_newline);
+        assert!(rows[0].right.as_ref().unwrap().no_newline);
+        assert!(rows[1].left.as_ref().unwrap().no_newline);
+        assert!(rows[1].right.as_ref().unwrap().no_newline);
+    }
+
+    #[test]
     fn empty_hunk_has_no_rows() {
         assert!(split_rows(&hunk(&[])).is_empty());
     }

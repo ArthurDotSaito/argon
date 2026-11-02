@@ -6,8 +6,17 @@ use super::{DiffLine, Hunk, LineKind};
 pub enum DiffError {
     #[error("invalid hunk header at line {line}")]
     InvalidHeader { line: usize },
-    #[error("line count does not match header in hunk {hunk_index}")]
-    CountMismatch { hunk_index: usize },
+    #[error(
+        "hunk {hunk_index} does not match its header at line {line}: expected -{expected_old} +{expected_new} lines, got -{got_old} +{got_new}"
+    )]
+    CountMismatch {
+        hunk_index: usize,
+        line: usize,
+        expected_old: u32,
+        expected_new: u32,
+        got_old: u32,
+        got_new: u32,
+    },
 }
 
 struct Cursor {
@@ -49,11 +58,11 @@ impl Cursor {
         let old_no = wants_old.then_some(self.old_no);
         let new_no = wants_new.then_some(self.new_no);
         if wants_old {
-            self.old_no = self.old_no.saturating_add(1);
+            self.old_no += 1;
             self.old_left -= 1;
         }
         if wants_new {
-            self.new_no = self.new_no.saturating_add(1);
+            self.new_no += 1;
             self.new_left -= 1;
         }
         Some((old_no, new_no))
@@ -63,38 +72,64 @@ impl Cursor {
 pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, DiffError> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut cursor = Cursor::closed();
-    let body = patch.strip_suffix('\n').unwrap_or(patch);
-    for (index, raw) in body.split('\n').enumerate() {
+    let mut line_no = 0;
+    for (index, raw) in patch.split('\n').enumerate() {
+        line_no = index + 1;
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.starts_with('\\') {
             mark_no_newline(&mut hunks);
             continue;
         }
-        let hunk_index = hunks.len().saturating_sub(1);
         match hunks.last_mut() {
-            Some(hunk) if cursor.is_open() => {
-                let parsed =
-                    read_line(line, &mut cursor).ok_or(DiffError::CountMismatch { hunk_index })?;
-                hunk.lines.push(parsed);
-            }
+            Some(hunk) if cursor.is_open() => match read_line(line, &mut cursor) {
+                Some(parsed) => hunk.lines.push(parsed),
+                None => return Err(count_mismatch(&hunks, &cursor, line_no, line)),
+            },
             _ if line.starts_with("@@") => {
-                let hunk =
-                    parse_header(line).ok_or(DiffError::InvalidHeader { line: index + 1 })?;
+                let hunk = parse_header(line).ok_or(DiffError::InvalidHeader { line: line_no })?;
                 cursor = Cursor::for_hunk(&hunk);
                 hunks.push(hunk);
             }
             Some(_) if is_surplus_line(line) => {
-                return Err(DiffError::CountMismatch { hunk_index });
+                return Err(count_mismatch(&hunks, &cursor, line_no, line));
             }
             _ => {}
         }
     }
     if cursor.is_open() {
-        return Err(DiffError::CountMismatch {
-            hunk_index: hunks.len().saturating_sub(1),
-        });
+        return Err(count_mismatch(&hunks, &cursor, line_no, ""));
     }
     Ok(hunks)
+}
+
+fn count_mismatch(hunks: &[Hunk], cursor: &Cursor, line_no: usize, line: &str) -> DiffError {
+    let hunk_index = hunks.len().saturating_sub(1);
+    let (expected_old, expected_new, mut got_old, mut got_new) =
+        hunks.last().map_or((0, 0, 0, 0), |hunk| {
+            (
+                hunk.old_len,
+                hunk.new_len,
+                hunk.old_len - cursor.old_left,
+                hunk.new_len - cursor.new_left,
+            )
+        });
+    match line.as_bytes().first() {
+        Some(b' ') => {
+            got_old += 1;
+            got_new += 1;
+        }
+        Some(b'-') => got_old += 1,
+        Some(b'+') => got_new += 1,
+        _ => {}
+    }
+    DiffError::CountMismatch {
+        hunk_index,
+        line: line_no,
+        expected_old,
+        expected_new,
+        got_old,
+        got_new,
+    }
 }
 
 fn is_surplus_line(line: &str) -> bool {
@@ -133,6 +168,8 @@ fn parse_header(line: &str) -> Option<Hunk> {
     let (old, new) = ranges.split_once(" +")?;
     let (old_start, old_len) = parse_range(old)?;
     let (new_start, new_len) = parse_range(new)?;
+    old_start.checked_add(old_len)?;
+    new_start.checked_add(new_len)?;
     Some(Hunk {
         old_start,
         old_len,
@@ -293,8 +330,15 @@ mod tests {
     #[test]
     fn too_few_lines_is_count_mismatch() {
         assert_eq!(
-            parse_patch("@@ -1,3 +1,3 @@\n a\n-b\n+c\n"),
-            Err(DiffError::CountMismatch { hunk_index: 0 })
+            parse_patch("@@ -1,3 +1,3 @@\n a\n-b\n+c"),
+            Err(DiffError::CountMismatch {
+                hunk_index: 0,
+                line: 4,
+                expected_old: 3,
+                expected_new: 3,
+                got_old: 2,
+                got_new: 2,
+            })
         );
     }
 
@@ -303,20 +347,29 @@ mod tests {
         let patch = "@@ -1,1 +1,1 @@\n a\n@@ -9,1 +9,2 @@\n x\n+y\n+z\n";
         assert_eq!(
             parse_patch(patch),
-            Err(DiffError::CountMismatch { hunk_index: 1 })
+            Err(DiffError::CountMismatch {
+                hunk_index: 1,
+                line: 6,
+                expected_old: 1,
+                expected_new: 2,
+                got_old: 1,
+                got_new: 3,
+            })
         );
     }
 
     #[test]
     fn surplus_removed_line_is_count_mismatch() {
         assert_eq!(
-            parse_patch(
-                "@@ -1,1 +1,1 @@
- a
--b
-"
-            ),
-            Err(DiffError::CountMismatch { hunk_index: 0 })
+            parse_patch("@@ -1,1 +1,1 @@\n a\n-b\n"),
+            Err(DiffError::CountMismatch {
+                hunk_index: 0,
+                line: 3,
+                expected_old: 1,
+                expected_new: 1,
+                got_old: 2,
+                got_new: 1,
+            })
         );
     }
 
@@ -325,7 +378,66 @@ mod tests {
         let patch = "@@ -1,2 +1,2 @@\n a\n@@ -9,1 +9,1 @@\n x\n";
         assert_eq!(
             parse_patch(patch),
-            Err(DiffError::CountMismatch { hunk_index: 0 })
+            Err(DiffError::CountMismatch {
+                hunk_index: 0,
+                line: 3,
+                expected_old: 2,
+                expected_new: 2,
+                got_old: 1,
+                got_new: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn count_mismatch_message_is_informative() {
+        let message = parse_patch("@@ -1,3 +1,3 @@\n a\n")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("hunk 0"), "{message}");
+        assert!(message.contains("expected -3 +3"), "{message}");
+    }
+
+    #[test]
+    fn trailing_empty_context_line_is_kept() {
+        for patch in [
+            "@@ -1,2 +1,2 @@\n a\n",
+            "@@ -1,2 +1,2 @@\n a\n\n",
+            "@@ -1,2 +1,2 @@\n a\n ",
+        ] {
+            let hunk = &parse_patch(patch).unwrap()[0];
+            assert_eq!(hunk.lines.len(), 2, "{patch:?}");
+            assert_eq!(hunk.lines[1].kind, LineKind::Context);
+            assert_eq!(hunk.lines[1].text, "");
+            assert_eq!(hunk.lines[1].old_no, Some(2));
+            assert_eq!(hunk.lines[1].new_no, Some(2));
+        }
+    }
+
+    #[test]
+    fn trailing_newline_after_closed_hunk_is_ignored() {
+        let hunk = &parse_patch("@@ -1,1 +1,1 @@\n a\n").unwrap()[0];
+        assert_eq!(hunk.lines.len(), 1);
+    }
+
+    #[test]
+    fn dashes_and_pluses_inside_open_hunk_are_content() {
+        let hunk = &parse_patch("@@ -1,1 +1,1 @@\n--- x\n+++ x\n").unwrap()[0];
+        assert_eq!(hunk.lines[0].kind, LineKind::Removed);
+        assert_eq!(hunk.lines[0].text, "-- x");
+        assert_eq!(hunk.lines[1].kind, LineKind::Added);
+        assert_eq!(hunk.lines[1].text, "++ x");
+    }
+
+    #[test]
+    fn range_overflowing_u32_is_invalid_header() {
+        assert_eq!(
+            parse_patch("@@ -4294967295,2 +1 @@\n a\n b\n"),
+            Err(DiffError::InvalidHeader { line: 1 })
+        );
+        assert_eq!(
+            parse_patch("@@ -1 +4294967295,2 @@\n a\n b\n"),
+            Err(DiffError::InvalidHeader { line: 1 })
         );
     }
 
