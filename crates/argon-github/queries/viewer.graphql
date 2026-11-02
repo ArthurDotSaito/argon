@@ -1,0 +1,11 @@
+query Viewer {
+  viewer {
+    login
+    organizations(first: 100) {
+      nodes {
+        login
+        viewerCanAdminister
+      }
+    }
+  }
+}
