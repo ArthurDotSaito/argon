@@ -1,4 +1,5 @@
 mod config;
+mod diff;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
 mod model;
@@ -11,6 +12,7 @@ pub use config::{
     AgentCfg, AgentKind, AppearanceCfg, Config, ConfigError, Density, NotificationsCfg, OrgsCfg,
     ReviewCfg, SyncCfg, ThemeChoice,
 };
+pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patch, split_rows};
 pub use model::{
     ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrKey, PrState,
     PullRequest, ReviewDecision, ReviewState, Side,
