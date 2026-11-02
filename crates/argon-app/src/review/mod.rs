@@ -1,7 +1,12 @@
+mod comment_editor;
+mod confirm;
 mod diff_view;
+mod drafts;
 mod file_diff;
 mod file_tree;
+mod finish_popover;
 mod labels;
+mod review_bar;
 mod review_tab;
 mod status_badge;
 mod threads;

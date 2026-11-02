@@ -7,7 +7,7 @@ use gpui_kit::{
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
 };
 
-use super::ThreadUi;
+use super::{ThreadUi, footer};
 use crate::pr::markdown;
 use crate::review::labels;
 use crate::ui;
@@ -98,9 +98,11 @@ pub fn thread_card(
     let resolved = thread
         .resolved
         .then(|| resolved_bar(thread, ui_state, true, cx));
+    let footer = footer::thread_footer(thread, ui_state, cx);
     card.children(resolved)
         .children(comments)
         .children(more)
+        .child(footer)
         .into_any_element()
 }
 

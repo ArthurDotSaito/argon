@@ -7,13 +7,6 @@ use gpui_kit::{AnyElement, App, SharedString, Window};
 pub type BlockRender = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "drafts and the inline comment editor are produced in Task 16"
-    )
-)]
 pub enum BlockSource {
     Threads,
     Drafts,

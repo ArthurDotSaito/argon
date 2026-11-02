@@ -1,19 +1,31 @@
 mod card;
+mod footer;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use argon_core::Side;
 use argon_github::ReviewThread;
-use gpui_kit::{Context, Entity};
+use gpui_kit::{Context, Entity, EventEmitter, SharedString};
 
+use super::comment_editor::CommentEditor;
 use super::diff_view::{BlockRender, InlineBlock};
 pub use card::CardKind;
+
+pub enum ThreadUiEvent {
+    Reply(String),
+    SetResolved { id: String, resolved: bool },
+}
 
 #[derive(Default)]
 pub struct ThreadUi {
     expanded: HashSet<String>,
+    reply: Option<(String, Entity<CommentEditor>)>,
+    resolving: HashMap<String, bool>,
+    errors: HashMap<String, SharedString>,
 }
+
+impl EventEmitter<ThreadUiEvent> for ThreadUi {}
 
 impl ThreadUi {
     pub fn is_expanded(&self, id: &str) -> bool {
@@ -24,6 +36,65 @@ impl ThreadUi {
         if !self.expanded.remove(id) {
             self.expanded.insert(id.to_string());
         }
+        cx.notify();
+    }
+
+    pub fn reply_editor(&self, id: &str) -> Option<&Entity<CommentEditor>> {
+        self.reply
+            .as_ref()
+            .filter(|(thread, _)| thread == id)
+            .map(|(_, editor)| editor)
+    }
+
+    pub fn set_reply(
+        &mut self,
+        reply: Option<(String, Entity<CommentEditor>)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.reply = reply;
+        cx.notify();
+    }
+
+    pub fn is_resolving(&self, id: &str) -> bool {
+        self.resolving.contains_key(id)
+    }
+
+    pub fn error(&self, id: &str) -> Option<&SharedString> {
+        self.errors.get(id)
+    }
+
+    pub fn request_reply(&mut self, id: &str, cx: &mut Context<Self>) {
+        cx.emit(ThreadUiEvent::Reply(id.to_string()));
+    }
+
+    pub fn request_resolved(&mut self, id: &str, resolved: bool, cx: &mut Context<Self>) {
+        if self.is_resolving(id) {
+            return;
+        }
+        self.resolving.insert(id.to_string(), false);
+        self.errors.remove(id);
+        cx.emit(ThreadUiEvent::SetResolved {
+            id: id.to_string(),
+            resolved,
+        });
+        cx.notify();
+    }
+
+    pub fn resolved_done(&mut self, id: &str, error: Option<SharedString>, cx: &mut Context<Self>) {
+        match error {
+            Some(error) => {
+                self.resolving.remove(id);
+                self.errors.insert(id.to_string(), error);
+            }
+            None => {
+                self.resolving.insert(id.to_string(), true);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn settle(&mut self, cx: &mut Context<Self>) {
+        self.resolving.retain(|_, done| !*done);
         cx.notify();
     }
 }

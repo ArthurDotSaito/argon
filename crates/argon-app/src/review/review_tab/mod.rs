@@ -1,4 +1,7 @@
+mod blocks;
+mod editor;
 mod load;
+mod mutations;
 mod view;
 
 use std::collections::{HashMap, HashSet};
@@ -7,13 +10,17 @@ use std::rc::Rc;
 use argon_core::Side;
 use argon_github::PrDetail;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, Window,
+    AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, WeakEntity,
+    Window,
 };
 
-use super::diff_view::{BlockSource, DiffView, DiffViewEvent, InlineBlock};
+use super::diff_view::{BlockSource, DiffView, DiffViewEvent};
+use super::drafts::DraftsModel;
 use super::file_tree::{FileTree, FileTreeEvent};
+use super::finish_popover::FinishReview;
 use super::labels;
-use super::threads::{ThreadUi, file_threads};
+use super::threads::{ThreadUi, ThreadUiEvent, file_threads};
+use editor::OpenEditor;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ReviewScope {
@@ -27,6 +34,7 @@ pub enum ReviewScope {
 
 pub enum ReviewTabEvent {
     ShowAll,
+    Reload,
 }
 
 enum Files {
@@ -51,7 +59,13 @@ pub struct ReviewTab {
     tree: Entity<FileTree>,
     diff: Entity<DiffView>,
     thread_ui: Entity<ThreadUi>,
+    drafts: Entity<DraftsModel>,
+    editor: Option<OpenEditor>,
+    viewer_login: Option<String>,
+    finish: Option<(WeakEntity<FinishReview>, Subscription)>,
     load_task: Option<Task<()>>,
+    editor_task: Option<Task<()>>,
+    thread_tasks: HashMap<String, Task<()>>,
     viewed_inflight: HashSet<String>,
     viewed_tasks: HashMap<String, Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -64,6 +78,7 @@ impl ReviewTab {
         let tree = cx.new(|cx| FileTree::new(window, cx));
         let diff = cx.new(DiffView::new);
         let thread_ui = cx.new(|_| ThreadUi::default());
+        let drafts = cx.new(DraftsModel::new);
         let subscriptions = vec![
             cx.subscribe(&tree, |this, _, event, cx| match event {
                 FileTreeEvent::Open(path) => {
@@ -74,7 +89,7 @@ impl ReviewTab {
                     this.toggle_viewed(path.clone(), *viewed, cx);
                 }
             }),
-            cx.subscribe(&diff, |this, _, event, cx| match event {
+            cx.subscribe_in(&diff, window, |this, _, event, window, cx| match event {
                 DiffViewEvent::ViewedToggled { path, viewed } => {
                     this.toggle_viewed(path.clone(), *viewed, cx);
                 }
@@ -83,10 +98,27 @@ impl ReviewTab {
                     line,
                     side,
                     start,
-                } => tracing::debug!(path, line, ?side, ?start, "diff gutter clicked"),
+                } => this.open_line_editor(path.clone(), (*line, *side), *start, window, cx),
             }),
             cx.observe(&thread_ui, |this, _, cx| {
                 this.diff.update(cx, |_, cx| cx.notify());
+            }),
+            cx.subscribe_in(
+                &thread_ui,
+                window,
+                |this, _, event, window, cx| match event {
+                    ThreadUiEvent::Reply(id) => this.open_reply_editor(id.clone(), window, cx),
+                    ThreadUiEvent::SetResolved { id, resolved } => {
+                        this.set_thread_resolved(id.clone(), *resolved, cx)
+                    }
+                },
+            ),
+            cx.observe(&drafts, |this, _, cx| {
+                this.sync_drafts(cx);
+                cx.notify();
+            }),
+            cx.subscribe_in(&drafts, window, |this, _, event, window, cx| {
+                this.on_drafts_event(event, window, cx)
             }),
         ];
         Self {
@@ -104,7 +136,13 @@ impl ReviewTab {
             tree,
             diff,
             thread_ui,
+            drafts,
+            editor: None,
+            viewer_login: None,
+            finish: None,
             load_task: None,
+            editor_task: None,
+            thread_tasks: HashMap::new(),
             viewed_inflight: HashSet::new(),
             viewed_tasks: HashMap::new(),
             _subscriptions: subscriptions,
@@ -122,6 +160,10 @@ impl ReviewTab {
         let head_moved = self.scope == ReviewScope::All
             && matches!(self.files, Files::Ready)
             && self.loaded_head.as_deref() != Some(detail.head_oid.as_str());
+        let (key, head) = (detail.pr.key(), detail.head_oid.clone());
+        self.drafts
+            .update(cx, |drafts, cx| drafts.set_pr(key, head, cx));
+        self.thread_ui.update(cx, |ui, cx| ui.settle(cx));
         self.detail = Some(detail);
         self.stale |= head_moved;
         if self.active && matches!(self.files, Files::Idle) {
@@ -154,7 +196,18 @@ impl ReviewTab {
         cx.notify();
     }
 
+    pub fn set_viewer_login(&mut self, login: Option<String>, cx: &mut Context<Self>) {
+        if self.viewer_login != login {
+            self.viewer_login = login;
+            self.sync_drafts(cx);
+            cx.notify();
+        }
+    }
+
     pub fn set_scope(&mut self, scope: ReviewScope, cx: &mut Context<Self>) {
+        if scope != ReviewScope::All {
+            self.close_editor(cx);
+        }
         if scope != self.scope {
             self.files = Files::Idle;
             self.scope = scope;
@@ -171,19 +224,19 @@ impl ReviewTab {
             .update(cx, |diff, cx| diff.reveal(path, line, side, cx));
     }
 
-    #[expect(
-        dead_code,
-        reason = "drafts and the inline comment editor plug in here in Task 16"
-    )]
-    pub fn set_blocks(
-        &mut self,
-        path: &str,
-        source: BlockSource,
-        blocks: Vec<InlineBlock>,
-        cx: &mut Context<Self>,
-    ) {
+    fn diff_paths(&self, cx: &Context<Self>) -> Vec<String> {
         self.diff
-            .update(cx, |diff, cx| diff.set_blocks(path, source, blocks, cx));
+            .read(cx)
+            .files()
+            .iter()
+            .map(|file| file.meta.path.clone())
+            .collect()
+    }
+
+    fn sync_blocks(&mut self, cx: &mut Context<Self>) {
+        self.sync_threads(cx);
+        self.sync_drafts(cx);
+        self.sync_editor(cx);
     }
 
     fn sync_threads(&mut self, cx: &mut Context<Self>) {
@@ -194,13 +247,7 @@ impl ReviewTab {
             (ReviewScope::All, Some(detail)) => file_threads(&detail.threads, &self.thread_ui),
             _ => HashMap::new(),
         };
-        let paths: Vec<String> = self
-            .diff
-            .read(cx)
-            .files()
-            .iter()
-            .map(|file| file.meta.path.clone())
-            .collect();
+        let paths = self.diff_paths(cx);
         self.diff.update(cx, |diff, cx| {
             for path in &paths {
                 let blocks = threads.remove(path).unwrap_or_default();

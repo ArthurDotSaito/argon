@@ -109,7 +109,7 @@ impl ReviewTab {
             diff.set_github_url(url);
             diff.set_files(files, cx);
         });
-        self.sync_threads(cx);
+        self.sync_blocks(cx);
         cx.notify();
     }
 

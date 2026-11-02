@@ -138,12 +138,18 @@ impl PrView {
             cx.observe(&review, |_, _, cx| cx.notify()),
             cx.subscribe(&review, |this, _, event, cx| match event {
                 ReviewTabEvent::ShowAll => this.set_review_scope(ReviewScope::All, cx),
+                ReviewTabEvent::Reload => {
+                    this.reload(cx);
+                    request_sync(cx);
+                }
             }),
             cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
         ];
         let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);
         let seen_updated_at = store_pr.as_ref().map(|pr| pr.updated_at);
         let viewer_login = viewer_login(&key.host, cx);
+        let review_login = viewer_login.clone();
+        review.update(cx, |tab, cx| tab.set_viewer_login(review_login, cx));
         let mut this = Self {
             key,
             inbox,

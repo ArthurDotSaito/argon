@@ -17,7 +17,8 @@ gpui_kit::actions!(
         OpenPalette,
         SyncNow,
         OpenSettings,
-        ToggleDiffMode
+        ToggleDiffMode,
+        CancelComment
     ]
 );
 

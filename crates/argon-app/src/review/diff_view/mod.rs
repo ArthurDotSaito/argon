@@ -15,6 +15,8 @@ use gpui_kit::{
 };
 
 use blocks::BlockSet;
+#[cfg(test)]
+pub use blocks::BlockTarget;
 pub use blocks::{BlockRender, BlockSource, InlineBlock};
 use convert::{gutter_range, position};
 

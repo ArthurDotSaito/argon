@@ -10,6 +10,7 @@ use gpui_kit::{
 use super::{Files, ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::review::diff_view::DiffMode;
 use crate::review::labels;
+use crate::review::review_bar::{BarProps, review_bar};
 
 const TREE_WIDTH: f32 = 280.;
 const TOOLBAR_HEIGHT: f32 = 36.;
@@ -104,6 +105,21 @@ impl ReviewTab {
             .child(div().flex_1())
             .child(split)
             .child(inline)
+    }
+
+    fn bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let drafts = self.drafts.read(cx);
+        if !drafts.in_progress() {
+            return None;
+        }
+        let props = BarProps {
+            count: drafts.drafts().len(),
+            head_moved: drafts.head_moved(),
+            sending: drafts.is_sending(),
+        };
+        let on_finish =
+            cx.listener(|this, _: &ClickEvent, window, cx| this.open_finish(window, cx));
+        Some(review_bar(props, on_finish, cx))
     }
 
     fn body(&self, cx: &mut Context<Self>) -> Div {
@@ -209,6 +225,7 @@ impl Render for ReviewTab {
             ReviewScope::All => None,
         };
         let body = self.body(cx);
+        let bar = self.bar(cx);
         v_flex()
             .size_full()
             .children(notice)
@@ -216,5 +233,6 @@ impl Render for ReviewTab {
             .children(error)
             .children(outside)
             .child(div().flex_1().min_h_0().child(body))
+            .children(bar)
     }
 }

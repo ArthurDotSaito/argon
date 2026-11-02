@@ -72,6 +72,11 @@ impl PrView {
     pub(super) fn on_inbox_changed(&mut self, cx: &mut Context<Self>) {
         let viewer_login = viewer_login(&self.key.host, cx);
         let changed_login = viewer_login != self.viewer_login;
+        if changed_login {
+            let login = viewer_login.clone();
+            self.review
+                .update(cx, |tab, cx| tab.set_viewer_login(login, cx));
+        }
         self.viewer_login = viewer_login;
         let current = self.store_pr.as_ref().map(|pr| pr.updated_at);
         let latest = self.inbox.read(cx).pr(&self.key).map(|pr| pr.updated_at);
