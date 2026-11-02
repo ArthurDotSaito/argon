@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Argon — Proposta 1 (Zed Native Tri-Pane)</title>
+  <link rel="stylesheet" href="../shared/base.css">
+  <style>
+    /* Layout Tri-Pane Específico */
+    .app-window {
+      display: grid;
+      grid-template-rows: 40px 1fr 28px;
+      height: 100vh;
+      background: var(--bg-app);
+    }
+
+    /* Window Header / Titlebar nativo macOS & Windows */
+    .window-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      background: var(--bg-sidebar);
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 12px;
+      color: var(--text-secondary);
+      -webkit-app-region: drag;
+    }
+    .traffic-lights {
+      display: flex;
+      gap: 8px;
+    }
+    .light {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .light-red { background: #ff5f56; }
+    .light-yellow { background: #ffbd2e; }
+    .light-green { background: #27c93f; }
+
+    .titlebar-center {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    .titlebar-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--accent-cyan);
+      border-radius: var(--radius-sm);
+    }
+
+    /* Tri-Pane Body */
+    .panes-container {
+      display: grid;
+      grid-template-columns: 240px 380px 1fr;
+      height: 100%;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Coluna 1: Sidebar de Navegação */
+    .col-sidebar {
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .nav-section-title {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      padding: 14px 16px 6px 16px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      margin: 1px 8px;
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 12.5px;
+      transition: all 0.1s ease;
+    }
+    .nav-item:hover {
+      background: var(--bg-surface-hover);
+      color: var(--text-primary);
+    }
+    .nav-item.active {
+      background: var(--bg-surface-elevated);
+      color: #ffffff;
+      font-weight: 500;
+    }
+    .nav-item-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .nav-count {
+      font-size: 11px;
+      padding: 1px 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      color: var(--text-muted);
+    }
+    .nav-item.active .nav-count {
+      background: rgba(56, 189, 248, 0.2);
+      color: var(--accent-cyan);
+    }
+
+    /* Seção Especial de Sessões Agênticas no Sidebar */
+    .agent-sessions-box {
+      margin-top: auto;
+      border-top: 1px solid var(--border-subtle);
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .agent-session-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: 8px 10px;
+      margin-top: 6px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .agent-session-card:hover {
+      border-color: var(--accent-purple);
+    }
+    .session-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+    }
+    .session-meta {
+      font-size: 10.5px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* Coluna 2: Lista de PRs */
+    .col-pr-list {
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .pr-list-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .search-box {
+      display: flex;
+      align-items: center;
+      background: var(--bg-app);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      padding: 6px 10px;
+      gap: 8px;
+    }
+    .search-box input {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-primary);
+      font-size: 12px;
+      width: 100%;
+    }
+    .search-shortcut {
+      font-size: 10px;
+      background: var(--bg-surface-elevated);
+      padding: 2px 5px;
+      border-radius: 3px;
+      color: var(--text-muted);
+    }
+
+    .pr-cards-scroll {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .pr-card {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: background 0.12s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-left: 3px solid transparent;
+    }
+    .pr-card:hover {
+      background: var(--bg-surface-hover);
+    }
+    .pr-card.active {
+      background: var(--bg-surface-elevated);
+      border-left-color: var(--accent-cyan);
+    }
+    .pr-card-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .pr-avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .pr-title-text {
+      font-weight: 500;
+      font-size: 13px;
+      color: var(--text-primary);
+      line-height: 1.35;
+    }
+    .pr-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .ci-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .ci-success { background: var(--accent-emerald); box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+    .ci-failed { background: var(--accent-rose); box-shadow: 0 0 6px rgba(244, 63, 94, 0.4); }
+    .ci-pending { background: var(--accent-amber); }
+
+    /* Coluna 3: Painel de Detalhes do PR */
+    .col-pr-detail {
+      background: var(--bg-app);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+    .pr-detail-topbar {
+      padding: 16px 20px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .detail-heading-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    .pr-title-huge {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+    }
+    .pr-branch-spec {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+    .branch-badge {
+      background: rgba(255, 255, 255, 0.07);
+      padding: 2px 7px;
+      border-radius: 4px;
+      color: var(--accent-cyan);
+    }
+
+    /* Tabs de Topo: Commits, Actions, Review */
+    .pr-tabs-bar {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0 20px;
+      background: var(--bg-sidebar);
+    }
+    .pr-tab {
+      padding: 10px 14px;
+      color: var(--text-secondary);
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .pr-tab:hover {
+      color: var(--text-primary);
+    }
+    .pr-tab.active {
+      color: var(--accent-cyan);
+      border-bottom-color: var(--accent-cyan);
+    }
+    .tab-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-secondary);
+    }
+    .pr-tab.active .tab-badge {
+      background: rgba(56, 189, 248, 0.2);
+      color: var(--accent-cyan);
+    }
+
+    /* Tab Content Area */
+    .tab-content-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    /* Diff Review Viewer (GPUI Styled) */
+    .diff-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .diff-header {
+      background: var(--bg-surface-elevated);
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .diff-toggle-btns {
+      display: flex;
+      background: var(--bg-app);
+      border-radius: var(--radius-sm);
+      padding: 2px;
+    }
+    .diff-toggle-btn {
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+    }
+    .diff-toggle-btn.active {
+      background: var(--bg-surface-elevated);
+      color: #fff;
+    }
+
+    .diff-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    .diff-line {
+      display: flex;
+      align-items: stretch;
+    }
+    .diff-line:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .diff-gutter {
+      width: 45px;
+      padding: 1px 8px;
+      text-align: right;
+      color: var(--text-muted);
+      user-select: none;
+      background: rgba(0, 0, 0, 0.15);
+      border-right: 1px solid var(--border-subtle);
+      font-size: 10.5px;
+    }
+    .diff-code {
+      flex: 1;
+      padding: 1px 12px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .diff-line-add {
+      background: var(--diff-add-bg);
+      color: var(--diff-add-text);
+    }
+    .diff-line-del {
+      background: var(--diff-del-bg);
+      color: var(--diff-del-text);
+    }
+
+    /* Drawer de Chat de IA Retrátil à Direita */
+    .ai-chat-drawer {
+      position: absolute;
+      top: 0;
+      right: -420px;
+      width: 420px;
+      height: 100%;
+      background: var(--bg-sidebar);
+      border-left: 1px solid var(--border-default);
+      box-shadow: var(--shadow-sidebar);
+      transition: right 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      z-index: 50;
+    }
+    .ai-chat-drawer.open {
+      right: 0;
+    }
+    .ai-drawer-header {
+      padding: 14px 16px;
+      background: var(--bg-surface-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .ai-chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .chat-bubble {
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+    .chat-bubble-agent {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      color: var(--text-primary);
+    }
+    .chat-bubble-user {
+      background: #2563eb;
+      color: #fff;
+      align-self: flex-end;
+      max-width: 85%;
+    }
+    .ai-chat-input-box {
+      padding: 12px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+    }
+    .ai-chat-textarea {
+      width: 100%;
+      height: 60px;
+      background: var(--bg-app);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-md);
+      color: var(--text-primary);
+      padding: 8px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      resize: none;
+      outline: none;
+    }
+    .ai-chat-textarea:focus {
+      border-color: var(--accent-purple);
+    }
+
+    /* Bottom Status Bar */
+    .status-bar {
+      background: var(--bg-sidebar);
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="app-window">
+  <!-- Titlebar Nativa -->
+  <header class="window-titlebar">
+    <div class="traffic-lights">
+      <div class="light light-red"></div>
+      <div class="light light-yellow"></div>
+      <div class="light light-green"></div>
+    </div>
+    <div class="titlebar-center">
+      <span>Argon Desktop</span>
+      <span class="titlebar-badge">GPUI Native</span>
+      <span style="color: var(--text-muted);">—</span>
+      <span style="color: var(--text-secondary);" id="titlebar-current-repo">acme-corp/web-app</span>
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <span class="badge badge-subtle">gh cli: authenticated</span>
+      <button class="btn btn-ghost" style="padding: 2px 6px;" onclick="window.location.href='../index.html'">← Voltar ao Hub</button>
+    </div>
+  </header>
+
+  <!-- Tri-Pane Container -->
+  <div class="panes-container">
+    
+    <!-- Coluna 1: Sidebar de Navegação -->
+    <aside class="col-sidebar">
+      <div class="nav-section-title">Caixas de Entrada</div>
+      <div class="nav-item" data-cat="inbox" onclick="selectCategory('inbox', this)">
+        <div class="nav-item-left">
+          <span>📥</span>
+          <span>Inbox</span>
+        </div>
+        <span class="nav-count">18</span>
+      </div>
+      <div class="nav-item active" data-cat="needs_you" onclick="selectCategory('needs_you', this)">
+        <div class="nav-item-left">
+          <span>🎯</span>
+          <span>Needs You</span>
+        </div>
+        <span class="nav-count">7</span>
+      </div>
+      <div class="nav-item" data-cat="your_prs" onclick="selectCategory('your_prs', this)">
+        <div class="nav-item-left">
+          <span>🚀</span>
+          <span>Your PRs</span>
+        </div>
+        <span class="nav-count">5</span>
+      </div>
+      <div class="nav-item" data-cat="waiting_others" onclick="selectCategory('waiting_others', this)">
+        <div class="nav-item-left">
+          <span>⏳</span>
+          <span>Waiting Others</span>
+        </div>
+        <span class="nav-count">3</span>
+      </div>
+      <div class="nav-item" data-cat="changes_requested" onclick="selectCategory('changes_requested', this)">
+        <div class="nav-item-left">
+          <span>⚠️</span>
+          <span>Changes Requested</span>
+        </div>
+        <span class="nav-count">2</span>
+      </div>
+      <div class="nav-item" data-cat="ready_to_merge" onclick="selectCategory('ready_to_merge', this)">
+        <div class="nav-item-left">
+          <span>✅</span>
+          <span>Ready to Merge</span>
+        </div>
+        <span class="nav-count">4</span>
+      </div>
+      <div class="nav-item" data-cat="already_done" onclick="selectCategory('already_done', this)">
+        <div class="nav-item-left">
+          <span>📦</span>
+          <span>Already Done</span>
+        </div>
+        <span class="nav-count">9</span>
+      </div>
+
+      <div class="nav-section-title">Organizações & Repos</div>
+      <div class="nav-item" style="font-size: 11.5px; opacity: 0.85;">
+        <div class="nav-item-left">🏢 acme-corp</div>
+        <span class="nav-count">14</span>
+      </div>
+      <div class="nav-item" style="font-size: 11.5px; opacity: 0.85;">
+        <div class="nav-item-left">⚡ argondv</div>
+        <span class="nav-count">4</span>
+      </div>
+
+      <!-- Sessões Agênticas no Sidebar -->
+      <div class="agent-sessions-box">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple);">🤖 REVIEWS AGÊNTICAS</span>
+          <span class="badge badge-purple" style="font-size: 9px;">3 ativas</span>
+        </div>
+        <div id="sidebar-sessions-list">
+          <!-- Renderizado via JS -->
+        </div>
+      </div>
+    </aside>
+
+    <!-- Coluna 2: Lista de PRs -->
+    <section class="col-pr-list">
+      <div class="pr-list-header">
+        <div class="search-box">
+          <span>🔍</span>
+          <input type="text" placeholder="Filtrar PRs por título, autor ou branch...">
+          <span class="search-shortcut">⌘K</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 11px; color: var(--text-muted);" id="category-badge-title">Mostrando 7 PRs que precisam de você</span>
+          <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px;">↺ Sync gh</button>
+        </div>
+      </div>
+
+      <div class="pr-cards-scroll" id="pr-cards-container">
+        <!-- Injetado dinamicamente via JS -->
+      </div>
+    </section>
+
+    <!-- Coluna 3: Leitura e Review do PR -->
+    <main class="col-pr-detail">
+      <div class="pr-detail-topbar">
+        <div class="detail-heading-row">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span class="badge badge-cyan" id="detail-repo-name">acme-corp/web-app</span>
+              <span style="font-size: 12px; color: var(--text-muted);" id="detail-pr-number">#101</span>
+              <span class="badge badge-amber" id="detail-pr-category-badge">Needs You</span>
+            </div>
+            <h1 class="pr-title-huge" id="detail-pr-title">feat: redesign dashboard layout with GPUI Kit native widgets</h1>
+            <div class="pr-branch-spec">
+              <span>Branch:</span>
+              <span class="branch-badge" id="detail-branch-base">main</span>
+              <span>←</span>
+              <span class="branch-badge" id="detail-branch-head">feature/dashboard-redesign</span>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <!-- BOTÃO EM DESTAQUE: AI REVIEW -->
+            <button class="btn btn-ai-glow" onclick="openAiReviewModal()">
+              <span>✦</span> Run AI Review
+            </button>
+            <button class="btn btn-secondary" onclick="toggleAiDrawer()">
+              <span>💬</span> Chat Agente
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Abas: Commits, Actions, Review -->
+      <nav class="pr-tabs-bar">
+        <div class="pr-tab" onclick="switchTab('commits', this)">
+          <span>Commits</span>
+          <span class="tab-badge" id="tab-count-commits">6</span>
+        </div>
+        <div class="pr-tab" onclick="switchTab('actions', this)">
+          <span>Actions (CI)</span>
+          <span class="tab-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;" id="tab-count-actions">14/14</span>
+        </div>
+        <div class="pr-tab active" onclick="switchTab('review', this)">
+          <span>Review (Diff)</span>
+          <span class="tab-badge" id="tab-count-files">8 arquivos</span>
+        </div>
+      </nav>
+
+      <!-- Conteúdo da Aba -->
+      <div class="tab-content-area" id="tab-content">
+        <!-- Renderizado dinamicamente -->
+      </div>
+
+      <!-- Drawer Lateral de Chat de IA -->
+      <aside class="ai-chat-drawer" id="ai-chat-drawer">
+        <div class="ai-drawer-header">
+          <div>
+            <div style="font-size: 12.5px; font-weight: 600; color: #fff;">Agente de Review</div>
+            <div style="font-size: 10.5px; color: var(--text-muted);" id="drawer-agent-spec">Claude Code • Claude 3.7 Sonnet</div>
+          </div>
+          <button class="btn btn-ghost" style="padding: 2px 6px;" onclick="toggleAiDrawer()">✕</button>
+        </div>
+        <div class="ai-chat-messages" id="ai-messages-container">
+          <div class="chat-bubble chat-bubble-agent">
+            <strong>🤖 Claude Code:</strong><br>
+            Analisei o diff de <code>src/ui/dashboard/container.rs</code>. O uso de <code>VirtualList</code> do GPUI Kit reduz o custo de render de 10k itens para 0.2ms por frame.<br><br>
+            💡 <strong>Sugestão:</strong> Considere adicionar <code>.with_key(|item| item.id)</code> para evitar recriação desnecessária de Views durante streaming.
+          </div>
+        </div>
+        <div class="ai-chat-input-box">
+          <textarea class="ai-chat-textarea" placeholder="Faça uma pergunta sobre o código do PR ou peça para o agente refatorar..."></textarea>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+            <span style="font-size: 10px; color: var(--text-muted);">Enter para enviar</span>
+            <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;">Enviar ao Agente</button>
+          </div>
+        </div>
+      </aside>
+
+    </main>
+
+  </div>
+
+  <!-- Bottom Status Bar -->
+  <footer class="status-bar">
+    <div class="status-item">
+      <span>● GPUI Engine: 120 FPS</span>
+      <span>|</span>
+      <span>Memória: 48 MB</span>
+      <span>|</span>
+      <span>Thread Pool: Tokio Worker Active</span>
+    </div>
+    <div class="status-item">
+      <span>Proposta 1: Zed Native Tri-Pane</span>
+    </div>
+  </footer>
+</div>
+
+<!-- Modal de Configuração & Disparo de AI Review -->
+<div class="modal-overlay" id="ai-modal">
+  <div class="modal-content">
+    <div style="padding: 16px 20px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 18px;">✦</span>
+        <h3 style="font-size: 14px; font-weight: 600;">Disparar Review com Agente de IA</h3>
+      </div>
+      <button class="btn btn-ghost" onclick="closeAiReviewModal()">✕</button>
+    </div>
+    <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+      
+      <div>
+        <label style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">SELECIONE O RUNNER / CLI</label>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;" id="modal-runners-grid">
+          <!-- Injetado via JS -->
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">MODELO DE LINGUAGEM</label>
+        <select id="modal-model-select" style="width: 100%; padding: 8px; background: var(--bg-surface-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--text-primary); outline: none;">
+          <!-- Opções via JS -->
+        </select>
+      </div>
+
+      <div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <label style="font-size: 11px; font-weight: 600; color: var(--text-secondary);">PROMPT DO SISTEMA ENVIADO AO COMANDO</label>
+          <a href="#" style="font-size: 11px; color: var(--accent-cyan); text-decoration: none;">Gerenciar presets nas Configurações</a>
+        </div>
+        <textarea id="modal-prompt-text" style="width: 100%; height: 90px; background: var(--bg-surface-elevated); border: 1px solid var(--border-default); border-radius: var(--radius-md); color: var(--text-primary); padding: 8px; font-family: var(--font-mono); font-size: 11px; resize: none;"></textarea>
+      </div>
+
+    </div>
+    <div style="padding: 12px 20px; background: var(--bg-surface-elevated); border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 8px;">
+      <button class="btn btn-secondary" onclick="closeAiReviewModal()">Cancelar</button>
+      <button class="btn btn-ai-glow" onclick="startAiReview()">Disparar Análise & Abrir Chat</button>
+    </div>
+  </div>
+</div>
+
+<script src="../shared/mockData.js"></script>
+<script>
+  let currentPr = window.MOCK_DATA.pullRequests[0];
+  let currentCategory = "needs_you";
+  let currentTab = "review";
+  let selectedRunner = window.MOCK_DATA.aiRunners[0];
+
+  function init() {
+    renderPrCards();
+    renderSidebarSessions();
+    renderPrDetails(currentPr);
+    renderRunnersInModal();
+  }
+
+  function selectCategory(catId, element) {
+    currentCategory = catId;
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    element.classList.add('active');
+    
+    const catObj = window.MOCK_DATA.categories.find(c => c.id === catId);
+    document.getElementById('category-badge-title').innerText = `Mostrando PRs de "${catObj ? catObj.label : catId}"`;
+    renderPrCards();
+  }
+
+  function renderPrCards() {
+    const container = document.getElementById('pr-cards-container');
+    const filtered = window.MOCK_DATA.pullRequests.filter(pr => {
+      if (currentCategory === 'inbox') return true;
+      return pr.category === currentCategory;
+    });
+
+    if (filtered.length === 0) {
+      container.innerHTML = `<div style="padding: 30px; text-align: center; color: var(--text-muted);">Nenhum Pull Request nesta caixa.</div>`;
+      return;
+    }
+
+    container.innerHTML = filtered.map(pr => `
+      <div class="pr-card ${pr.id === currentPr.id ? 'active' : ''}" onclick="selectPr('${pr.id}')">
+        <div class="pr-card-header">
+          <img src="${pr.author.avatar}" class="pr-avatar" alt="${pr.author.name}">
+          <div style="flex: 1;">
+            <div class="pr-title-text">${pr.title}</div>
+            <div style="font-size: 11px; color: var(--accent-cyan); font-family: var(--font-mono); margin-top: 2px;">
+              ${pr.repo} #${pr.number}
+            </div>
+          </div>
+        </div>
+        <div class="pr-meta-row">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="ci-indicator ${pr.ciStatus.state === 'success' ? 'ci-success' : (pr.ciStatus.state === 'failed' ? 'ci-failed' : 'ci-pending')}"></span>
+            <span>CI ${pr.ciStatus.passed}/${pr.ciStatus.total}</span>
+            <span>•</span>
+            <span>💬 ${pr.commentsCount}</span>
+            <span>•</span>
+            <span>+${pr.additions} -${pr.deletions}</span>
+          </div>
+          <span>${pr.updatedAt}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function selectPr(prId) {
+    currentPr = window.MOCK_DATA.pullRequests.find(p => p.id === prId);
+    document.querySelectorAll('.pr-card').forEach(c => c.classList.remove('active'));
+    renderPrCards();
+    renderPrDetails(currentPr);
+  }
+
+  function renderPrDetails(pr) {
+    document.getElementById('titlebar-current-repo').innerText = pr.repo;
+    document.getElementById('detail-repo-name').innerText = pr.repo;
+    document.getElementById('detail-pr-number').innerText = `#${pr.number}`;
+    document.getElementById('detail-pr-title').innerText = pr.title;
+    document.getElementById('detail-branch-base').innerText = pr.branch.base;
+    document.getElementById('detail-branch-head').innerText = pr.branch.head;
+    document.getElementById('tab-count-commits').innerText = pr.commitsCount;
+    document.getElementById('tab-count-actions').innerText = `${pr.ciStatus.passed}/${pr.ciStatus.total}`;
+    document.getElementById('tab-count-files').innerText = `${pr.filesChangedCount} arquivos`;
+
+    switchTab(currentTab);
+  }
+
+  function switchTab(tabName, element) {
+    currentTab = tabName;
+    if (element) {
+      document.querySelectorAll('.pr-tab').forEach(t => t.classList.remove('active'));
+      element.classList.add('active');
+    }
+
+    const contentArea = document.getElementById('tab-content');
+    if (tabName === 'review') {
+      renderReviewTab(contentArea);
+    } else if (tabName === 'commits') {
+      renderCommitsTab(contentArea);
+    } else if (tabName === 'actions') {
+      renderActionsTab(contentArea);
+    }
+  }
+
+  function renderReviewTab(container) {
+    if (!currentPr.diffs || currentPr.diffs.length === 0) {
+      container.innerHTML = `
+        <div style="background: var(--bg-surface); padding: 24px; border-radius: var(--radius-md); border: 1px solid var(--border-default); text-align: center;">
+          <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 8px;">Diff não sincronizado localmente via gh cli</div>
+          <button class="btn btn-secondary" onclick="alert('Executando: gh pr diff ${currentPr.number}')">Baixar Diff Completo</button>
+        </div>
+      `;
+      return;
+    }
+
+    const diff = currentPr.diffs[0];
+    const hunk = diff.hunks[0];
+
+    container.innerHTML = `
+      <div class="diff-container">
+        <div class="diff-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>📄</span>
+            <strong>${diff.file}</strong>
+            <span class="badge badge-emerald">+9 lines</span>
+            <span class="badge badge-rose">-3 lines</span>
+          </div>
+          <div class="diff-toggle-btns">
+            <button class="diff-toggle-btn active">Inline</button>
+            <button class="diff-toggle-btn" onclick="alert('Alternando para Side-by-Side Split View')">Side-to-Side</button>
+          </div>
+        </div>
+        <div class="diff-table">
+          ${hunk.lines.map(line => {
+            const lineClass = line.type === 'add' ? 'diff-line-add' : (line.type === 'delete' ? 'diff-line-del' : '');
+            return `
+              <div class="diff-line ${lineClass}">
+                <div class="diff-gutter">${line.oldNum || ''}</div>
+                <div class="diff-gutter">${line.newNum || ''}</div>
+                <div class="diff-code">${escapeHtml(line.content)}</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Barra de Ações de Review -->
+      <div style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <span style="font-weight: 600;">Submeter Review do Código</span>
+          <p style="font-size: 11.5px; color: var(--text-muted);">Comentários e aprovação sincronizam diretamente com a API do GitHub.</p>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" onclick="alert('Review comentada salva.')">Comentar</button>
+          <button class="btn btn-secondary" style="color: var(--accent-rose);" onclick="alert('Solicitação de alterações enviada.')">Pedir Alterações</button>
+          <button class="btn btn-primary" onclick="alert('Pull Request Aprovado com sucesso via gh cli!')">Aprovar PR</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCommitsTab(container) {
+    container.innerHTML = `
+      <div style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden;">
+        <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); font-weight: 600;">
+          Histórico de Commits (${currentPr.commits.length})
+        </div>
+        <div>
+          ${currentPr.commits.map(c => `
+            <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-weight: 500; font-size: 13px; color: var(--text-primary);">${c.message}</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${c.author} • ${c.time}</div>
+              </div>
+              <span class="badge badge-subtle" style="font-family: var(--font-mono);">${c.hash}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderActionsTab(container) {
+    container.innerHTML = `
+      <div style="background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow: hidden;">
+        <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); font-weight: 600; display: flex; justify-content: space-between;">
+          <span>GitHub Actions & Checks</span>
+          <span class="badge badge-emerald">Todos os testes passaram</span>
+        </div>
+        <div>
+          ${currentPr.actions.map(act => `
+            <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span class="ci-indicator ci-success"></span>
+                <div>
+                  <div style="font-weight: 500; font-size: 12.5px;">${act.name}</div>
+                  <div style="font-size: 11px; color: var(--text-muted);">${act.workflow} • Concluído em ${act.duration}</div>
+                </div>
+              </div>
+              <button class="btn btn-ghost" style="font-size: 11px;">Ver Logs</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSidebarSessions() {
+    const list = document.getElementById('sidebar-sessions-list');
+    list.innerHTML = window.MOCK_DATA.agentSessions.map(s => `
+      <div class="agent-session-card" onclick="openSessionChat('${s.id}')">
+        <div class="session-title">
+          <span>${s.prId}</span>
+          <span style="font-size: 10px; color: ${s.status === 'running' ? 'var(--accent-amber)' : 'var(--accent-emerald)'};">● ${s.statusLabel}</span>
+        </div>
+        <div class="session-meta">${s.runner} • ${s.updatedAt}</div>
+      </div>
+    `).join('');
+  }
+
+  function toggleAiDrawer() {
+    document.getElementById('ai-chat-drawer').classList.toggle('open');
+  }
+
+  function openAiReviewModal() {
+    document.getElementById('ai-modal').classList.add('open');
+  }
+
+  function closeAiReviewModal() {
+    document.getElementById('ai-modal').classList.remove('open');
+  }
+
+  function renderRunnersInModal() {
+    const grid = document.getElementById('modal-runners-grid');
+    grid.innerHTML = window.MOCK_DATA.aiRunners.map((runner, index) => `
+      <div class="runner-card-option" style="padding: 8px; border: 1px solid ${index === 0 ? 'var(--accent-purple)' : 'var(--border-default)'}; border-radius: var(--radius-md); background: var(--bg-surface-elevated); cursor: pointer;" onclick="selectModalRunner('${runner.id}', this)">
+        <div style="font-weight: 600; font-size: 11.5px;">${runner.name}</div>
+        <div style="font-size: 10px; color: var(--text-muted);">${runner.badge}</div>
+      </div>
+    `).join('');
+    updateModalModelAndPrompt();
+  }
+
+  function selectModalRunner(runnerId, element) {
+    selectedRunner = window.MOCK_DATA.aiRunners.find(r => r.id === runnerId);
+    document.querySelectorAll('.runner-card-option').forEach(el => el.style.borderColor = 'var(--border-default)');
+    element.style.borderColor = 'var(--accent-purple)';
+    updateModalModelAndPrompt();
+  }
+
+  function updateModalModelAndPrompt() {
+    const select = document.getElementById('modal-model-select');
+    select.innerHTML = selectedRunner.models.map(m => `<option value="${m}">${m}</option>`).join('');
+    document.getElementById('modal-prompt-text').value = selectedRunner.defaultPrompt;
+  }
+
+  function startAiReview() {
+    closeAiReviewModal();
+    const model = document.getElementById('modal-model-select').value;
+    document.getElementById('drawer-agent-spec').innerText = `${selectedRunner.name} • ${model}`;
+    
+    const messages = document.getElementById('ai-messages-container');
+    messages.innerHTML += `
+      <div class="chat-bubble chat-bubble-user">
+        Iniciando review do ${currentPr.id} com prompt configurado...
+      </div>
+      <div class="chat-bubble chat-bubble-agent">
+        <strong>🤖 ${selectedRunner.name} (${model}):</strong><br>
+        Carregando diff do git via GitHub CLI...<br>
+        Identifiquei 1 hunk modificado. A implementação utiliza boas práticas de virtualização do GPUI. Nenhuma vulnerabilidade crítica de concorrência detectada.
+      </div>
+    `;
+
+    document.getElementById('ai-chat-drawer').classList.add('open');
+  }
+
+  function openSessionChat(sessionId) {
+    const session = window.MOCK_DATA.agentSessions.find(s => s.id === sessionId);
+    if (!session) return;
+    document.getElementById('drawer-agent-spec').innerText = `${session.runner} • ${session.model}`;
+    document.getElementById('ai-chat-drawer').classList.add('open');
+  }
+
+  function escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  init();
+</script>
+</body>
+</html>

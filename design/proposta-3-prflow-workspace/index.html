@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Argon — Proposta 3 (PR Flow Enhanced Workspace)</title>
+  <link rel="stylesheet" href="../shared/base.css">
+  <style>
+    /* Estilo Fiel ao Print do PR Flow com Evolução GPUI */
+    :root {
+      --bg-darkest: #0e1117;
+      --bg-sidebar: #12161f;
+      --bg-item-hover: #171c26;
+      --bg-item-active: #1c222e;
+      --border-prflow: #202634;
+      --text-muted-prflow: #6b778c;
+      --accent-pill: #262e3d;
+      --color-gh: #2ea44f;
+      --color-gerrit: #00bcd4;
+      --color-gitlab: #fc6d26;
+    }
+
+    body {
+      background: var(--bg-darkest);
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    .prflow-app {
+      display: grid;
+      grid-template-rows: 44px 1fr 24px;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Top Global Header */
+    .prflow-header {
+      background: var(--bg-darkest);
+      border-bottom: 1px solid var(--border-prflow);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+    }
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-icon {
+      width: 22px;
+      height: 22px;
+      background: #1f293d;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #38bdf8;
+      font-weight: bold;
+      font-size: 13px;
+    }
+    .brand-title {
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+      color: #fff;
+    }
+
+    .prflow-search {
+      display: flex;
+      align-items: center;
+      background: #161b24;
+      border: 1px solid #283042;
+      border-radius: 6px;
+      padding: 5px 12px;
+      width: 420px;
+      gap: 8px;
+    }
+    .prflow-search input {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #fff;
+      font-size: 12px;
+      width: 100%;
+    }
+    .kbd-tag {
+      font-size: 10px;
+      background: #232a38;
+      color: #8b949e;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #8b949e;
+    }
+    .header-icon-btn {
+      cursor: pointer;
+      font-size: 14px;
+      padding: 4px;
+      transition: color 0.15s;
+    }
+    .header-icon-btn:hover {
+      color: #fff;
+    }
+
+    /* Layout Central */
+    .prflow-body {
+      display: grid;
+      grid-template-columns: 210px 1fr;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Sidebar idêntica ao print */
+    .prflow-sidebar {
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-prflow);
+      display: flex;
+      flex-direction: column;
+      padding: 12px 8px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    .pf-section-header {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #586069;
+      padding: 12px 10px 4px 10px;
+    }
+    .pf-sidebar-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      border-radius: 6px;
+      color: #9aa5b5;
+      cursor: pointer;
+      margin-bottom: 2px;
+      transition: all 0.1s;
+    }
+    .pf-sidebar-item:hover {
+      background: #19202c;
+      color: #fff;
+    }
+    .pf-sidebar-item.active {
+      background: var(--accent-pill);
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .pf-count {
+      font-size: 11px;
+      color: #7d8795;
+    }
+    .pf-sidebar-item.active .pf-count {
+      color: #ffffff;
+    }
+
+    .group-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 8px;
+    }
+
+    /* Conteúdo Principal: Lista de PRs */
+    .prflow-content-area {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-darkest);
+    }
+    .content-top-headline {
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .headline-main {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .headline-sub {
+      font-size: 12px;
+      font-weight: normal;
+      color: #768390;
+    }
+
+    .pf-list-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 16px 20px 16px;
+    }
+
+    /* Linhas de PR idênticas ao print */
+    .pf-pr-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--bg-item-hover);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      border-left: 3px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .pf-pr-row:hover {
+      background: #202735;
+      transform: translateY(-1px);
+    }
+    .pf-pr-row.alert-red {
+      border-left-color: #f43f5e;
+    }
+    .pf-pr-row.alert-amber {
+      border-left-color: #f59e0b;
+    }
+    .pf-pr-row.active {
+      background: #242c3d;
+      border-left-color: #38bdf8;
+    }
+
+    .pf-row-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex: 1;
+    }
+    .pf-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .pf-pr-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e6edf3;
+      margin-bottom: 3px;
+    }
+    .pf-pr-sub {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: #7d8590;
+      font-family: var(--font-mono);
+    }
+
+    .pf-row-right {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      color: #7d8590;
+      font-size: 12px;
+    }
+    .pf-stat-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .pf-time {
+      font-size: 11.5px;
+      color: #7d8590;
+      width: 32px;
+      text-align: right;
+    }
+
+    /* Slide-over Workspace Modal/Drawer para o PR Aberto */
+    .pr-detail-drawer {
+      position: absolute;
+      top: 0;
+      right: -80%;
+      width: 80%;
+      height: 100%;
+      background: #11151f;
+      border-left: 1px solid #2d3548;
+      box-shadow: -15px 0 40px rgba(0, 0, 0, 0.75);
+      transition: right 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+    }
+    .pr-detail-drawer.open {
+      right: 0;
+    }
+
+    .drawer-top-nav {
+      padding: 14px 24px;
+      background: #151a26;
+      border-bottom: 1px solid #252e40;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .drawer-tabs {
+      display: flex;
+      gap: 8px;
+    }
+    .drawer-tab {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #8b949e;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .drawer-tab.active {
+      background: #252f44;
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    .drawer-scroll-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="prflow-app">
+  <!-- Top Navigation Header -->
+  <header class="prflow-header">
+    <div class="brand-section">
+      <div class="brand-icon">⎇</div>
+      <span class="brand-title">Argon Flow</span>
+      <span style="font-size: 11px; color: #586069; margin-left: 4px;">— GPUI Desktop</span>
+    </div>
+
+    <div class="prflow-search">
+      <span style="font-size: 12px; color: #6e7681;">🔍</span>
+      <input type="text" placeholder="Search PRs, repos, people...">
+      <span class="kbd-tag">⌘K</span>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn btn-ai-glow" style="padding: 4px 10px; font-size: 11px;" onclick="quickOpenAiForCurrent()">
+        <span>✦</span> Agent Review Hub
+      </button>
+      <span class="header-icon-btn" title="Novo PR">+</span>
+      <span class="header-icon-btn" title="Filtros">⚙</span>
+      <span class="header-icon-btn" title="Atualizar">↻</span>
+      <span class="header-icon-btn" title="Notificações">🔔</span>
+      <span class="header-icon-btn" onclick="window.location.href='../index.html'" title="Sair / Hub">← Hub</span>
+    </div>
+  </header>
+
+  <!-- Corpo com Sidebar e Lista -->
+  <div class="prflow-body">
+    
+    <!-- Sidebar Inspirada na Imagem -->
+    <aside class="prflow-sidebar">
+      <div class="pf-section-header">Priority</div>
+      <div class="pf-sidebar-item active" onclick="switchPfFilter('needs_you', this)">
+        <span>🎯 Needs you</span>
+        <span class="pf-count">9</span>
+      </div>
+      <div class="pf-sidebar-item" onclick="switchPfFilter('inbox', this)">
+        <span>📥 Inbox</span>
+        <span class="pf-count">16</span>
+      </div>
+      <div class="pf-sidebar-item">
+        <span>⭐ Starred</span>
+        <span class="pf-count">1</span>
+      </div>
+
+      <div class="pf-section-header">Views</div>
+      <div class="pf-sidebar-item" onclick="switchPfFilter('your_prs', this)">
+        <span>🚀 Your PRs</span>
+        <span class="pf-count">5</span>
+      </div>
+      <div class="pf-sidebar-item" onclick="switchPfFilter('waiting_others', this)">
+        <span>⏳ Waiting on others</span>
+        <span class="pf-count">2</span>
+      </div>
+      <div class="pf-sidebar-item" onclick="switchPfFilter('changes_requested', this)">
+        <span>⚠️ Changes Requested</span>
+        <span class="pf-count">2</span>
+      </div>
+      <div class="pf-sidebar-item" onclick="switchPfFilter('ready_to_merge', this)">
+        <span>✅ Ready to Merge</span>
+        <span class="pf-count">4</span>
+      </div>
+      <div class="pf-sidebar-item" onclick="switchPfFilter('already_done', this)">
+        <span>✔ Recently done</span>
+        <span class="pf-count">5</span>
+      </div>
+
+      <div class="pf-section-header">Groups</div>
+      <div class="pf-sidebar-item">
+        <span><span class="group-dot" style="background: #a855f7;"></span>Frontend</span>
+      </div>
+      <div class="pf-sidebar-item">
+        <span><span class="group-dot" style="background: #f59e0b;"></span>Backend</span>
+      </div>
+
+      <div class="pf-section-header">Repositories</div>
+      <div class="pf-sidebar-item"><span>📁 api</span></div>
+      <div class="pf-sidebar-item"><span>📁 auth</span></div>
+      <div class="pf-sidebar-item"><span>📁 billing</span></div>
+      <div class="pf-sidebar-item"><span>📁 web-app</span></div>
+
+      <div class="pf-section-header">Accounts</div>
+      <div class="pf-sidebar-item" style="color: #fff;">
+        <span><span class="group-dot" style="background: var(--color-gh);"></span>GitHub</span>
+        <span style="color: var(--color-gh); font-size: 11px;">✓</span>
+      </div>
+      <div class="pf-sidebar-item">
+        <span><span class="group-dot" style="background: var(--color-gerrit);"></span>Gerrit</span>
+      </div>
+      <div class="pf-sidebar-item">
+        <span><span class="group-dot" style="background: var(--color-gitlab);"></span>GitLab</span>
+      </div>
+
+      <!-- Sessões de IA na Sidebar -->
+      <div class="pf-section-header" style="color: #a855f7;">Agent Reviews</div>
+      <div style="padding: 4px 6px;">
+        <div style="background: #181e2b; border: 1px solid #293349; border-radius: 6px; padding: 8px; font-size: 11px; margin-bottom: 6px; cursor: pointer;" onclick="openDetailDrawer()">
+          <div style="color: #c084fc; font-weight: 600;">PR #101 • Claude Code</div>
+          <div style="color: #8b949e; font-size: 10px;">Opus 4.5 • Concluído</div>
+        </div>
+      </div>
+
+      <div style="margin-top: auto; padding: 8px 10px; font-size: 10px; color: #586069; border-top: 1px solid var(--border-prflow);">
+        9 need you • 16 tracked<br>
+        updated 11:15 AM
+      </div>
+    </aside>
+
+    <!-- Lista Central de Pull Requests (Estilo PR Flow) -->
+    <main class="prflow-content-area">
+      <div class="content-top-headline">
+        <div class="headline-main">
+          <span>Needs you</span>
+          <span class="headline-sub">pull requests ranked by what needs your attention</span>
+        </div>
+        <span style="font-size: 12px; color: #768390;">9 shown</span>
+      </div>
+
+      <div class="pf-list-scroll" id="pf-pr-list">
+        <!-- Linhas injetadas via JS -->
+      </div>
+    </main>
+
+    <!-- Workspace Drawer Slide-over para o PR selecionado -->
+    <aside class="pr-detail-drawer" id="pr-detail-drawer">
+      <div class="drawer-top-nav">
+        <div class="drawer-tabs">
+          <div class="drawer-tab active" onclick="switchDrawerTab('review', this)">Review (Diff)</div>
+          <div class="drawer-tab" onclick="switchDrawerTab('commits', this)">Commits</div>
+          <div class="drawer-tab" onclick="switchDrawerTab('actions', this)">Actions</div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn btn-ai-glow" onclick="alert('Iniciando análise agêntica neste PR...')">
+            ✦ Disparar IA Review
+          </button>
+          <button class="btn btn-ghost" onclick="closeDetailDrawer()">✕ Fechar</button>
+        </div>
+      </div>
+
+      <div class="drawer-scroll-body" id="drawer-body">
+        <div style="margin-bottom: 20px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span class="badge badge-cyan" id="drawer-repo-badge">acme/web-app #101</span>
+            <span class="badge badge-amber">Needs you</span>
+          </div>
+          <h2 style="font-size: 18px; font-weight: 700; color: #fff;" id="drawer-pr-title">feat: redesign dashboard layout</h2>
+          <div style="font-size: 12px; color: #8b949e; margin-top: 4px;">
+            Autor: Beatriz Lima • Branch: <code style="color: #38bdf8;">main ← feature/101</code>
+          </div>
+        </div>
+
+        <!-- Seletor de Diff Side-by-Side / Inline -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <span style="font-size: 12px; font-weight: 600; color: #e6edf3;">src/ui/dashboard/container.rs</span>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn btn-secondary" style="padding: 3px 8px; font-size: 11px;">Inline</button>
+            <button class="btn btn-secondary" style="padding: 3px 8px; font-size: 11px; background: #2b354d; color: #fff;">Side-by-Side</button>
+          </div>
+        </div>
+
+        <!-- Visualizador de Código GPUI -->
+        <div style="background: #161b26; border: 1px solid #283042; border-radius: 8px; padding: 14px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; margin-bottom: 20px;">
+          <div style="color: #8b949e;">@@ -45,10 +45,18 @@ impl DashboardView {</div>
+          <div>    pub fn render(&amp;mut self, cx: &amp;mut ViewContext&lt;Self&gt;) -> impl IntoElement {</div>
+          <div style="background: rgba(244, 63, 94, 0.15); color: #fb7185;">-           .flex_col()</div>
+          <div style="background: rgba(244, 63, 94, 0.15); color: #fb7185;">-           .child(LegacyDashboardHeader::new())</div>
+          <div style="background: rgba(16, 185, 129, 0.15); color: #34d399;">+           .flex_col()</div>
+          <div style="background: rgba(16, 185, 129, 0.15); color: #34d399;">+           .bg(cx.theme().background)</div>
+          <div style="background: rgba(16, 185, 129, 0.15); color: #34d399;">+           .child(GpuiKitHeader::new().with_breadcrumbs(true))</div>
+          <div style="background: rgba(16, 185, 129, 0.15); color: #34d399;">+           .child(VirtualList::new(self.metrics.clone()).overscan(10))</div>
+          <div>    }</div>
+        </div>
+
+        <!-- Seção de Chat com o Agente dentro do Drawer -->
+        <div style="background: #181e2b; border: 1px solid #2c364c; border-radius: 8px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="color: #c084fc; font-size: 16px;">✦</span>
+              <strong style="font-size: 13px; color: #fff;">Chat Interativo com o Agente de IA</strong>
+            </div>
+            <span class="badge badge-purple">Claude Code (Opus 4.5)</span>
+          </div>
+
+          <div style="background: #121622; padding: 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; margin-bottom: 12px;">
+            <strong>Claude Code:</strong> Revisão executada com base nas diretrizes do Rust/GPUI Kit. A utilização de <code>VirtualList</code> é ideal. Quer que eu gere os testes unitários em <code>tests/dashboard_test.rs</code>?
+          </div>
+
+          <div style="display: flex; gap: 8px;">
+            <input type="text" placeholder="Pergunte ao agente sobre esse PR..." style="flex: 1; background: #121622; border: 1px solid #2c364c; border-radius: 6px; padding: 8px 12px; color: #fff; font-size: 12px; outline: none;">
+            <button class="btn btn-primary">Enviar</button>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Bottom Status Bar -->
+  <footer style="background: var(--bg-darkest); border-top: 1px solid var(--border-prflow); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; font-size: 11px; color: #768390;">
+    <div>PR Flow GPUI Native • Connected to GitHub CLI</div>
+    <div>v1.23.0 Feedback</div>
+  </footer>
+</div>
+
+<script src="../shared/mockData.js"></script>
+<script>
+  function renderPfList() {
+    const container = document.getElementById('pf-pr-list');
+    container.innerHTML = window.MOCK_DATA.pullRequests.map((pr, index) => {
+      const isRed = index % 2 === 0;
+      return `
+        <div class="pf-pr-row ${isRed ? 'alert-red' : 'alert-amber'}" onclick="openPrInDrawer('${pr.id}')">
+          <div class="pf-row-left">
+            <img src="${pr.author.avatar}" class="pf-avatar">
+            <div>
+              <div class="pf-pr-title">${pr.title}</div>
+              <div class="pf-pr-sub">
+                <span>🐙 ${pr.repo} #${pr.number}</span>
+                <span>•</span>
+                <span>${pr.branch.head}</span>
+              </div>
+            </div>
+          </div>
+          <div class="pf-row-right">
+            <span class="pf-stat-item">💬 ${pr.commentsCount}</span>
+            <span class="pf-stat-item">⎇ ${pr.commitsCount}</span>
+            <span class="pf-stat-item">📖 ${pr.filesChangedCount}</span>
+            <span class="pf-time">${pr.createdAt.replace('Há ', '')}</span>
+            <span style="cursor: pointer;">⭐</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function openPrInDrawer(prId) {
+    const pr = window.MOCK_DATA.pullRequests.find(p => p.id === prId);
+    if (!pr) return;
+    document.getElementById('drawer-repo-badge').innerText = `${pr.repo} #${pr.number}`;
+    document.getElementById('drawer-pr-title').innerText = pr.title;
+    document.getElementById('pr-detail-drawer').classList.add('open');
+  }
+
+  function closeDetailDrawer() {
+    document.getElementById('pr-detail-drawer').classList.remove('open');
+  }
+
+  function openDetailDrawer() {
+    document.getElementById('pr-detail-drawer').classList.add('open');
+  }
+
+  function quickOpenAiForCurrent() {
+    openDetailDrawer();
+  }
+
+  function switchPfFilter(filter, el) {
+    document.querySelectorAll('.pf-sidebar-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function switchDrawerTab(tab, el) {
+    document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  renderPfList();
+</script>
+</body>
+</html>
