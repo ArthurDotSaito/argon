@@ -1,0 +1,9 @@
+gpui_kit::actions!(
+    argon,
+    [
+        ToggleLeftDock,
+        ToggleRightDock,
+        ToggleBottomDock,
+        CloseActiveItem
+    ]
+);
