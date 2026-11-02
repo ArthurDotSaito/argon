@@ -1,9 +1,54 @@
+use std::rc::Rc;
+
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, StyledExt as _, v_flex};
 use gpui_kit::{
-    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Window,
+    App, AppContext as _, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window, div,
 };
+
+use crate::center::{CenterContentFactory, CenterItem};
+
+pub fn placeholder_content_factory() -> CenterContentFactory {
+    Rc::new(|item, _, cx| cx.new(|_| CenterPlaceholder { item: item.clone() }).into())
+}
+
+struct CenterPlaceholder {
+    item: CenterItem,
+}
+
+impl CenterPlaceholder {
+    fn description(&self) -> SharedString {
+        match &self.item {
+            CenterItem::Inbox => "Seus PRs aparecem aqui.".into(),
+            CenterItem::Pr(id) => id.clone().into(),
+            CenterItem::Settings => "Preferências do Argon.".into(),
+        }
+    }
+}
+
+impl Render for CenterPlaceholder {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .child(
+                div()
+                    .text_lg()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child(self.item.title()),
+            )
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(self.description()),
+            )
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockSlot {

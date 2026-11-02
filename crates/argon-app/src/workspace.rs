@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::dock::{
@@ -9,20 +8,20 @@ use gpui_kit::component::dock::{
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EntityId, FocusHandle, Focusable as _,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
-    Task, Window, div, px,
+    Window, div, px,
 };
 
 use crate::actions::{CloseActiveItem, ToggleBottomDock, ToggleLeftDock, ToggleRightDock};
-use crate::center::{CENTER_PANEL, CenterItem, CenterPanel, CenterPanelEvent};
+use crate::center::{
+    CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel, CenterPanelEvent,
+};
 use crate::keymap::WORKSPACE_CONTEXT;
-use crate::layout_store;
+use crate::layout_store::{self, LAYOUT_VERSION, LayoutSaver};
 use crate::placeholders::{DockPlaceholder, DockSlot};
 use crate::status_bar::WorkspaceStatusBar;
 use crate::title_bar::AppTitleBar;
 
 const DOCK_AREA_ID: &str = "argon-workspace";
-const LAYOUT_VERSION: usize = 1;
-const SAVE_DEBOUNCE: Duration = Duration::from_millis(300);
 const SAMPLE_PR: &str = "orbita-health/scheduling-api#482";
 const ACCOUNT_PLACEHOLDER: &str = "@arthursaito";
 const SYNC_PLACEHOLDER: &str = "sincronizado há 2 min";
@@ -66,15 +65,20 @@ impl DockPosition {
 
 pub struct Workspace {
     dock_area: Entity<DockArea>,
+    content_factory: CenterContentFactory,
     focus_handle: FocusHandle,
-    pending_save: Option<Task<()>>,
+    layout_saver: LayoutSaver,
     center_subscriptions: HashMap<EntityId, Subscription>,
     _dock_subscription: Subscription,
 }
 
 impl Workspace {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        register_panels(cx);
+    pub fn new(
+        content_factory: CenterContentFactory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        register_panels(content_factory.clone(), cx);
         let (dock_area, skin) = DockSkin::dock_area(DOCK_AREA_ID, Some(LAYOUT_VERSION), window, cx);
         skin.set_panel_style(PanelStyle::TabBar, cx);
         skin.set_toggle_button_visible(false, cx);
@@ -89,13 +93,16 @@ impl Workspace {
 
         let mut this = Self {
             dock_area,
+            content_factory,
             focus_handle: cx.focus_handle(),
-            pending_save: None,
+            layout_saver: LayoutSaver::default(),
             center_subscriptions: HashMap::new(),
             _dock_subscription: dock_subscription,
         };
         if !this.restore_layout(window, cx) {
             this.reset_layout(window, cx);
+        } else if this.center_panels(cx).is_empty() {
+            this.open_item(CenterItem::Inbox, false, window, cx);
         }
         this.watch_center_panels(cx);
         this.focus_handle.focus(window, cx);
@@ -122,7 +129,7 @@ impl Workspace {
                 .find(|panel| panel.read(cx).is_preview())
                 .cloned()
                 .inspect(|panel| {
-                    panel.update(cx, |panel, cx| panel.replace(item.clone(), cx));
+                    panel.update(cx, |panel, cx| panel.replace(item.clone(), window, cx));
                     self.schedule_save(cx);
                 }),
             (None, false) => None,
@@ -162,7 +169,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<CenterPanel> {
-        let panel = cx.new(|cx| CenterPanel::new(item, preview, cx));
+        let factory = self.content_factory.clone();
+        let panel = cx.new(|cx| CenterPanel::new(item, preview, factory, window, cx));
         let handle = panel_handle(panel.clone());
         self.dock_area.update(cx, |area, cx| {
             area.add_panel_view(handle, DockPlacement::Center, None, window, cx)
@@ -240,28 +248,8 @@ impl Workspace {
     }
 
     fn restore_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(state) = layout_store::load() else {
-            return false;
-        };
-        if state.version != Some(LAYOUT_VERSION) {
-            return false;
-        }
-        let loaded = self
-            .dock_area
-            .update(cx, |area, cx| area.load(state, window, cx));
-        if let Err(error) = loaded {
-            eprintln!("failed to restore layout: {error:#}");
-            return false;
-        }
-        self.layout_is_complete(cx)
-    }
-
-    fn layout_is_complete(&self, cx: &App) -> bool {
-        let area = self.dock_area.read(cx);
-        let docks_present = DockPosition::ALL
-            .iter()
-            .all(|dock| area.has_dock(dock.placement()));
-        docks_present && !self.center_panels(cx).is_empty()
+        let docks = DockPosition::ALL.map(DockPosition::placement);
+        layout_store::restore(&self.dock_area, &docks, window, cx)
     }
 
     fn reset_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -292,26 +280,11 @@ impl Workspace {
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
-        self.pending_save = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SAVE_DEBOUNCE).await;
-            let Ok(state) = this.update(cx, |this, cx| this.dock_area.read(cx).dump(cx)) else {
-                return;
-            };
-            let saved = cx
-                .background_spawn(async move { layout_store::save(&state) })
-                .await;
-            if let Err(error) = saved {
-                eprintln!("failed to save layout: {error}");
-            }
-        }));
+        self.layout_saver.schedule(self.dock_area.downgrade(), cx);
     }
 
     fn save_now(&mut self, cx: &mut Context<Self>) {
-        self.pending_save = None;
-        let state = self.dock_area.read(cx).dump(cx);
-        if let Err(error) = layout_store::save(&state) {
-            eprintln!("failed to save layout: {error}");
-        }
+        self.layout_saver.save_now(&self.dock_area, cx);
     }
 
     fn on_toggle_left_dock(
@@ -351,10 +324,11 @@ impl Workspace {
     }
 }
 
-fn register_panels(cx: &mut App) {
-    register_panel(cx, CENTER_PANEL, |context, _, cx| {
+fn register_panels(content_factory: CenterContentFactory, cx: &mut App) {
+    register_panel(cx, CENTER_PANEL, move |context, window, cx| {
         let info = context.info().clone();
-        panel_handle(cx.new(|cx| CenterPanel::restore(&info, cx)))
+        let factory = content_factory.clone();
+        panel_handle(cx.new(|cx| CenterPanel::restore(&info, factory, window, cx)))
     });
     for slot in DockSlot::ALL {
         register_panel(cx, slot.panel_name(), move |_, _, cx| {

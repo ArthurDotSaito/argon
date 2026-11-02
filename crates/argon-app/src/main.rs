@@ -42,7 +42,7 @@ fn open_main_window(cx: &mut App) {
         ..TitleBar::window_options()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| Workspace::new(window, cx))
+        cx.new(|cx| Workspace::new(placeholders::placeholder_content_factory(), window, cx))
     })
     .expect("failed to open main window");
 }
