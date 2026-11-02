@@ -20,8 +20,8 @@ use super::commits::{CommitsEvent, CommitsTab};
 use super::conversation::{Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
 use super::labels;
-use super::review_tab::{ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::inbox::InboxModel;
+use crate::review::{ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::services::{AppServices, Services};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -177,6 +177,8 @@ impl PrView {
             self.actions.update(cx, |actions, cx| {
                 actions.set_active(tab == PrTab::Actions, cx)
             });
+            self.review
+                .update(cx, |review, cx| review.set_active(tab == PrTab::Review, cx));
             cx.notify();
         }
     }
@@ -188,9 +190,13 @@ impl PrView {
 
     #[expect(
         dead_code,
-        reason = "scroll-to-line lands with the diff view in Task 15"
+        reason = "called by review navigation from drafts and agent findings (Tasks 16 and 23)"
     )]
-    pub fn reveal(&mut self, _path: &str, _line: u32, _side: Side, _cx: &mut Context<Self>) {}
+    pub fn reveal(&mut self, path: &str, line: u32, side: Side, cx: &mut Context<Self>) {
+        self.set_review_scope(ReviewScope::All, cx);
+        self.review
+            .update(cx, |review, cx| review.reveal(path, line, side, cx));
+    }
 
     pub fn open_on_github(&mut self, _: &mut Context<Self>) {
         let Some(url) = self.pr().map(|pr| pr.url.clone()) else {

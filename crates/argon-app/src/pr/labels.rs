@@ -22,8 +22,6 @@ pub const COMMENT: &str = "Comentar";
 pub const COMMENT_SENT: &str = "Comentário enviado";
 pub const NO_REVIEWERS: &str = "sem reviewers";
 pub const FILES: &str = "arquivos";
-pub const UNDER_CONSTRUCTION: &str = "Em construção";
-pub const REVIEW_SOON: &str = "Diff e comentários chegam na Fase 3";
 pub const MERGE_DIALOG_TITLE: &str = "Fazer merge do PR";
 pub const MERGE_METHOD: &str = "Método de merge";
 pub const CANCEL: &str = "Cancelar";
@@ -36,31 +34,6 @@ pub const TAB_ACTIONS: &str = "Actions";
 pub const TAB_REVIEW: &str = "Review";
 
 pub const SEPARATOR: &str = "·";
-pub const REVIEW_SHOW_ALL: &str = "Ver todos";
-pub const REVIEW_LOADING_FILES: &str = "Carregando arquivos do commit…";
-pub const REVIEW_NO_FILES: &str = "Este commit não alterou arquivos.";
-
-pub fn commit_banner(oid: &str, headline: &str) -> String {
-    format!("Mostrando só o commit {} — {headline}", short_sha(oid))
-}
-
-pub fn files_failed(error: &str) -> String {
-    format!("Falha ao carregar os arquivos do commit: {error}")
-}
-
-pub fn commit_gone(oid: &str) -> String {
-    format!(
-        "O commit {} não faz mais parte do PR (force-push)",
-        short_sha(oid)
-    )
-}
-
-pub fn commit_file_count(count: usize) -> String {
-    match count {
-        1 => "1 arquivo neste commit".to_string(),
-        count => format!("{count} arquivos neste commit"),
-    }
-}
 
 pub fn short_sha(oid: &str) -> &str {
     oid.get(..7).unwrap_or(oid)

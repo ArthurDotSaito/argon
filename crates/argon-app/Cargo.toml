@@ -13,7 +13,18 @@ path = "src/main.rs"
 argon-core = { path = "../argon-core" }
 argon-github = { path = "../argon-github" }
 argon-store = { path = "../argon-store" }
-gpui-kit.workspace = true
+gpui-kit = { workspace = true, features = [
+    "tree-sitter-csharp",
+    "tree-sitter-go",
+    "tree-sitter-javascript",
+    "tree-sitter-markdown",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
 chrono.workspace = true
 futures.workspace = true
 open.workspace = true

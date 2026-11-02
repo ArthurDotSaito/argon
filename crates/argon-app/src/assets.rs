@@ -10,6 +10,7 @@ gpui_kit::assets::icon_assets!(
         CircleDashed,
         CircleDot,
         Clock,
+        CornerDownLeft,
         FileCode,
         FileDiff,
         GitBranch,

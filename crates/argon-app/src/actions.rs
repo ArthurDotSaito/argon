@@ -16,7 +16,8 @@ gpui_kit::actions!(
         ClearFilter,
         OpenPalette,
         SyncNow,
-        OpenSettings
+        OpenSettings,
+        ToggleDiffMode
     ]
 );
 

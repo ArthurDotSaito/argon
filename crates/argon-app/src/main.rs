@@ -11,6 +11,7 @@ mod layout_store;
 mod palette;
 mod placeholders;
 mod pr;
+mod review;
 mod services;
 mod status_bar;
 mod sync_status;
