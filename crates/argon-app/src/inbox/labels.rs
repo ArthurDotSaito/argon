@@ -1,5 +1,5 @@
 use argon_core::{DateBucket, Reason};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 
 use super::InboxView;
 
@@ -40,7 +40,7 @@ pub fn bucket_title(bucket: DateBucket) -> &'static str {
     match bucket {
         DateBucket::Today => "Hoje",
         DateBucket::Yesterday => "Ontem",
-        DateBucket::ThisWeek => "Esta semana",
+        DateBucket::LastSevenDays => "Últimos 7 dias",
         DateBucket::Older => "Mais antigos",
     }
 }
@@ -113,7 +113,9 @@ enum Age {
 impl Age {
     fn of(now: DateTime<Utc>, ts: DateTime<Utc>) -> Age {
         let minutes = (now - ts).num_minutes().max(0);
-        let days = minutes / (60 * 24);
+        let days = (now.with_timezone(&Local).date_naive() - ts.with_timezone(&Local).date_naive())
+            .num_days()
+            .max(0);
         match (minutes, days) {
             (0, _) => Age::Now,
             (1..60, _) => Age::Minutes(minutes),

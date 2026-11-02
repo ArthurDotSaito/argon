@@ -75,6 +75,7 @@ impl InboxPane {
         let selected_row = model.selected_row();
         let reset = scroll_generation != self.scroll_generation;
         if reset {
+            self.pending_click = None;
             self.list_state
                 .reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
         } else if rows_revision != self.rows_revision {
@@ -126,6 +127,7 @@ impl InboxPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_click = None;
         self.focus_handle.focus(window, cx);
         self.model
             .update(cx, |model, cx| model.select(position, cx));
@@ -151,14 +153,17 @@ impl InboxPane {
     }
 
     fn on_select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.pending_click = None;
         self.model.update(cx, |model, cx| model.select_next(cx));
     }
 
     fn on_select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        self.pending_click = None;
         self.model.update(cx, |model, cx| model.select_previous(cx));
     }
 
     fn on_open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.pending_click = None;
         self.model
             .update(cx, |model, cx| model.open_selected(true, cx));
     }

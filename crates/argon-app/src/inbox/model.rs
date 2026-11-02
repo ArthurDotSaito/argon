@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 
 use argon_core::{PrId, PullRequest, ViewSet};
@@ -24,6 +25,7 @@ impl Global for InboxHandle {}
 pub struct InboxModel {
     services: Services,
     items: Vec<InboxItem>,
+    index: HashMap<PrId, usize>,
     counts: [usize; InboxView::ALL.len()],
     orgs: Vec<OrgEntry>,
     accounts: Vec<AccountEntry>,
@@ -38,6 +40,7 @@ pub struct InboxModel {
     load_error: Option<SharedString>,
     action_error: Option<SharedString>,
     load_task: Option<Task<()>>,
+    local_epoch: u64,
     _sync_subscription: Subscription,
 }
 
@@ -55,6 +58,7 @@ impl InboxModel {
         let mut this = Self {
             services,
             items: Vec::new(),
+            index: HashMap::new(),
             counts: [0; InboxView::ALL.len()],
             orgs: Vec::new(),
             accounts: Vec::new(),
@@ -69,6 +73,7 @@ impl InboxModel {
             load_error: None,
             action_error: None,
             load_task: None,
+            local_epoch: 0,
             _sync_subscription: sync_subscription,
         };
         this.refresh_meta();
@@ -148,10 +153,8 @@ impl InboxModel {
     }
 
     pub fn pr(&self, id: &PrId) -> Option<&PullRequest> {
-        self.items
-            .iter()
-            .map(|item| &item.pr)
-            .find(|pr| &pr.id == id)
+        let ix = *self.index.get(id)?;
+        self.items.get(ix).map(|item| &item.pr)
     }
 
     pub fn show_view(&mut self, view: InboxView, cx: &mut Context<Self>) {
@@ -225,7 +228,7 @@ impl InboxModel {
         self.sections
             .visible
             .iter()
-            .position(|ix| &self.items[*ix].pr.id == id)
+            .position(|ix| self.index.get(id) == Some(ix))
     }
 
     pub fn open(&mut self, position: usize, preview: bool, cx: &mut Context<Self>) {
@@ -254,6 +257,7 @@ impl InboxModel {
             .map(|item| item.pr.id.clone());
         let item = self.items.remove(ix);
         let (id, updated_at) = (item.pr.id, item.pr.updated_at);
+        self.reindex();
         self.recount();
         self.rebuild(neighbour, false);
         self.persist(move |store| store.archive(&id, updated_at), cx);
@@ -278,11 +282,16 @@ impl InboxModel {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let mut context = self.load_context();
         let store = self.services.store();
+        let epoch = self.local_epoch;
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let loaded = store
                 .call(move |store| load_items(store, &mut context))
                 .await;
-            _ = this.update(cx, |model, cx| model.apply(flatten(loaded), cx));
+            _ = this.update(cx, |model, cx| {
+                if model.local_epoch == epoch {
+                    model.apply(flatten(loaded), cx);
+                }
+            });
         }));
     }
 
@@ -304,6 +313,7 @@ impl InboxModel {
         match loaded {
             Ok(items) => {
                 self.items = items;
+                self.reindex();
                 self.loaded = true;
                 self.load_error = None;
                 self.refresh_meta();
@@ -323,6 +333,8 @@ impl InboxModel {
         job: impl FnOnce(&mut Store) -> argon_store::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.local_epoch += 1;
+        self.load_task = None;
         let store = self.services.store();
         cx.spawn(async move |this, cx| {
             let result = flatten(store.call(job).await);
@@ -360,6 +372,11 @@ impl InboxModel {
                 })
             })
             .collect();
+        if let Some(org) = &self.org
+            && !self.orgs.iter().any(|entry| &entry.key == org)
+        {
+            self.org = None;
+        }
         self.accounts = self
             .services
             .accounts()
@@ -368,6 +385,15 @@ impl InboxModel {
                 login: format!("@{}", account.login).into(),
                 host: account.host.into(),
             })
+            .collect();
+    }
+
+    fn reindex(&mut self) {
+        self.index = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(ix, item)| (item.pr.id.clone(), ix))
             .collect();
     }
 

@@ -66,7 +66,30 @@ impl Rng {
     }
 }
 
+const DATA_DIR_ENV: &str = "ARGON_DATA_DIR";
+const USAGE: &str =
+    "usage: ARGON_DATA_DIR=<scratch dir> cargo run -p argon-app --example seed_store
+
+Writes 1,000 fake pull requests into <scratch dir>/argon.db.
+Run the app with the same ARGON_DATA_DIR and with GH_CONFIG_DIR pointing to an
+empty directory; otherwise a logged-in gh account syncs and replaces the seed.";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    if std::env::var_os(DATA_DIR_ENV).is_none_or(|dir| dir.is_empty()) {
+        eprintln!(
+            "{DATA_DIR_ENV} is not set; refusing to seed the real data directory
+
+{USAGE}"
+        );
+        std::process::exit(2);
+    }
     let paths = Paths::resolve();
     std::fs::create_dir_all(&paths.data_dir)?;
     let mut store = Store::open(&paths.db_file())?;
@@ -80,6 +103,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "seeded {} pull requests into {}",
         prs.len(),
         paths.db_file().display()
+    );
+    println!(
+        "start the app with {DATA_DIR_ENV}={} and GH_CONFIG_DIR set to an empty directory, otherwise the next sync replaces the seed",
+        paths.data_dir.display()
     );
     Ok(())
 }

@@ -1,24 +1,22 @@
-use chrono::{DateTime, Datelike, Local};
+use chrono::{DateTime, Local};
+
+const RECENT_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DateBucket {
     Today,
     Yesterday,
-    ThisWeek,
+    LastSevenDays,
     Older,
 }
 
 pub fn date_bucket(now: DateTime<Local>, ts: DateTime<Local>) -> DateBucket {
-    let today = now.date_naive();
-    let day = ts.date_naive();
-    if day == today {
-        DateBucket::Today
-    } else if today.pred_opt() == Some(day) {
-        DateBucket::Yesterday
-    } else if day.iso_week() == today.iso_week() {
-        DateBucket::ThisWeek
-    } else {
-        DateBucket::Older
+    let days_ago = (now.date_naive() - ts.date_naive()).num_days();
+    match days_ago {
+        ..=0 => DateBucket::Today,
+        1 => DateBucket::Yesterday,
+        2..=RECENT_DAYS => DateBucket::LastSevenDays,
+        _ => DateBucket::Older,
     }
 }
 
@@ -35,7 +33,7 @@ mod tests {
     }
 
     #[test]
-    fn date_bucket_groups_by_local_day_and_iso_week() {
+    fn date_bucket_groups_by_local_day_and_last_seven_days() {
         let cases = [
             (
                 "same day",
@@ -47,6 +45,12 @@ mod tests {
                 "one minute after midnight still today",
                 local(2026, 11, 4, 0, 1),
                 local(2026, 11, 4, 0, 0),
+                DateBucket::Today,
+            ),
+            (
+                "timestamp slightly in the future is today",
+                local(2026, 11, 4, 23, 59),
+                local(2026, 11, 5, 0, 2),
                 DateBucket::Today,
             ),
             (
@@ -62,51 +66,45 @@ mod tests {
                 DateBucket::Yesterday,
             ),
             (
-                "monday of the same week",
-                local(2026, 11, 5, 12, 0),
-                local(2026, 11, 2, 9, 0),
-                DateBucket::ThisWeek,
-            ),
-            (
-                "two days ago on the same week",
-                local(2026, 11, 5, 12, 0),
-                local(2026, 11, 3, 18, 0),
-                DateBucket::ThisWeek,
-            ),
-            (
-                "sunday before is the previous week",
-                local(2026, 11, 4, 12, 0),
-                local(2026, 11, 1, 12, 0),
-                DateBucket::Older,
-            ),
-            (
-                "monday sees sunday as yesterday not older",
+                "monday sees sunday as yesterday",
                 local(2026, 11, 2, 9, 0),
                 local(2026, 11, 1, 22, 0),
                 DateBucket::Yesterday,
             ),
             (
-                "monday sees friday as older",
+                "two days ago",
+                local(2026, 11, 5, 12, 0),
+                local(2026, 11, 3, 18, 0),
+                DateBucket::LastSevenDays,
+            ),
+            (
+                "monday sees the previous friday as recent",
                 local(2026, 11, 2, 9, 0),
                 local(2026, 10, 30, 22, 0),
+                DateBucket::LastSevenDays,
+            ),
+            (
+                "exactly seven days ago is still recent",
+                local(2026, 11, 9, 8, 0),
+                local(2026, 11, 2, 23, 0),
+                DateBucket::LastSevenDays,
+            ),
+            (
+                "eight days ago is older",
+                local(2026, 11, 9, 23, 0),
+                local(2026, 11, 1, 0, 30),
                 DateBucket::Older,
             ),
             (
-                "sunday sees monday of the same iso week",
-                local(2026, 11, 8, 20, 0),
-                local(2026, 11, 2, 7, 0),
-                DateBucket::ThisWeek,
+                "recent days across a year boundary",
+                local(2027, 1, 2, 12, 0),
+                local(2026, 12, 28, 12, 0),
+                DateBucket::LastSevenDays,
             ),
             (
-                "week across a year boundary",
-                local(2027, 1, 1, 12, 0),
-                local(2026, 12, 29, 12, 0),
-                DateBucket::ThisWeek,
-            ),
-            (
-                "same week number in another year",
+                "same date in another year",
                 local(2026, 11, 4, 12, 0),
-                local(2025, 11, 5, 12, 0),
+                local(2025, 11, 4, 12, 0),
                 DateBucket::Older,
             ),
             (

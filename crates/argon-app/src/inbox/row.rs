@@ -18,9 +18,8 @@ const REVIEWER_OVERLAP: f32 = -5.;
 const MAX_REVIEWERS: usize = 3;
 const UNREAD_DOT: f32 = 6.;
 const REASON_INDENT: f32 = 62.;
-const BRANCH_MAX_WIDTH: f32 = 200.;
-const BRANCH_SHRINK: f32 = 1.5;
-const REPO_WIDTH: f32 = 230.;
+const BRANCH_MAX_WIDTH: f32 = 240.;
+const SEPARATOR: &str = "·";
 const CI_WIDTH: f32 = 18.;
 const REVIEWERS_WIDTH: f32 = 46.;
 const DIFF_WIDTH: f32 = 104.;
@@ -71,8 +70,7 @@ pub fn pr_row(
         .child(unread_dot(item.unread, cx))
         .child(state_icon(pr, cx))
         .child(avatar(&pr.author, AVATAR_SIZE))
-        .child(title_and_branch(item, cx))
-        .child(mono(labels::repo_ref(&pr.repo, pr.number), cx).w(px(REPO_WIDTH)))
+        .child(title(item, cx))
         .child(checks(pr.checks, cx))
         .child(reviewers(pr, cx))
         .child(diff_stat(pr, cx))
@@ -83,12 +81,30 @@ pub fn pr_row(
                 .flex()
                 .justify_end(),
         );
-    let reason = div()
+    let details = h_flex()
+        .w_full()
+        .min_w_0()
         .pl(px(REASON_INDENT))
-        .truncate()
+        .gap_1p5()
+        .items_center()
         .text_xs()
         .text_color(theme.muted_foreground)
-        .child(labels::reason_line(&item.reason, now, pr.updated_at));
+        .child(mono(labels::repo_ref(&pr.repo, pr.number), cx))
+        .child(SEPARATOR)
+        .child(
+            mono(pr.head.clone(), cx)
+                .flex_shrink(1.)
+                .min_w_0()
+                .max_w(px(BRANCH_MAX_WIDTH)),
+        )
+        .child(SEPARATOR)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(labels::reason_line(&item.reason, now, pr.updated_at)),
+        );
 
     div()
         .id(("inbox-row", position))
@@ -113,7 +129,7 @@ pub fn pr_row(
         })
         .cursor_pointer()
         .child(summary)
-        .child(reason)
+        .child(details)
 }
 
 pub fn avatar(login: &str, size: f32) -> Div {
@@ -181,28 +197,14 @@ fn state_icon(pr: &PullRequest, cx: &App) -> Icon {
     Icon::new(icon).small().text_color(color)
 }
 
-fn title_and_branch(item: &InboxItem, cx: &App) -> Div {
-    let theme = cx.theme();
-    h_flex()
+fn title(item: &InboxItem, cx: &App) -> Div {
+    div()
         .flex_1()
         .min_w_0()
-        .gap_2()
-        .items_center()
-        .child(
-            div()
-                .min_w_0()
-                .flex_shrink(1.)
-                .truncate()
-                .text_color(theme.foreground)
-                .when(item.unread, |this| this.font_semibold())
-                .child(item.pr.title.clone()),
-        )
-        .child(
-            mono(item.pr.head.clone(), cx)
-                .min_w_0()
-                .max_w(px(BRANCH_MAX_WIDTH))
-                .flex_shrink(BRANCH_SHRINK),
-        )
+        .truncate()
+        .text_color(cx.theme().foreground)
+        .when(item.unread, |this| this.font_semibold())
+        .child(item.pr.title.clone())
 }
 
 fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
