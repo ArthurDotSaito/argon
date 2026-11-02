@@ -2,16 +2,16 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use argon_core::DEFAULT_HOST;
 use chrono::{DateTime, Utc};
-use reqwest::StatusCode;
 use reqwest::header::{HeaderMap, USER_AGENT};
+use reqwest::{Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::error::{GithubError, Result};
 use crate::wire::{Envelope, ViewerData};
 
-const GITHUB_COM: &str = "github.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const FALLBACK_RESET: chrono::Duration = chrono::Duration::seconds(60);
 const VIEWER_QUERY: &str = include_str!("../queries/viewer.graphql");
@@ -30,10 +30,10 @@ pub struct Viewer {
 
 pub struct GithubClient {
     pub(crate) host: String,
-    token: String,
-    http: reqwest::Client,
+    pub(crate) token: String,
+    pub(crate) http: reqwest::Client,
     graphql_url: String,
-    rest_url: String,
+    pub(crate) rest_url: String,
     dropped_nodes: AtomicUsize,
 }
 
@@ -88,6 +88,23 @@ impl GithubClient {
         })
     }
 
+    pub(crate) fn check_status(&self, response: Response) -> Result<Response> {
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(GithubError::AuthMissing {
+                host: self.host.clone(),
+            });
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS
+            || (status == StatusCode::FORBIDDEN && rate_limit_exhausted(response.headers()))
+        {
+            return Err(GithubError::RateLimited {
+                reset_at: rate_limit_reset(response.headers()),
+            });
+        }
+        Ok(response.error_for_status()?)
+    }
+
     pub(crate) async fn graphql<T: DeserializeOwned>(
         &self,
         operation: &'static str,
@@ -103,26 +120,15 @@ impl GithubClient {
             .json(&json!({ "query": query, "variables": variables }))
             .send()
             .await?;
-        let status = response.status();
         tracing::debug!(
             host = %self.host,
             operation,
-            status = status.as_u16(),
+            status = response.status().as_u16(),
             elapsed_ms = started.elapsed().as_millis() as u64,
             "graphql request"
         );
         let reset_at = rate_limit_reset(response.headers());
-        if status == StatusCode::UNAUTHORIZED {
-            return Err(GithubError::AuthMissing {
-                host: self.host.clone(),
-            });
-        }
-        if status == StatusCode::TOO_MANY_REQUESTS
-            || (status == StatusCode::FORBIDDEN && rate_limit_exhausted(response.headers()))
-        {
-            return Err(GithubError::RateLimited { reset_at });
-        }
-        let body = response.error_for_status()?.bytes().await?;
+        let body = self.check_status(response)?.bytes().await?;
         let envelope: Envelope<T> = serde_json::from_slice(&body)?;
         let parsed = envelope.into_data(reset_at)?;
         if parsed.dropped_nodes > 0 {
@@ -157,7 +163,7 @@ fn rate_limit_reset(headers: &HeaderMap) -> DateTime<Utc> {
 }
 
 fn endpoints(host: &str) -> (String, String) {
-    if host == GITHUB_COM {
+    if host == DEFAULT_HOST {
         (
             "https://api.github.com/graphql".to_string(),
             "https://api.github.com".to_string(),

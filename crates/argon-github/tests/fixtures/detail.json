@@ -1,0 +1,306 @@
+{
+  "data": {
+    "node": {
+      "id": "PR_kwDOOrbita0482",
+      "number": 482,
+      "title": "Add retry budget to the slot finder",
+      "url": "https://github.com/orbita-health/atlas/pull/482",
+      "isDraft": false,
+      "state": "OPEN",
+      "createdAt": "2026-10-27T13:05:11Z",
+      "updatedAt": "2026-11-01T09:40:02Z",
+      "closedAt": null,
+      "author": { "login": "mcouto" },
+      "repository": { "nameWithOwner": "orbita-health/atlas" },
+      "baseRefName": "main",
+      "headRefName": "feat/retry-budget",
+      "headRefOid": "3fa91c0de4b27a85d6e1f09c4b7a2d83e5f61a90",
+      "body": "Adds a retry budget so the slot finder stops hammering the scheduling API.\n\n- budget per request\n- jittered backoff",
+      "additions": 214,
+      "deletions": 37,
+      "changedFiles": 9,
+      "reviewDecision": "CHANGES_REQUESTED",
+      "mergeable": "MERGEABLE",
+      "comments": { "totalCount": 2 },
+      "labels": {
+        "nodes": [
+          { "name": "needs-review", "color": "fbca04" },
+          { "name": "backend", "color": "0e8a16" }
+        ]
+      },
+      "reviewRequests": {
+        "nodes": [
+          { "requestedReviewer": { "login": "lfarias" } },
+          {
+            "requestedReviewer": {
+              "slug": "platform",
+              "organization": { "login": "orbita-health" }
+            }
+          },
+          { "requestedReviewer": { "login": "pbarros" } }
+        ]
+      },
+      "assignees": { "nodes": [{ "login": "mcouto" }] },
+      "latestReviews": {
+        "nodes": [
+          {
+            "author": { "login": "dnogueira" },
+            "state": "CHANGES_REQUESTED",
+            "submittedAt": "2026-10-30T17:22:45Z"
+          },
+          {
+            "author": { "login": "lfarias" },
+            "state": "COMMENTED",
+            "submittedAt": "2026-10-31T08:03:10Z"
+          }
+        ]
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "committedDate": "2026-10-31T20:11:09Z",
+              "statusCheckRollup": { "state": "FAILURE" }
+            }
+          }
+        ]
+      },
+      "allCommits": {
+        "nodes": [
+          {
+            "commit": {
+              "oid": "a1c4e7f0b92d3586714fe0ab39c85d2e61f7b034",
+              "messageHeadline": "Add retry budget type",
+              "messageBody": "Tracks attempts per request.\n\nNo behavior change yet.",
+              "committedDate": "2026-10-27T12:40:00Z",
+              "additions": 120,
+              "deletions": 4,
+              "author": { "name": "Marina Couto", "user": { "login": "mcouto" } },
+              "statusCheckRollup": { "state": "SUCCESS" }
+            }
+          },
+          {
+            "commit": {
+              "oid": "b2d5f8a1c03e4697825af1bc4ad96e3f72a8c145",
+              "messageHeadline": "Wire budget into slot finder",
+              "messageBody": "",
+              "committedDate": "2026-10-29T15:02:30Z",
+              "additions": 70,
+              "deletions": 20,
+              "author": { "name": "Marina Couto", "user": null },
+              "statusCheckRollup": { "state": "FAILURE" }
+            }
+          },
+          {
+            "commit": {
+              "oid": "3fa91c0de4b27a85d6e1f09c4b7a2d83e5f61a90",
+              "messageHeadline": "Fix off-by-one in budget refill",
+              "messageBody": null,
+              "committedDate": "2026-10-31T20:11:09Z",
+              "additions": 24,
+              "deletions": 13,
+              "author": null,
+              "statusCheckRollup": null
+            }
+          }
+        ]
+      },
+      "reviewThreads": {
+        "nodes": [
+          {
+            "id": "PRRT_kwDOOrbita01",
+            "isResolved": false,
+            "path": "src/retry/budget.ts",
+            "line": 41,
+            "startLine": 38,
+            "diffSide": "RIGHT",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOOrbita01",
+                  "author": { "login": "dnogueira" },
+                  "body": "This refill can overflow when the clock jumps back.",
+                  "createdAt": "2026-10-30T17:20:00Z"
+                },
+                {
+                  "id": "PRRC_kwDOOrbita02",
+                  "author": null,
+                  "body": "Good catch, will clamp.",
+                  "createdAt": "2026-10-30T18:02:10Z"
+                }
+              ]
+            }
+          },
+          {
+            "id": "PRRT_kwDOOrbita02",
+            "isResolved": true,
+            "path": "src/retry/legacy.ts",
+            "line": 12,
+            "startLine": null,
+            "diffSide": "LEFT",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOOrbita03",
+                  "author": { "login": "lfarias" },
+                  "body": "Why drop this guard?",
+                  "createdAt": "2026-10-30T17:21:00Z"
+                }
+              ]
+            }
+          },
+          {
+            "id": "PRRT_kwDOOrbita03",
+            "isResolved": false,
+            "path": "docs/retry.md",
+            "line": null,
+            "startLine": null,
+            "diffSide": "FUTURE_SIDE",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_kwDOOrbita04",
+                  "author": { "login": "lfarias" },
+                  "body": "Outdated: the paragraph moved.",
+                  "createdAt": "2026-10-31T08:00:00Z"
+                }
+              ]
+            }
+          },
+          null
+        ]
+      },
+      "timelineItems": {
+        "pageInfo": { "hasNextPage": true },
+        "nodes": [
+          {
+            "__typename": "PullRequestCommit",
+            "commit": {
+              "oid": "a1c4e7f0b92d3586714fe0ab39c85d2e61f7b034",
+              "messageHeadline": "Add retry budget type",
+              "committedDate": "2026-10-27T12:40:00Z",
+              "author": { "name": "Marina Couto", "user": { "login": "mcouto" } }
+            }
+          },
+          {
+            "__typename": "IssueComment",
+            "id": "IC_kwDOOrbita01",
+            "author": { "login": "mcouto" },
+            "body": "Ready for a first pass.",
+            "createdAt": "2026-10-27T13:10:00Z"
+          },
+          {
+            "__typename": "LabeledEvent",
+            "actor": { "login": "mcouto" },
+            "label": { "name": "needs-review" },
+            "createdAt": "2026-10-27T13:11:00Z"
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "actor": { "login": "mcouto" },
+            "requestedReviewer": { "login": "lfarias" },
+            "createdAt": "2026-10-27T13:12:00Z"
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "actor": { "login": "mcouto" },
+            "requestedReviewer": {
+              "slug": "platform",
+              "organization": { "login": "orbita-health" }
+            },
+            "createdAt": "2026-10-27T13:12:30Z"
+          },
+          {
+            "__typename": "ReviewRequestedEvent",
+            "actor": { "login": "mcouto" },
+            "requestedReviewer": null,
+            "createdAt": "2026-10-27T13:13:00Z"
+          },
+          {
+            "__typename": "PullRequestReview",
+            "id": "PRR_kwDOOrbita01",
+            "author": { "login": "dnogueira" },
+            "state": "CHANGES_REQUESTED",
+            "body": "A few things to address before merging.",
+            "submittedAt": "2026-10-30T17:22:45Z",
+            "createdAt": "2026-10-30T17:20:00Z",
+            "comments": {
+              "nodes": [
+                {
+                  "path": "src/retry/budget.ts",
+                  "line": 41,
+                  "body": "This refill can overflow when the clock jumps back.",
+                  "diffHunk": "@@ -35,6 +35,10 @@ export class Budget {\n   refill(now: number) {\n-    this.tokens += 1;\n+    this.tokens += now - this.last;\n   }"
+                },
+                {
+                  "path": "docs/retry.md",
+                  "line": null,
+                  "body": "Outdated: the paragraph moved.",
+                  "diffHunk": "@@ -1,3 +1,4 @@\n # Retry\n+Budget docs"
+                }
+              ]
+            }
+          },
+          {
+            "__typename": "HeadRefForcePushedEvent",
+            "actor": null,
+            "createdAt": "2026-10-31T20:12:00Z"
+          },
+          null,
+          { "__typename": "SomeFutureEvent" },
+          {
+            "__typename": "ReadyForReviewEvent",
+            "actor": { "login": "mcouto" },
+            "createdAt": "2026-10-31T20:30:00Z"
+          },
+          {
+            "__typename": "PullRequestReview",
+            "id": "PRR_kwDOOrbita02",
+            "author": { "login": "lfarias" },
+            "state": "APPROVED",
+            "body": "",
+            "submittedAt": "2026-10-31T21:00:00Z",
+            "createdAt": "2026-10-31T20:58:00Z",
+            "comments": { "nodes": [] }
+          },
+          {
+            "__typename": "PullRequestReview",
+            "id": "PRR_kwDOOrbita03",
+            "author": null,
+            "state": "COMMENTED",
+            "body": "Drive-by note.",
+            "submittedAt": null,
+            "createdAt": "2026-10-31T22:00:00Z",
+            "comments": { "nodes": [] }
+          },
+          {
+            "__typename": "IssueComment",
+            "id": "IC_kwDOOrbita02",
+            "author": null,
+            "body": "Automated comment from a deleted account.",
+            "createdAt": "2026-11-01T08:00:00Z"
+          },
+          {
+            "__typename": "PullRequestCommit",
+            "commit": {
+              "oid": "3fa91c0de4b27a85d6e1f09c4b7a2d83e5f61a90",
+              "messageHeadline": "Fix off-by-one in budget refill",
+              "committedDate": "2026-10-31T20:11:09Z",
+              "author": null
+            }
+          },
+          {
+            "__typename": "MergedEvent",
+            "actor": { "login": "mcouto" },
+            "createdAt": "2026-11-01T09:00:00Z"
+          },
+          {
+            "__typename": "ClosedEvent",
+            "actor": { "login": "mcouto" },
+            "createdAt": "2026-11-01T09:00:01Z"
+          }
+        ]
+      }
+    }
+  }
+}

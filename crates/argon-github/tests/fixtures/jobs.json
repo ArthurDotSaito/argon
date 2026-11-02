@@ -1,0 +1,94 @@
+{
+  "total_count": 7,
+  "jobs": [
+    {
+      "id": 7300000001,
+      "run_id": 9100000101,
+      "name": "build",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/orbita-health/atlas/actions/runs/9100000101/job/7300000001",
+      "started_at": "2026-11-01T20:12:03Z",
+      "completed_at": "2026-11-01T20:15:01Z",
+      "steps": [
+        { "name": "Set up job", "status": "completed", "conclusion": "success", "number": 1 },
+        { "name": "Build", "status": "completed", "conclusion": "success", "number": 2 }
+      ]
+    },
+    {
+      "id": 7300000002,
+      "run_id": 9100000101,
+      "name": "test (unit)",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/orbita-health/atlas/actions/runs/9100000101/job/7300000002",
+      "started_at": "2026-11-01T20:15:10Z",
+      "completed_at": "2026-11-01T20:19:44Z",
+      "steps": [
+        { "name": "Set up job", "status": "completed", "conclusion": "success", "number": 1 },
+        { "name": "Run tests", "status": "completed", "conclusion": "failure", "number": 2 },
+        { "name": "Upload report", "status": "completed", "conclusion": "skipped", "number": 3 },
+        { "name": "Post checkout", "status": "queued", "conclusion": null, "number": 4 }
+      ]
+    },
+    {
+      "id": 7300000003,
+      "run_id": 9100000101,
+      "name": "test (integration)",
+      "status": "in_progress",
+      "conclusion": null,
+      "html_url": "https://github.com/orbita-health/atlas/actions/runs/9100000101/job/7300000003",
+      "started_at": "2026-11-01T20:15:12Z",
+      "completed_at": null,
+      "steps": [
+        { "name": "Set up job", "status": "completed", "conclusion": "success", "number": 1 },
+        { "name": "Run integration suite", "status": "in_progress", "conclusion": null, "number": 2 }
+      ]
+    },
+    {
+      "id": 7300000004,
+      "run_id": 9100000101,
+      "name": "package",
+      "status": "queued",
+      "conclusion": null,
+      "html_url": "https://github.com/orbita-health/atlas/actions/runs/9100000101/job/7300000004",
+      "started_at": null,
+      "completed_at": null,
+      "steps": []
+    },
+    {
+      "id": 7300000005,
+      "run_id": 9100000101,
+      "name": "publish",
+      "status": "completed",
+      "conclusion": "skipped",
+      "html_url": "https://github.com/orbita-health/atlas/actions/runs/9100000101/job/7300000005",
+      "started_at": "2026-11-01T20:19:50Z",
+      "completed_at": "2026-11-01T20:19:50Z",
+      "steps": []
+    },
+    {
+      "id": 7300000006,
+      "run_id": 9100000101,
+      "name": "sanity",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "html_url": "https://github.com/orbita-health/atlas/actions/runs/9100000101/job/7300000006",
+      "started_at": "2026-11-01T20:15:20Z",
+      "completed_at": "2026-11-01T20:16:02Z",
+      "steps": [
+        { "name": "Set up job", "status": "completed", "conclusion": "cancelled", "number": 1 }
+      ]
+    },
+    {
+      "id": 7300000007,
+      "run_id": 9100000101,
+      "name": "coverage",
+      "status": "completed",
+      "conclusion": "timed_out",
+      "html_url": null,
+      "started_at": "2026-11-01T20:15:30Z",
+      "completed_at": "2026-11-01T21:15:30Z"
+    }
+  ]
+}

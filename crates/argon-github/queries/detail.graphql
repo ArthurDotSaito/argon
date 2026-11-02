@@ -1,0 +1,232 @@
+query PrDetail($id: ID!) {
+  node(id: $id) {
+    ... on PullRequest {
+      id
+      number
+      title
+      url
+      isDraft
+      state
+      createdAt
+      updatedAt
+      closedAt
+      author {
+        login
+      }
+      repository {
+        nameWithOwner
+      }
+      baseRefName
+      headRefName
+      headRefOid
+      body
+      additions
+      deletions
+      changedFiles
+      reviewDecision
+      mergeable
+      comments {
+        totalCount
+      }
+      labels(first: 50) {
+        nodes {
+          name
+          color
+        }
+      }
+      reviewRequests(first: 20) {
+        nodes {
+          requestedReviewer {
+            ... on User {
+              login
+            }
+            ... on Team {
+              slug
+              organization {
+                login
+              }
+            }
+          }
+        }
+      }
+      assignees(first: 10) {
+        nodes {
+          login
+        }
+      }
+      latestReviews(first: 20) {
+        nodes {
+          author {
+            login
+          }
+          state
+          submittedAt
+        }
+      }
+      commits(last: 1) {
+        nodes {
+          commit {
+            committedDate
+            statusCheckRollup {
+              state
+            }
+          }
+        }
+      }
+      allCommits: commits(first: 250) {
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            messageBody
+            committedDate
+            additions
+            deletions
+            author {
+              name
+              user {
+                login
+              }
+            }
+            statusCheckRollup {
+              state
+            }
+          }
+        }
+      }
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          path
+          line
+          startLine
+          diffSide
+          comments(first: 50) {
+            nodes {
+              id
+              author {
+                login
+              }
+              body
+              createdAt
+            }
+          }
+        }
+      }
+      timelineItems(
+        first: 100
+        itemTypes: [
+          ISSUE_COMMENT
+          PULL_REQUEST_REVIEW
+          PULL_REQUEST_COMMIT
+          REVIEW_REQUESTED_EVENT
+          LABELED_EVENT
+          HEAD_REF_FORCE_PUSHED_EVENT
+          MERGED_EVENT
+          CLOSED_EVENT
+          READY_FOR_REVIEW_EVENT
+        ]
+      ) {
+        pageInfo {
+          hasNextPage
+        }
+        nodes {
+          __typename
+          ... on IssueComment {
+            id
+            author {
+              login
+            }
+            body
+            createdAt
+          }
+          ... on PullRequestReview {
+            id
+            author {
+              login
+            }
+            state
+            body
+            submittedAt
+            createdAt
+            comments(first: 50) {
+              nodes {
+                path
+                line
+                body
+                diffHunk
+              }
+            }
+          }
+          ... on PullRequestCommit {
+            commit {
+              oid
+              messageHeadline
+              committedDate
+              author {
+                name
+                user {
+                  login
+                }
+              }
+            }
+          }
+          ... on ReviewRequestedEvent {
+            actor {
+              login
+            }
+            requestedReviewer {
+              ... on User {
+                login
+              }
+              ... on Mannequin {
+                login
+              }
+              ... on Team {
+                slug
+                organization {
+                  login
+                }
+              }
+            }
+            createdAt
+          }
+          ... on LabeledEvent {
+            actor {
+              login
+            }
+            label {
+              name
+            }
+            createdAt
+          }
+          ... on HeadRefForcePushedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on MergedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on ClosedEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+          ... on ReadyForReviewEvent {
+            actor {
+              login
+            }
+            createdAt
+          }
+        }
+      }
+    }
+  }
+}

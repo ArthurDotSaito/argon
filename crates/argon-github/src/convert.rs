@@ -5,7 +5,7 @@ use argon_core::{
 
 use crate::wire::{
     WireMergeable, WirePr, WirePrState, WireReview, WireReviewDecision, WireReviewRequest,
-    WireReviewState, WireRollupState,
+    WireReviewState, WireReviewer, WireRollupState,
 };
 
 const GHOST: &str = "ghost";
@@ -18,7 +18,7 @@ pub(crate) fn into_pull_requests(nodes: Vec<Option<WirePr>>, host: &str) -> Vec<
         .collect()
 }
 
-fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
+pub(crate) fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
     let head_commit = wire
         .commits
         .into_items()
@@ -78,12 +78,15 @@ fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
     }
 }
 
-fn login_or_ghost(login: Option<String>) -> String {
+pub(crate) fn login_or_ghost(login: Option<String>) -> String {
     login.unwrap_or_else(|| GHOST.to_string())
 }
 
 fn reviewer_name(request: WireReviewRequest) -> Option<String> {
-    let reviewer = request.requested_reviewer?;
+    reviewer_label(request.requested_reviewer?)
+}
+
+pub(crate) fn reviewer_label(reviewer: WireReviewer) -> Option<String> {
     match (reviewer.slug, reviewer.organization, reviewer.login) {
         (Some(slug), Some(organization), _) => Some(format!("{}/{slug}", organization.login)),
         (_, _, login) => login,
@@ -124,7 +127,7 @@ fn mergeable(mergeable: WireMergeable) -> Mergeable {
     }
 }
 
-fn review_state(state: WireReviewState) -> ReviewState {
+pub(crate) fn review_state(state: WireReviewState) -> ReviewState {
     match state {
         WireReviewState::Approved => ReviewState::Approved,
         WireReviewState::ChangesRequested => ReviewState::ChangesRequested,
@@ -134,7 +137,7 @@ fn review_state(state: WireReviewState) -> ReviewState {
     }
 }
 
-fn checks_state(state: WireRollupState) -> Option<ChecksState> {
+pub(crate) fn checks_state(state: WireRollupState) -> Option<ChecksState> {
     match state {
         WireRollupState::Success => Some(ChecksState::Success),
         WireRollupState::Failure => Some(ChecksState::Failure),
