@@ -1,0 +1,362 @@
+use std::time::Duration;
+
+use chrono::Utc;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ListAlignment, ListOffset, ListState, ParentElement as _,
+    Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window,
+    div, list, px,
+};
+
+use super::labels;
+use super::model::InboxModel;
+use super::row::{self, PR_ROW_HEIGHT};
+use super::sections::InboxRow;
+use crate::actions::{
+    ArchiveSelected, ClearFilter, FocusFilter, OpenSelected, SelectNext, SelectPrevious, ToggleRead,
+};
+use crate::keymap::{INBOX_CONTEXT, INBOX_LIST_CONTEXT};
+
+const LIST_OVERDRAW: f32 = 260.;
+const FILTER_WIDTH: f32 = 320.;
+const SINGLE_CLICK_DELAY: Duration = Duration::from_millis(300);
+
+pub struct InboxPane {
+    model: Entity<InboxModel>,
+    filter: Entity<InputState>,
+    list_state: ListState,
+    focus_handle: FocusHandle,
+    scroll_generation: u64,
+    rows_revision: u64,
+    selected_row: Option<usize>,
+    pending_click: Option<Task<()>>,
+    _subscriptions: [Subscription; 2],
+}
+
+impl InboxPane {
+    pub fn new(model: Entity<InboxModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder(labels::FILTER_PLACEHOLDER));
+        let filter_subscription = cx.subscribe_in(&filter, window, Self::on_filter_event);
+        let model_subscription = cx.observe(&model, |this, _, cx| this.sync_list(cx));
+        let (rows, scroll_generation, rows_revision, selected_row) = {
+            let model = model.read(cx);
+            (
+                model.rows().len(),
+                model.scroll_generation(),
+                model.rows_revision(),
+                model.selected_row(),
+            )
+        };
+        let list_state = ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW));
+        list_state.reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
+        Self {
+            model,
+            filter,
+            list_state,
+            focus_handle: cx.focus_handle(),
+            scroll_generation,
+            rows_revision,
+            selected_row,
+            pending_click: None,
+            _subscriptions: [filter_subscription, model_subscription],
+        }
+    }
+
+    fn sync_list(&mut self, cx: &mut Context<Self>) {
+        let model = self.model.read(cx);
+        let rows = model.rows().len();
+        let (scroll_generation, rows_revision) = (model.scroll_generation(), model.rows_revision());
+        let selected_row = model.selected_row();
+        let reset = scroll_generation != self.scroll_generation;
+        if reset {
+            self.list_state
+                .reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
+        } else if rows_revision != self.rows_revision {
+            let top = self.list_state.logical_scroll_top();
+            self.list_state
+                .reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
+            self.list_state.scroll_to(ListOffset {
+                item_ix: top.item_ix.min(rows.saturating_sub(1)),
+                offset_in_item: top.offset_in_item,
+            });
+        }
+        let laid_out = self.list_state.viewport_bounds().size.height > px(0.);
+        if !reset
+            && laid_out
+            && self.selected_row.is_some()
+            && selected_row != self.selected_row
+            && let Some(row) = selected_row
+        {
+            self.list_state.scroll_to_reveal_item(row);
+        }
+        self.scroll_generation = scroll_generation;
+        self.rows_revision = rows_revision;
+        self.selected_row = selected_row;
+        cx.notify();
+    }
+
+    fn on_filter_event(
+        &mut self,
+        filter: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                let query = filter.read(cx).value();
+                self.model
+                    .update(cx, |model, cx| model.set_query(&query, cx));
+            }
+            InputEvent::PressEnter { .. } => self.focus_handle.focus(window, cx),
+            _ => {}
+        }
+    }
+
+    fn on_row_click(
+        &mut self,
+        position: usize,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_handle.focus(window, cx);
+        self.model
+            .update(cx, |model, cx| model.select(position, cx));
+        if click_count >= 2 {
+            self.pending_click = None;
+            self.model
+                .update(cx, |model, cx| model.open(position, false, cx));
+            return;
+        }
+        let Some(id) = self
+            .model
+            .read(cx)
+            .item_at(position)
+            .map(|item| item.pr.id.clone())
+        else {
+            return;
+        };
+        let model = self.model.downgrade();
+        self.pending_click = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(SINGLE_CLICK_DELAY).await;
+            _ = model.update(cx, |model, cx| model.open_pr(&id, true, cx));
+        }));
+    }
+
+    fn on_select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.model.update(cx, |model, cx| model.select_next(cx));
+    }
+
+    fn on_select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        self.model.update(cx, |model, cx| model.select_previous(cx));
+    }
+
+    fn on_open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.model
+            .update(cx, |model, cx| model.open_selected(true, cx));
+    }
+
+    fn on_archive_selected(&mut self, _: &ArchiveSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.model
+            .update(cx, |model, cx| model.archive_selected(cx));
+    }
+
+    fn on_toggle_read(&mut self, _: &ToggleRead, _: &mut Window, cx: &mut Context<Self>) {
+        self.model
+            .update(cx, |model, cx| model.toggle_read_selected(cx));
+    }
+
+    fn on_focus_filter(&mut self, _: &FocusFilter, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter
+            .update(cx, |filter, cx| filter.focus(window, cx));
+    }
+
+    fn on_clear_filter(&mut self, _: &ClearFilter, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter
+            .update(cx, |filter, cx| filter.set_value("", window, cx));
+        self.model.update(cx, |model, cx| model.set_query("", cx));
+        self.focus_handle.focus(window, cx);
+    }
+
+    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let model = self.model.read(cx);
+        let view = model.view();
+        let org_chip = model.org_filter().map(|org| {
+            let inbox = self.model.downgrade();
+            h_flex()
+                .id("inbox-org-chip")
+                .gap_1()
+                .px_1p5()
+                .h(px(20.))
+                .items_center()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border)
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(|style| style.text_color(theme.foreground))
+                .child(org.name.clone())
+                .child(Icon::new(IconName::Close).xsmall())
+                .on_click(move |_, _, cx| {
+                    _ = inbox.update(cx, |model, cx| model.clear_org(cx));
+                })
+        });
+        h_flex()
+            .h(px(40.))
+            .px_3()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_base()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child(labels::view_title(view)),
+            )
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(model.visible_count().to_string()),
+            )
+            .children(org_chip)
+            .child(div().flex_1())
+            .child(
+                div().w(px(FILTER_WIDTH)).child(
+                    Input::new(&self.filter)
+                        .small()
+                        .prefix(Icon::new(IconName::Search).xsmall())
+                        .suffix(
+                            div()
+                                .px_1()
+                                .rounded(theme.radius)
+                                .border_1()
+                                .border_color(theme.border)
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(labels::FILTER_SHORTCUT),
+                        ),
+                ),
+            )
+    }
+
+    fn body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let model = self.model.read(cx);
+        let message = if !model.is_loaded() && model.error().is_none() {
+            Some(labels::LOADING)
+        } else if model.rows().is_empty() && model.error().is_none() {
+            Some(if model.has_query() {
+                labels::EMPTY_FILTER
+            } else {
+                labels::EMPTY_VIEW
+            })
+        } else {
+            None
+        };
+        if let Some(message) = message {
+            return v_flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(message)
+                .into_any_element();
+        }
+        let inbox = self.model.clone();
+        let pane = cx.weak_entity();
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(
+                list(self.list_state.clone(), move |ix, _, cx| {
+                    render_list_row(&inbox, &pane, ix, cx)
+                })
+                .size_full(),
+            )
+            .vertical_scrollbar(&self.list_state)
+            .into_any_element()
+    }
+}
+
+fn render_list_row(
+    inbox: &Entity<InboxModel>,
+    pane: &WeakEntity<InboxPane>,
+    ix: usize,
+    cx: &mut App,
+) -> AnyElement {
+    let model = inbox.read(cx);
+    match model.rows().get(ix) {
+        Some(InboxRow::Header { title, count }) => {
+            row::header(title.clone(), *count, cx).into_any_element()
+        }
+        Some(InboxRow::Pr { position }) => {
+            let position = *position;
+            let Some(item) = model.item_at(position) else {
+                return div().into_any_element();
+            };
+            let pane = pane.clone();
+            row::pr_row(position, item, model.is_selected(position), Utc::now(), cx)
+                .on_click(move |event: &ClickEvent, window, cx| {
+                    _ = pane.update(cx, |pane, cx| {
+                        pane.on_row_click(position, event.click_count(), window, cx)
+                    });
+                })
+                .into_any_element()
+        }
+        None => div().into_any_element(),
+    }
+}
+
+impl Focusable for InboxPane {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for InboxPane {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let error = self.model.read(cx).error().cloned();
+        let banner = error.map(|error| {
+            div()
+                .px_3()
+                .py_1()
+                .text_xs()
+                .bg(theme.danger.opacity(0.15))
+                .text_color(theme.danger)
+                .child(error)
+        });
+        v_flex()
+            .key_context(INBOX_CONTEXT)
+            .size_full()
+            .bg(theme.background)
+            .on_action(cx.listener(Self::on_clear_filter))
+            .child(self.header(cx))
+            .children(banner)
+            .child(
+                v_flex()
+                    .key_context(INBOX_LIST_CONTEXT)
+                    .track_focus(&self.focus_handle)
+                    .flex_1()
+                    .min_h_0()
+                    .on_action(cx.listener(Self::on_select_next))
+                    .on_action(cx.listener(Self::on_select_previous))
+                    .on_action(cx.listener(Self::on_open_selected))
+                    .on_action(cx.listener(Self::on_archive_selected))
+                    .on_action(cx.listener(Self::on_toggle_read))
+                    .on_action(cx.listener(Self::on_focus_filter))
+                    .child(self.body(cx)),
+            )
+    }
+}

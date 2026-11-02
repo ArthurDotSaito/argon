@@ -8,7 +8,7 @@ use argon_core::Paths;
 use gpui_kit::component::dock::{DockArea, DockAreaState, DockPlacement};
 use gpui_kit::{App, AppContext as _, Entity, Task, WeakEntity, Window};
 
-pub const LAYOUT_VERSION: usize = 1;
+pub const LAYOUT_VERSION: usize = 2;
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(300);
 

@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::dock::{
-    DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, PaneRef, PanelId, PanelStyle,
-    panel_handle, register_panel,
+    BasePanelView, DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, PaneRef, PanelId,
+    PanelStyle, panel_handle, register_panel,
 };
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EntityId, FocusHandle, Focusable as _,
@@ -16,6 +17,7 @@ use crate::actions::{CloseActiveItem, ToggleBottomDock, ToggleLeftDock, ToggleRi
 use crate::center::{
     CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel, CenterPanelEvent,
 };
+use crate::inbox::{InboxEvent, InboxModel, InboxView, ViewsPanel};
 use crate::keymap::WORKSPACE_CONTEXT;
 use crate::layout_store::{self, LAYOUT_VERSION, LayoutSaver};
 use crate::placeholders::{DockPlaceholder, DockSlot};
@@ -24,9 +26,6 @@ use crate::sync_status::SyncStatus;
 use crate::title_bar::AppTitleBar;
 
 const DOCK_AREA_ID: &str = "argon-workspace";
-const SAMPLE_PR: &str = "orbita-health/scheduling-api#482";
-const NEEDS_YOU_PLACEHOLDER: usize = 4;
-const RUNNING_AGENTS_PLACEHOLDER: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockPosition {
@@ -70,24 +69,27 @@ pub struct Workspace {
     layout_saver: LayoutSaver,
     center_subscriptions: HashMap<EntityId, Subscription>,
     sync_status: Entity<SyncStatus>,
-    _dock_subscription: Subscription,
-    _sync_subscription: Subscription,
+    inbox: Entity<InboxModel>,
+    _subscriptions: [Subscription; 4],
 }
 
 impl Workspace {
     pub fn new(
         content_factory: CenterContentFactory,
         sync_status: Entity<SyncStatus>,
+        inbox: Entity<InboxModel>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        register_panels(content_factory.clone(), cx);
+        register_panels(content_factory.clone(), inbox.clone(), cx);
         let (dock_area, skin) = DockSkin::dock_area(DOCK_AREA_ID, Some(LAYOUT_VERSION), window, cx);
         skin.set_panel_style(PanelStyle::TabBar, cx);
         skin.set_toggle_button_visible(false, cx);
         skin.set_close_button_visible(true, cx);
         let dock_subscription = cx.subscribe(&dock_area, Self::on_dock_event);
         let sync_subscription = cx.observe(&sync_status, |_, _, cx| cx.notify());
+        let inbox_observation = cx.observe(&inbox, |_, _, cx| cx.notify());
+        let inbox_subscription = cx.subscribe_in(&inbox, window, Self::on_inbox_event);
 
         let workspace = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -102,8 +104,13 @@ impl Workspace {
             layout_saver: LayoutSaver::default(),
             center_subscriptions: HashMap::new(),
             sync_status,
-            _dock_subscription: dock_subscription,
-            _sync_subscription: sync_subscription,
+            inbox,
+            _subscriptions: [
+                dock_subscription,
+                sync_subscription,
+                inbox_observation,
+                inbox_subscription,
+            ],
         };
         if !this.restore_layout(window, cx) {
             this.reset_layout(window, cx);
@@ -111,7 +118,10 @@ impl Workspace {
             this.open_item(CenterItem::Inbox, false, window, cx);
         }
         this.watch_center_panels(cx);
-        this.focus_handle.focus(window, cx);
+        match this.active_center_panel(window, cx) {
+            Some(panel) => panel.read(cx).focus_handle(cx).focus(window, cx),
+            None => this.focus_handle.focus(window, cx),
+        }
         this
     }
 
@@ -157,6 +167,25 @@ impl Workspace {
             area.toggle_dock(dock.placement(), window, cx)
         });
         cx.notify();
+    }
+
+    pub fn show_view(&mut self, view: InboxView, cx: &mut Context<Self>) {
+        self.inbox.update(cx, |inbox, cx| inbox.show_view(view, cx));
+    }
+
+    fn on_inbox_event(
+        &mut self,
+        _: &Entity<InboxModel>,
+        event: &InboxEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InboxEvent::OpenPr { id, preview } => {
+                self.open_item(CenterItem::Pr(id.clone()), *preview, window, cx);
+            }
+            InboxEvent::ShowList => self.open_item(CenterItem::Inbox, false, window, cx),
+        }
     }
 
     pub fn close_active_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -259,11 +288,11 @@ impl Workspace {
     }
 
     fn reset_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let inbox = self.inbox.clone();
         self.dock_area.update(cx, |area, cx| {
             area.set_center(DockLayout::tabs(), window, cx);
             for dock in DockPosition::ALL {
-                let slot = dock.slot();
-                let panel = panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx)));
+                let panel = dock_panel(dock.slot(), &inbox, cx);
                 area.set_dock(
                     dock.placement(),
                     DockLayout::tabs().panel_view(panel, cx),
@@ -274,7 +303,6 @@ impl Workspace {
             }
         });
         self.open_item(CenterItem::Inbox, false, window, cx);
-        self.open_item(CenterItem::Pr(SAMPLE_PR.into()), true, window, cx);
     }
 
     fn on_dock_event(&mut self, _: Entity<DockArea>, event: &DockEvent, cx: &mut Context<Self>) {
@@ -330,28 +358,32 @@ impl Workspace {
     }
 }
 
-fn register_panels(content_factory: CenterContentFactory, cx: &mut App) {
+fn register_panels(content_factory: CenterContentFactory, inbox: Entity<InboxModel>, cx: &mut App) {
     register_panel(cx, CENTER_PANEL, move |context, window, cx| {
         let info = context.info().clone();
         let factory = content_factory.clone();
         panel_handle(cx.new(|cx| CenterPanel::restore(&info, factory, window, cx)))
     });
     for slot in DockSlot::ALL {
+        let inbox = inbox.clone();
         register_panel(cx, slot.panel_name(), move |_, _, cx| {
-            panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx)))
+            dock_panel(slot, &inbox, cx)
         });
+    }
+}
+
+fn dock_panel(slot: DockSlot, inbox: &Entity<InboxModel>, cx: &mut App) -> Arc<dyn BasePanelView> {
+    match slot {
+        DockSlot::Views => panel_handle(cx.new(|cx| ViewsPanel::new(inbox.clone(), cx))),
+        slot => panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx))),
     }
 }
 
 impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let docks = self.dock_open_states(cx);
-        let status_bar = WorkspaceStatusBar::new(
-            cx.weak_entity(),
-            docks,
-            NEEDS_YOU_PLACEHOLDER,
-            RUNNING_AGENTS_PLACEHOLDER,
-        );
+        let needs_you = self.inbox.read(cx).count(InboxView::NeedsYou);
+        let status_bar = WorkspaceStatusBar::new(cx.weak_entity(), docks, needs_you);
         let sync_status = self.sync_status.read(cx);
         let account = sync_status
             .login

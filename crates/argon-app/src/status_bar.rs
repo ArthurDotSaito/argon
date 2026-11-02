@@ -4,10 +4,11 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, h_flex,
 };
 use gpui_kit::{
-    App, IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _, WeakEntity,
-    Window, div, px,
+    App, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
 };
 
+use crate::inbox::{InboxView, needs_you_status};
 use crate::workspace::{DockPosition, Workspace};
 
 const STATUS_BAR_HEIGHT: f32 = 24.;
@@ -18,7 +19,6 @@ pub struct WorkspaceStatusBar {
     workspace: WeakEntity<Workspace>,
     docks: Vec<(DockPosition, bool)>,
     needs_you: usize,
-    running_agents: usize,
 }
 
 impl WorkspaceStatusBar {
@@ -26,13 +26,11 @@ impl WorkspaceStatusBar {
         workspace: WeakEntity<Workspace>,
         docks: Vec<(DockPosition, bool)>,
         needs_you: usize,
-        running_agents: usize,
     ) -> Self {
         Self {
             workspace,
             docks,
             needs_you,
-            running_agents,
         }
     }
 
@@ -75,20 +73,27 @@ impl RenderOnce for WorkspaceStatusBar {
                 .iter()
                 .map(|(dock, open)| self.dock_toggle(*dock, *open)),
         );
-        let agents_label = match self.running_agents {
-            1 => "1 agente rodando".to_string(),
-            count => format!("{count} agentes rodando"),
-        };
+        let workspace = self.workspace.clone();
+        let needs_you = div()
+            .id("status-needs-you")
+            .cursor_pointer()
+            .text_color(cx.theme().primary)
+            .hover(|style| style.text_color(cx.theme().foreground))
+            .child(status_item(
+                IconName::Inbox,
+                needs_you_status(self.needs_you).into(),
+            ))
+            .on_click(move |_, _, cx| {
+                _ = workspace.update(cx, |workspace, cx| {
+                    workspace.show_view(InboxView::NeedsYou, cx)
+                });
+            });
 
         StatusBar::new()
             .h(px(STATUS_BAR_HEIGHT))
             .py_0()
             .left(toggles)
-            .child(div().text_color(cx.theme().primary).child(status_item(
-                IconName::Inbox,
-                format!("{} needs you", self.needs_you).into(),
-            )))
-            .child(status_item(IconName::Bot, agents_label.into()))
+            .child(needs_you)
             .right(div().child(VERSION))
     }
 }

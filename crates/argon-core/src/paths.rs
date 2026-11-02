@@ -1,6 +1,8 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 const APP_DIR: &str = "Argon";
+const DATA_DIR_ENV: &str = "ARGON_DATA_DIR";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -10,10 +12,18 @@ pub struct Paths {
 
 impl Paths {
     pub fn resolve() -> Paths {
+        Self::resolve_with(std::env::var_os(DATA_DIR_ENV))
+    }
+
+    fn resolve_with(data_dir_override: Option<OsString>) -> Paths {
         let base = |dir: Option<PathBuf>| dir.unwrap_or_else(|| PathBuf::from(".")).join(APP_DIR);
+        let data_dir = data_dir_override
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| base(dirs::data_local_dir()));
         Paths {
             config_dir: base(dirs::config_dir()),
-            data_dir: base(dirs::data_local_dir()),
+            data_dir,
         }
     }
 
@@ -76,8 +86,24 @@ mod tests {
 
     #[test]
     fn resolve_scopes_both_directories_to_argon() {
-        let paths = Paths::resolve();
+        let paths = Paths::resolve_with(None);
         assert_eq!(paths.config_dir.file_name().unwrap(), "Argon");
         assert_eq!(paths.data_dir.file_name().unwrap(), "Argon");
+    }
+
+    #[test]
+    fn data_dir_override_replaces_only_the_data_dir() {
+        let default = Paths::resolve_with(None);
+        let custom = PathBuf::from("scratch").join("seed");
+        let paths = Paths::resolve_with(Some(custom.clone().into_os_string()));
+        assert_eq!(paths.data_dir, custom);
+        assert_eq!(paths.db_file(), custom.join("argon.db"));
+        assert_eq!(paths.config_dir, default.config_dir);
+    }
+
+    #[test]
+    fn empty_data_dir_override_is_ignored() {
+        let paths = Paths::resolve_with(Some(OsString::new()));
+        assert_eq!(paths, Paths::resolve_with(None));
     }
 }

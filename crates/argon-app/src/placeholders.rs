@@ -1,53 +1,110 @@
-use std::rc::Rc;
-
+use argon_core::PrId;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window, div,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
 };
 
-use crate::center::{CenterContentFactory, CenterItem};
+use crate::inbox::{self, InboxModel};
 
-pub fn placeholder_content_factory() -> CenterContentFactory {
-    Rc::new(|item, _, cx| cx.new(|_| CenterPlaceholder { item: item.clone() }).into())
-}
-
-struct CenterPlaceholder {
-    item: CenterItem,
+pub struct CenterPlaceholder {
+    title: SharedString,
+    description: SharedString,
+    focus_handle: FocusHandle,
 }
 
 impl CenterPlaceholder {
-    fn description(&self) -> SharedString {
-        match &self.item {
-            CenterItem::Inbox => "Seus PRs aparecem aqui.".into(),
-            CenterItem::Pr(id) => id.clone().into(),
-            CenterItem::Settings => "Preferências do Argon.".into(),
+    pub fn new(
+        title: impl Into<SharedString>,
+        description: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            description: description.into(),
+            focus_handle: cx.focus_handle(),
         }
+    }
+}
+
+impl Focusable for CenterPlaceholder {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
 impl Render for CenterPlaceholder {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_1()
-            .child(
-                div()
-                    .text_lg()
-                    .font_semibold()
-                    .text_color(theme.foreground)
-                    .child(self.item.title()),
-            )
-            .child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child(self.description()),
-            )
+        placeholder_body(
+            &self.focus_handle,
+            self.title.clone(),
+            self.description.clone(),
+            cx,
+        )
     }
+}
+
+pub struct PrPlaceholder {
+    id: PrId,
+    model: Entity<InboxModel>,
+    focus_handle: FocusHandle,
+    _subscription: Subscription,
+}
+
+impl PrPlaceholder {
+    pub fn new(id: PrId, model: Entity<InboxModel>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&model, |_, _, cx| cx.notify());
+        Self {
+            id,
+            model,
+            focus_handle: cx.focus_handle(),
+            _subscription: subscription,
+        }
+    }
+}
+
+impl Focusable for PrPlaceholder {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for PrPlaceholder {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (title, description): (SharedString, SharedString) =
+            match self.model.read(cx).pr(&self.id) {
+                Some(pr) => (
+                    format!("#{} {}", pr.number, pr.title).into(),
+                    format!("{} · {}", pr.repo, inbox::PR_DETAIL_PENDING).into(),
+                ),
+                None => (self.id.0.clone().into(), inbox::PR_NOT_LOADED.into()),
+            };
+        placeholder_body(&self.focus_handle, title, description, cx)
+    }
+}
+
+fn placeholder_body(
+    focus_handle: &FocusHandle,
+    title: SharedString,
+    description: SharedString,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    v_flex()
+        .track_focus(focus_handle)
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .child(
+            div()
+                .text_lg()
+                .font_semibold()
+                .text_color(theme.foreground)
+                .child(title),
+        )
+        .child(div().text_color(theme.muted_foreground).child(description))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,7 +119,7 @@ impl DockSlot {
 
     pub fn panel_name(self) -> &'static str {
         match self {
-            Self::Views => "argon.views",
+            Self::Views => inbox::VIEWS_PANEL,
             Self::Agents => "argon.agents",
             Self::Log => "argon.log",
         }

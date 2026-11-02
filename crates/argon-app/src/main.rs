@@ -1,6 +1,9 @@
 mod actions;
+mod assets;
 mod center;
 mod config_load;
+mod content;
+mod inbox;
 mod keymap;
 mod layout_store;
 mod placeholders;
@@ -19,6 +22,8 @@ use gpui_kit::{
 };
 use tracing_appender::non_blocking::WorkerGuard;
 
+use crate::assets::AppAssets;
+use crate::inbox::{InboxHandle, InboxModel};
 use crate::services::{AppServices, Services};
 use crate::sync_status::SyncStatus;
 use crate::workspace::Workspace;
@@ -38,7 +43,7 @@ fn main() {
     let config = config_load::load(&paths);
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(AppAssets)
         .run(move |cx| {
             cx.set_global(LogGuard(log_guard));
             cx.on_app_quit(|cx| {
@@ -52,13 +57,15 @@ fn main() {
             keymap::bind(cx);
             let (services, events) = Services::start(paths, config);
             let sync_status = cx.new(|cx| SyncStatus::new(services.clone(), events, cx));
+            let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));
-            open_main_window(sync_status, cx);
+            cx.set_global(InboxHandle(inbox.clone()));
+            open_main_window(sync_status, inbox, cx);
             cx.activate(true);
         });
 }
 
-fn open_main_window(sync_status: Entity<SyncStatus>, cx: &mut App) {
+fn open_main_window(sync_status: Entity<SyncStatus>, inbox: Entity<InboxModel>, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -71,8 +78,9 @@ fn open_main_window(sync_status: Entity<SyncStatus>, cx: &mut App) {
     gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| {
             Workspace::new(
-                placeholders::placeholder_content_factory(),
+                content::content_factory(inbox.clone()),
                 sync_status,
+                inbox,
                 window,
                 cx,
             )

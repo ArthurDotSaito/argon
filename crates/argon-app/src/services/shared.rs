@@ -9,6 +9,7 @@ use super::orgs::merge_tracked;
 pub(super) struct Shared {
     config: RwLock<Config>,
     accounts: RwLock<Vec<Account>>,
+    admin_orgs: RwLock<Vec<String>>,
 }
 
 impl Shared {
@@ -16,6 +17,7 @@ impl Shared {
         Self {
             config: RwLock::new(config),
             accounts: RwLock::default(),
+            admin_orgs: RwLock::default(),
         }
     }
 
@@ -38,6 +40,21 @@ impl Shared {
             .accounts
             .write()
             .unwrap_or_else(PoisonError::into_inner) = accounts;
+    }
+
+    pub(super) fn admin_orgs(&self) -> Vec<String> {
+        self.admin_orgs
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(super) fn add_admin_orgs(&self, orgs: Vec<String>) {
+        let mut admin_orgs = self
+            .admin_orgs
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        merge_tracked(&mut admin_orgs, orgs);
     }
 
     pub(super) fn seed_tracked(&self, admin_orgs: Vec<String>, paths: &Paths) {

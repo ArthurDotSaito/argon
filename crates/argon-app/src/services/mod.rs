@@ -52,18 +52,20 @@ impl Services {
         _ = self.requests.unbounded_send(SyncRequest);
     }
 
-    #[expect(dead_code, reason = "consumed by the inbox model")]
     pub fn store(&self) -> StoreHandle {
         self.store.clone()
     }
 
-    #[expect(dead_code, reason = "consumed by the inbox model")]
     pub fn config(&self) -> Config {
         self.shared.config()
     }
 
     pub fn accounts(&self) -> Vec<Account> {
         self.shared.accounts()
+    }
+
+    pub fn admin_orgs(&self) -> Vec<String> {
+        self.shared.admin_orgs()
     }
 }
 

@@ -325,6 +325,7 @@ impl SyncLoop {
         }
         if !connected.is_empty() {
             self.publish_accounts();
+            self.worker.shared.add_admin_orgs(admin_orgs(&connected));
             self.seed_orgs(&connected);
         }
     }

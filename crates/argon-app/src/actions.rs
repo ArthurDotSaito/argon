@@ -4,6 +4,13 @@ gpui_kit::actions!(
         ToggleLeftDock,
         ToggleRightDock,
         ToggleBottomDock,
-        CloseActiveItem
+        CloseActiveItem,
+        SelectNext,
+        SelectPrevious,
+        OpenSelected,
+        ArchiveSelected,
+        ToggleRead,
+        FocusFilter,
+        ClearFilter
     ]
 );
