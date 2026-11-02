@@ -1,29 +1,104 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::{GithubError, Result};
+
+const RATE_LIMITED: &str = "RATE_LIMITED";
 
 #[derive(Deserialize)]
 pub(crate) struct Envelope<T> {
     data: Option<T>,
-    errors: Option<Vec<GraphQlMessage>>,
+    errors: Option<Vec<GraphQlError>>,
 }
 
 #[derive(Deserialize)]
-struct GraphQlMessage {
+struct GraphQlError {
+    #[serde(rename = "type")]
+    kind: Option<String>,
     message: String,
+    path: Option<Vec<Value>>,
+}
+
+pub(crate) struct Parsed<T> {
+    pub(crate) data: T,
+    pub(crate) dropped_nodes: usize,
+    pub(crate) dropped_kinds: Vec<String>,
+}
+
+impl GraphQlError {
+    fn is_rate_limited(&self) -> bool {
+        self.kind.as_deref() == Some(RATE_LIMITED)
+    }
+
+    fn node_key(&self) -> Option<String> {
+        let path = self.path.as_deref()?;
+        let depth = match path {
+            [
+                Value::String(root),
+                Value::String(field),
+                Value::Number(_),
+                ..,
+            ] if root == "search" && field == "nodes" => 3,
+            [Value::String(root), Value::Number(_), ..] if root == "nodes" => 2,
+            _ => return None,
+        };
+        Some(
+            path[..depth]
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("."),
+        )
+    }
+
+    fn describe(&self) -> String {
+        match &self.kind {
+            Some(kind) => format!("[{kind}] {}", self.message),
+            None => self.message.clone(),
+        }
+    }
 }
 
 impl<T> Envelope<T> {
-    pub(crate) fn into_data(self) -> Result<T> {
-        if let Some(errors) = self.errors.filter(|errors| !errors.is_empty()) {
-            return Err(GithubError::GraphQl(
-                errors.into_iter().map(|error| error.message).collect(),
-            ));
+    pub(crate) fn into_data(self, reset_at: DateTime<Utc>) -> Result<Parsed<T>> {
+        let errors = self.errors.unwrap_or_default();
+        if errors.iter().any(GraphQlError::is_rate_limited) {
+            return Err(GithubError::RateLimited { reset_at });
         }
-        self.data
-            .ok_or_else(|| GithubError::GraphQl(vec!["response without data".to_string()]))
+        let (node_errors, root_errors): (Vec<_>, Vec<_>) =
+            errors.iter().partition(|error| error.node_key().is_some());
+        if !root_errors.is_empty() {
+            return Err(graphql_failure(&root_errors));
+        }
+        let Some(data) = self.data else {
+            return Err(graphql_failure(&node_errors));
+        };
+        let dropped: HashSet<String> = node_errors
+            .iter()
+            .filter_map(|error| error.node_key())
+            .collect();
+        let mut dropped_kinds: Vec<String> = node_errors
+            .iter()
+            .filter_map(|error| error.kind.clone())
+            .collect();
+        dropped_kinds.sort();
+        dropped_kinds.dedup();
+        Ok(Parsed {
+            data,
+            dropped_nodes: dropped.len(),
+            dropped_kinds,
+        })
     }
+}
+
+fn graphql_failure(errors: &[&GraphQlError]) -> GithubError {
+    if errors.is_empty() {
+        return GithubError::GraphQl(vec!["response without data".to_string()]);
+    }
+    GithubError::GraphQl(errors.iter().map(|error| error.describe()).collect())
 }
 
 #[derive(Deserialize)]
@@ -39,16 +114,28 @@ impl<T> Connection<T> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SearchData {
-    pub(crate) search: SearchConnection,
+pub(crate) struct IdsData {
+    pub(crate) search: IdsConnection,
     pub(crate) rate_limit: RateLimit,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SearchConnection {
+pub(crate) struct IdsConnection {
     pub(crate) page_info: PageInfo,
+    pub(crate) nodes: Vec<Option<IdNode>>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct IdNode {
+    pub(crate) id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HydrateData {
     pub(crate) nodes: Vec<Option<WirePr>>,
+    pub(crate) rate_limit: RateLimit,
 }
 
 #[derive(Deserialize)]
@@ -159,6 +246,8 @@ pub(crate) enum WirePrState {
     Open,
     Closed,
     Merged,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Deserialize)]
@@ -167,6 +256,8 @@ pub(crate) enum WireReviewDecision {
     Approved,
     ChangesRequested,
     ReviewRequired,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +265,7 @@ pub(crate) enum WireReviewDecision {
 pub(crate) enum WireMergeable {
     Mergeable,
     Conflicting,
+    #[serde(other)]
     Unknown,
 }
 
@@ -185,6 +277,8 @@ pub(crate) enum WireReviewState {
     Commented,
     Dismissed,
     Pending,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +289,8 @@ pub(crate) enum WireRollupState {
     Pending,
     Expected,
     Error,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Deserialize)]
@@ -213,4 +309,86 @@ pub(crate) struct WireViewer {
 pub(crate) struct WireViewerOrg {
     pub(crate) login: String,
     pub(crate) viewer_can_administer: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PARTIAL_PAGE: &str = include_str!("../tests/fixtures/search_page_partial.json");
+
+    fn reset() -> DateTime<Utc> {
+        "2026-11-02T14:00:00Z".parse().unwrap()
+    }
+
+    fn envelope(json: &str) -> Envelope<IdsData> {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn node_errors_drop_the_node_and_keep_the_rest_of_the_page() {
+        let parsed = envelope(PARTIAL_PAGE).into_data(reset()).unwrap();
+        assert_eq!(parsed.dropped_nodes, 1);
+        assert_eq!(parsed.dropped_kinds, vec!["FORBIDDEN"]);
+        let ids: Vec<String> = parsed
+            .data
+            .search
+            .nodes
+            .into_iter()
+            .flatten()
+            .filter_map(|node| node.id)
+            .collect();
+        assert_eq!(ids, vec!["PR_kwDOOrbita0412", "PR_kwDOOrbita0080"]);
+    }
+
+    #[test]
+    fn nodes_query_errors_are_node_errors_too() {
+        let json = r#"{
+            "data": { "nodes": [null], "rateLimit": { "remaining": 4000, "resetAt": "2026-11-02T14:00:00Z" } },
+            "errors": [{ "type": "FORBIDDEN", "path": ["nodes", 0], "message": "blocked" }]
+        }"#;
+        let envelope: Envelope<HydrateData> = serde_json::from_str(json).unwrap();
+        let parsed = envelope.into_data(reset()).unwrap();
+        assert_eq!(parsed.dropped_nodes, 1);
+        assert!(parsed.data.nodes[0].is_none());
+    }
+
+    #[test]
+    fn root_errors_fail_even_with_partial_data() {
+        let json = r#"{
+            "data": { "search": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] },
+                      "rateLimit": { "remaining": 4000, "resetAt": "2026-11-02T14:00:00Z" } },
+            "errors": [{ "type": "INTERNAL", "message": "something broke" }]
+        }"#;
+        match envelope(json).into_data(reset()) {
+            Err(GithubError::GraphQl(messages)) => {
+                assert_eq!(messages, vec!["[INTERNAL] something broke"]);
+            }
+            other => panic!("unexpected result: {:?}", other.err()),
+        }
+    }
+
+    #[test]
+    fn null_data_fails_even_when_errors_are_node_errors() {
+        let json = r#"{
+            "data": null,
+            "errors": [{ "type": "FORBIDDEN", "path": ["search", "nodes", 0], "message": "blocked" }]
+        }"#;
+        assert!(matches!(
+            envelope(json).into_data(reset()),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn rate_limited_error_maps_to_rate_limited() {
+        let json = r#"{
+            "data": null,
+            "errors": [{ "type": "RATE_LIMITED", "message": "API rate limit exceeded" }]
+        }"#;
+        match envelope(json).into_data(reset()) {
+            Err(GithubError::RateLimited { reset_at }) => assert_eq!(reset_at, reset()),
+            other => panic!("unexpected result: {:?}", other.err()),
+        }
+    }
 }

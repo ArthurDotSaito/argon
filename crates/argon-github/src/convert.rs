@@ -30,7 +30,7 @@ fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
         .map_or(wire.updated_at, |commit| commit.committed_date);
     let checks = head_commit
         .and_then(|commit| commit.status_check_rollup)
-        .map(|rollup| checks_state(rollup.state));
+        .and_then(|rollup| checks_state(rollup.state));
 
     PullRequest {
         id: PrId(wire.id),
@@ -48,7 +48,7 @@ fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
         deletions: wire.deletions,
         changed_files: wire.changed_files,
         comments: wire.comments.total_count,
-        review_decision: wire.review_decision.map(review_decision),
+        review_decision: wire.review_decision.and_then(review_decision),
         checks,
         mergeable: mergeable(wire.mergeable),
         requested_reviewers: wire
@@ -103,14 +103,16 @@ fn pr_state(state: WirePrState) -> PrState {
         WirePrState::Open => PrState::Open,
         WirePrState::Closed => PrState::Closed,
         WirePrState::Merged => PrState::Merged,
+        WirePrState::Unknown => PrState::Open,
     }
 }
 
-fn review_decision(decision: WireReviewDecision) -> ReviewDecision {
+fn review_decision(decision: WireReviewDecision) -> Option<ReviewDecision> {
     match decision {
-        WireReviewDecision::Approved => ReviewDecision::Approved,
-        WireReviewDecision::ChangesRequested => ReviewDecision::ChangesRequested,
-        WireReviewDecision::ReviewRequired => ReviewDecision::ReviewRequired,
+        WireReviewDecision::Approved => Some(ReviewDecision::Approved),
+        WireReviewDecision::ChangesRequested => Some(ReviewDecision::ChangesRequested),
+        WireReviewDecision::Unknown => None,
+        WireReviewDecision::ReviewRequired => Some(ReviewDecision::ReviewRequired),
     }
 }
 
@@ -126,18 +128,19 @@ fn review_state(state: WireReviewState) -> ReviewState {
     match state {
         WireReviewState::Approved => ReviewState::Approved,
         WireReviewState::ChangesRequested => ReviewState::ChangesRequested,
-        WireReviewState::Commented => ReviewState::Commented,
+        WireReviewState::Commented | WireReviewState::Unknown => ReviewState::Commented,
         WireReviewState::Dismissed => ReviewState::Dismissed,
         WireReviewState::Pending => ReviewState::Pending,
     }
 }
 
-fn checks_state(state: WireRollupState) -> ChecksState {
+fn checks_state(state: WireRollupState) -> Option<ChecksState> {
     match state {
-        WireRollupState::Success => ChecksState::Success,
-        WireRollupState::Failure => ChecksState::Failure,
-        WireRollupState::Pending | WireRollupState::Expected => ChecksState::Pending,
-        WireRollupState::Error => ChecksState::Error,
+        WireRollupState::Success => Some(ChecksState::Success),
+        WireRollupState::Failure => Some(ChecksState::Failure),
+        WireRollupState::Pending | WireRollupState::Expected => Some(ChecksState::Pending),
+        WireRollupState::Error => Some(ChecksState::Error),
+        WireRollupState::Unknown => None,
     }
 }
 
@@ -146,14 +149,18 @@ pub(crate) mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::wire::{Envelope, SearchData};
+    use crate::wire::{Envelope, HydrateData};
 
-    const SEARCH_PAGE: &str = include_str!("../tests/fixtures/search_page.json");
+    const NODES_PAGE: &str = include_str!("../tests/fixtures/nodes_page.json");
+
+    fn prs_from(json: &str) -> Vec<PullRequest> {
+        let envelope: Envelope<HydrateData> = serde_json::from_str(json).unwrap();
+        let parsed = envelope.into_data(Utc::now()).unwrap();
+        into_pull_requests(parsed.data.nodes, "github.com")
+    }
 
     pub(crate) fn fixture_prs() -> Vec<PullRequest> {
-        let envelope: Envelope<SearchData> = serde_json::from_str(SEARCH_PAGE).unwrap();
-        let data = envelope.into_data().unwrap();
-        into_pull_requests(data.search.nodes, "github.com")
+        prs_from(NODES_PAGE)
     }
 
     fn at(value: &str) -> DateTime<Utc> {
@@ -261,8 +268,31 @@ pub(crate) mod tests {
         assert_eq!(by_number(&prs, 80).checks, Some(ChecksState::Pending));
         assert_eq!(
             checks_state(WireRollupState::Expected),
-            ChecksState::Pending
+            Some(ChecksState::Pending)
         );
-        assert_eq!(checks_state(WireRollupState::Error), ChecksState::Error);
+        assert_eq!(
+            checks_state(WireRollupState::Error),
+            Some(ChecksState::Error)
+        );
+    }
+
+    #[test]
+    fn unknown_enum_values_fall_back_without_failing_the_page() {
+        let json = NODES_PAGE
+            .replace("\"EXPECTED\"", "\"BRAND_NEW\"")
+            .replace("\"CONFLICTING\"", "\"BRAND_NEW\"")
+            .replace("\"COMMENTED\"", "\"BRAND_NEW\"")
+            .replace("\"CHANGES_REQUESTED\"", "\"BRAND_NEW\"")
+            .replace("\"MERGED\"", "\"BRAND_NEW\"");
+        let prs = prs_from(&json);
+        assert_eq!(prs.len(), 5);
+        assert_eq!(by_number(&prs, 80).checks, None);
+        assert_eq!(by_number(&prs, 412).mergeable, Mergeable::Unknown);
+        assert_eq!(by_number(&prs, 412).review_decision, None);
+        assert_eq!(
+            by_number(&prs, 412).latest_reviews[1].state,
+            ReviewState::Commented
+        );
+        assert_eq!(by_number(&prs, 398).state, PrState::Open);
     }
 }

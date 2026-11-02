@@ -34,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .fetch_inbox(&viewer.login, &admin_orgs, CLOSED_WINDOW_DAYS)
             .await?;
         print_summary(&prs, &viewer.login);
+        println!("dropped nodes: {}", client.dropped_nodes());
         for pr in &prs {
             println!("{}#{} {}", pr.repo, pr.number, pr.title);
         }

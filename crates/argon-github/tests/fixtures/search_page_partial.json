@@ -1,0 +1,25 @@
+{
+  "data": {
+    "search": {
+      "pageInfo": { "hasNextPage": false, "endCursor": null },
+      "nodes": [
+        { "id": "PR_kwDOOrbita0412", "updatedAt": "2026-11-01T09:40:02Z" },
+        null,
+        { "id": "PR_kwDOOrbita0080", "updatedAt": "2026-11-02T08:20:00Z" }
+      ]
+    },
+    "rateLimit": { "remaining": 4980, "resetAt": "2026-11-02T14:00:00Z" }
+  },
+  "errors": [
+    {
+      "type": "FORBIDDEN",
+      "path": ["search", "nodes", 1],
+      "message": "Resource protected by organization SAML enforcement."
+    },
+    {
+      "type": "FORBIDDEN",
+      "path": ["search", "nodes", 1, "id"],
+      "message": "Resource protected by organization SAML enforcement."
+    }
+  ]
+}

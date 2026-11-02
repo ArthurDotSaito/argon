@@ -1,0 +1,18 @@
+query InboxIds($query: String!, $after: String, $first: Int!) {
+  search(query: $query, type: ISSUE, first: $first, after: $after) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        id
+        updatedAt
+      }
+    }
+  }
+  rateLimit {
+    remaining
+    resetAt
+  }
+}

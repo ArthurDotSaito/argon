@@ -246,12 +246,14 @@ dependencies = [
  "argon-core",
  "chrono",
  "dirs 7.0.0",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
