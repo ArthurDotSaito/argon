@@ -20,7 +20,6 @@ pub const COMMENT: &str = "Comentar";
 pub const NO_REVIEWERS: &str = "sem reviewers";
 pub const FILES: &str = "arquivos";
 pub const UNDER_CONSTRUCTION: &str = "Em construção";
-pub const COMMITS_SOON: &str = "A lista de commits chega em breve.";
 pub const REVIEW_SOON: &str = "Diff e comentários chegam na Fase 3";
 pub const MERGE_DIALOG_TITLE: &str = "Fazer merge do PR";
 pub const MERGE_METHOD: &str = "Método de merge";

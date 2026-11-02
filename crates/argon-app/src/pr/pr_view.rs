@@ -14,12 +14,12 @@ use gpui_kit::{
 };
 
 use super::actions::ActionsTab;
-use super::commits::CommitsTab;
+use super::commits::{CommitsEvent, CommitsTab};
 use super::conversation::{self, CONTENT_MAX_WIDTH, Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
 use super::labels;
 use super::merge_dialog::{self, MergeTarget};
-use super::review_tab::ReviewTab;
+use super::review_tab::{ReviewEvent, ReviewScope, ReviewTab};
 use crate::inbox::{InboxModel, PR_FALLBACK_TITLE};
 use crate::services::{AppServices, Services};
 
@@ -124,8 +124,20 @@ impl PrView {
                 ConversationEvent::OpenOnGithub => this.open_on_github(cx),
             }),
             cx.observe(&commits, |_, _, cx| cx.notify()),
+            cx.subscribe(&commits, |this, _, event, cx| match event {
+                CommitsEvent::OpenCommit { oid, headline } => this.set_review_scope(
+                    ReviewScope::Commit {
+                        oid: oid.clone(),
+                        headline: headline.clone(),
+                    },
+                    cx,
+                ),
+            }),
             cx.observe(&actions, |_, _, cx| cx.notify()),
             cx.observe(&review, |_, _, cx| cx.notify()),
+            cx.subscribe(&review, |this, _, event, cx| match event {
+                ReviewEvent::ShowAll => this.set_review_scope(ReviewScope::All, cx),
+            }),
             cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
         ];
         let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);
@@ -166,6 +178,11 @@ impl PrView {
             });
             cx.notify();
         }
+    }
+
+    pub fn set_review_scope(&mut self, scope: ReviewScope, cx: &mut Context<Self>) {
+        self.review.update(cx, |tab, cx| tab.set_scope(scope, cx));
+        self.set_tab(PrTab::Review, cx);
     }
 
     #[expect(
