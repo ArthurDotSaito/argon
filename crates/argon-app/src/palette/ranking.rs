@@ -218,6 +218,20 @@ mod tests {
     }
 
     #[test]
+    fn match_spread_is_measured_in_chars_not_bytes() {
+        let mut ranker = Ranker::new();
+        let ranked = ranker.rank(
+            "ção",
+            [
+                candidate("ç.ã.o", None),
+                candidate("ç....ã..o", None),
+                candidate("açã", None),
+            ],
+        );
+        assert_eq!(order(&ranked), vec![0]);
+    }
+
+    #[test]
     fn prs_first_follows_query_shape_and_top_score() {
         let high = [Scored {
             index: 0,

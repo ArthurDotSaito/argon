@@ -1,6 +1,4 @@
-use std::rc::Rc;
-
-use argon_core::PullRequest;
+use argon_core::{PrKey, PrState, PullRequest};
 use gpui_kit::assets::IconName;
 use gpui_kit::{Action, SharedString};
 
@@ -11,9 +9,16 @@ use crate::actions::{
 };
 use crate::inbox::InboxView;
 
+const REVIEW_WITH_AI_TITLE: &str = "Revisar com IA no PR atual";
+pub const COMING_SOON: &str = "em breve";
+
 pub struct PrEntry {
-    pub pr: Rc<PullRequest>,
+    pub key: PrKey,
+    pub title: SharedString,
     pub reference: SharedString,
+    pub state: PrState,
+    pub is_draft: bool,
+    number: u64,
     haystack: String,
 }
 
@@ -28,8 +33,12 @@ impl PrEntry {
         ]
         .join("\n");
         Self {
-            pr: Rc::new(pr.clone()),
+            key: pr.key(),
+            title: pr.title.clone().into(),
             reference: reference.into(),
+            state: pr.state,
+            is_draft: pr.is_draft,
+            number: pr.number,
             haystack,
         }
     }
@@ -37,7 +46,7 @@ impl PrEntry {
     pub fn candidate(&self) -> Candidate<'_> {
         Candidate {
             text: &self.haystack,
-            number: Some(self.pr.number),
+            number: Some(self.number),
         }
     }
 }
@@ -45,7 +54,12 @@ impl PrEntry {
 pub struct CommandSpec {
     pub title: &'static str,
     pub icon: IconName,
-    pub action: Box<dyn Action>,
+    pub kind: CommandKind,
+}
+
+pub enum CommandKind {
+    Run(Box<dyn Action>),
+    Soon,
 }
 
 impl CommandSpec {
@@ -53,7 +67,7 @@ impl CommandSpec {
         Self {
             title,
             icon,
-            action: Box::new(action),
+            kind: CommandKind::Run(Box::new(action)),
         }
     }
 
@@ -100,6 +114,11 @@ pub fn command_specs() -> Vec<CommandSpec> {
                 ToggleRightDock,
             ),
             CommandSpec::new("Fechar aba", IconName::X, CloseActiveItem),
+            CommandSpec {
+                title: REVIEW_WITH_AI_TITLE,
+                icon: IconName::Sparkles,
+                kind: CommandKind::Soon,
+            },
             CommandSpec::new("Abrir configurações", IconName::Settings, OpenSettings),
         ])
         .collect()

@@ -1,20 +1,22 @@
 mod entries;
 mod ranking;
 
-use argon_core::{PrKey, PullRequest};
+use argon_core::{PrKey, PrState};
+use gpui_kit::assets::IconName;
 use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
-use gpui_kit::component::{ActiveTheme as _, Icon, IndexPath, h_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _, h_flex,
+};
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
     IntoElement, MouseButton, ParentElement as _, Render, SharedString, Styled as _, Window,
     deferred, div, hsla, px,
 };
 
-use self::entries::{CommandSpec, PrEntry, command_specs};
+use self::entries::{COMING_SOON, CommandKind, CommandSpec, PrEntry, command_specs};
 use self::ranking::{Ranker, prs_first};
 use crate::inbox::InboxModel;
-use crate::ui;
 
 pub const PALETTE_CONTEXT: &str = "Palette";
 
@@ -51,6 +53,8 @@ pub struct Palette {
     prs: Vec<PrEntry>,
     commands: Vec<CommandSpec>,
     ranker: Ranker,
+    query: SharedString,
+    dirty: bool,
     sections: Vec<Section>,
 }
 
@@ -72,9 +76,11 @@ impl Palette {
             prs,
             commands: command_specs(),
             ranker: Ranker::new(),
+            query: SharedString::default(),
+            dirty: false,
             sections: Vec::new(),
         };
-        this.refresh("");
+        this.refresh();
         this
     }
 
@@ -82,7 +88,9 @@ impl Palette {
         self.scope.contains_focused(window, cx)
     }
 
-    fn refresh(&mut self, query: &str) {
+    fn refresh(&mut self) {
+        self.dirty = false;
+        let query = self.query.as_ref();
         let mut prs = self
             .ranker
             .rank(query, self.prs.iter().map(PrEntry::candidate));
@@ -118,7 +126,8 @@ impl Palette {
     }
 
     fn set_query(&mut self, query: &str, cx: &mut Context<Self>) {
-        self.refresh(query);
+        self.query = query.to_string().into();
+        self.dirty = true;
         cx.notify();
     }
 
@@ -128,7 +137,7 @@ impl Palette {
             .get(path.section)
             .and_then(|section| section.targets.get(path.row));
         match target {
-            Some(Target::Pr(ix)) => cx.emit(PaletteEvent::OpenPr(self.prs[*ix].pr.key())),
+            Some(Target::Pr(ix)) => cx.emit(PaletteEvent::OpenPr(self.prs[*ix].key.clone())),
             _ => cx.emit(PaletteEvent::Dismiss),
         }
     }
@@ -143,28 +152,66 @@ impl Palette {
 }
 
 fn command_item(spec: &CommandSpec) -> CommandItem {
-    CommandItem::new()
+    let item = CommandItem::new()
         .label(spec.title)
-        .icon(Icon::new(spec.icon))
-        .action(spec.action.boxed_clone())
+        .icon(Icon::new(spec.icon));
+    match &spec.kind {
+        CommandKind::Run(action) => item.action(action.boxed_clone()),
+        CommandKind::Soon => {
+            let (title, icon) = (spec.title, spec.icon);
+            item.disabled(true)
+                .child(move |_, cx| soon_row(title, icon, cx))
+        }
+    }
+}
+
+fn soon_row(title: &'static str, icon: IconName, cx: &App) -> Div {
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_2()
+        .items_center()
+        .text_color(muted)
+        .child(Icon::new(icon).small())
+        .child(div().flex_1().truncate().child(title))
+        .child(div().flex_none().text_xs().child(COMING_SOON))
 }
 
 fn pr_item(entry: &PrEntry) -> CommandItem {
-    let (pr, reference) = (entry.pr.clone(), entry.reference.clone());
+    let (title, reference) = (entry.title.clone(), entry.reference.clone());
+    let (state, is_draft) = (entry.state, entry.is_draft);
     CommandItem::new()
-        .label(pr.title.clone())
-        .child(move |_, cx| pr_row(&pr, &reference, cx))
+        .label(title.clone())
+        .child(move |_, cx| pr_row(&title, &reference, state, is_draft, cx))
 }
 
-fn pr_row(pr: &PullRequest, reference: &SharedString, cx: &App) -> Div {
+fn state_icon(state: PrState, is_draft: bool, cx: &App) -> Icon {
+    let theme = cx.theme();
+    let (icon, color) = match state {
+        PrState::Open if is_draft => (IconName::GitPullRequestDraft, theme.muted_foreground),
+        PrState::Open => (IconName::GitPullRequest, theme.success),
+        PrState::Merged => (IconName::GitMerge, theme.magenta),
+        PrState::Closed => (IconName::GitPullRequestClosed, theme.danger),
+    };
+    Icon::new(icon).small().text_color(color)
+}
+
+fn pr_row(
+    title: &SharedString,
+    reference: &SharedString,
+    state: PrState,
+    is_draft: bool,
+    cx: &App,
+) -> Div {
     let theme = cx.theme();
     h_flex()
         .flex_1()
         .min_w_0()
         .gap_2()
         .items_center()
-        .child(ui::state_icon(pr, cx))
-        .child(div().flex_1().min_w_0().truncate().child(pr.title.clone()))
+        .child(state_icon(state, is_draft, cx))
+        .child(div().flex_1().min_w_0().truncate().child(title.clone()))
         .child(
             div()
                 .flex_none()
@@ -177,6 +224,9 @@ fn pr_row(pr: &PullRequest, reference: &SharedString, cx: &App) -> Div {
 
 impl Render for Palette {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.dirty {
+            self.refresh();
+        }
         let theme = cx.theme();
         let palette = cx.weak_entity();
         let on_query = palette.clone();
@@ -224,10 +274,7 @@ impl Render for Palette {
                 .items_start()
                 .pt(px(TOP_OFFSET))
                 .bg(hsla(0., 0., 0., BACKDROP_ALPHA))
-                .capture_action(cx.listener(|_, _: &Cancel, _, cx| {
-                    cx.stop_propagation();
-                    cx.emit(PaletteEvent::Dismiss);
-                }))
+                .on_action(cx.listener(|_, _: &Cancel, _, cx| cx.emit(PaletteEvent::Dismiss)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|_, _, _, cx| cx.emit(PaletteEvent::Dismiss)),
