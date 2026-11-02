@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt, TryStreamExt};
 
@@ -7,7 +9,8 @@ use crate::error::{GithubError, Result};
 use crate::rest::repo_path;
 
 const JOBS_CONCURRENCY: usize = 3;
-const PER_PAGE: &str = "100";
+const PER_PAGE: usize = 100;
+const MAX_PAGES: u32 = 3;
 const UNNAMED_RUN: &str = "workflow";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,6 +49,7 @@ pub struct WorkflowRun {
     pub html_url: String,
     pub run_attempt: u32,
     pub jobs: Vec<Job>,
+    pub jobs_error: Option<String>,
 }
 
 pub(crate) fn run_status(status: Option<&str>, conclusion: Option<&str>) -> RunStatus {
@@ -90,12 +94,16 @@ fn into_job(job: WireJob, run_url: &str) -> Job {
     }
 }
 
-fn into_run(run: WireRun, jobs: JobsResponse) -> WorkflowRun {
-    let jobs = jobs
-        .jobs
-        .into_iter()
-        .map(|job| into_job(job, &run.html_url))
-        .collect();
+fn into_run(run: WireRun, jobs: Result<Vec<WireJob>>) -> WorkflowRun {
+    let (jobs, jobs_error) = match jobs {
+        Ok(jobs) => (
+            jobs.into_iter()
+                .map(|job| into_job(job, &run.html_url))
+                .collect(),
+            None,
+        ),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
     WorkflowRun {
         id: run.id,
         status: run_status(run.status.as_deref(), run.conclusion.as_deref()),
@@ -106,11 +114,45 @@ fn into_run(run: WireRun, jobs: JobsResponse) -> WorkflowRun {
         html_url: run.html_url,
         run_attempt: run.run_attempt.unwrap_or(1),
         jobs,
+        jobs_error,
     }
 }
 
 fn is_sha(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+async fn collect_pages<T, F, Fut>(what: &str, mut fetch: F) -> Result<Vec<T>>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: Future<Output = Result<(Vec<T>, Option<u64>)>>,
+{
+    let mut items = Vec::new();
+    for page in 1..=MAX_PAGES {
+        let (batch, total) = fetch(page).await?;
+        let batch_len = batch.len();
+        items.extend(batch);
+        let complete = match total {
+            Some(total) => items.len() as u64 >= total,
+            None => batch_len < PER_PAGE,
+        };
+        if complete || batch_len == 0 {
+            return Ok(items);
+        }
+    }
+    tracing::warn!(
+        what,
+        kept = items.len(),
+        "github returned more items than the page cap, results truncated"
+    );
+    Ok(items)
+}
+
+fn keeps_going(error: &GithubError) -> bool {
+    !matches!(
+        error,
+        GithubError::AuthMissing { .. } | GithubError::RateLimited { .. }
+    )
 }
 
 impl GithubClient {
@@ -119,25 +161,51 @@ impl GithubClient {
         if !is_sha(head_sha) {
             return Err(GithubError::Decode(format!("invalid head sha: {head_sha}")));
         }
-        let runs: RunsResponse = self
-            .rest_get(
-                &format!("/repos/{repo}/actions/runs"),
-                &[("head_sha", head_sha), ("per_page", PER_PAGE)],
-            )
-            .await?;
-        stream::iter(runs.workflow_runs)
+        let runs = collect_pages("workflow runs", |page| async move {
+            let page = page.to_string();
+            let response: RunsResponse = self
+                .rest_get(
+                    &format!("/repos/{repo}/actions/runs"),
+                    &[
+                        ("head_sha", head_sha),
+                        ("per_page", &PER_PAGE.to_string()),
+                        ("page", &page),
+                    ],
+                )
+                .await?;
+            Ok((response.workflow_runs, response.total_count))
+        })
+        .await?;
+        stream::iter(runs)
             .map(|run| async move {
-                let jobs: JobsResponse = self
-                    .rest_get(
-                        &format!("/repos/{repo}/actions/runs/{}/jobs", run.id),
-                        &[("per_page", PER_PAGE)],
-                    )
-                    .await?;
-                Ok::<_, GithubError>(into_run(run, jobs))
+                let jobs = self.run_jobs(repo, run.id).await;
+                match jobs {
+                    Err(error) if !keeps_going(&error) => Err(error),
+                    jobs => {
+                        if let Err(error) = &jobs {
+                            tracing::warn!(run_id = run.id, %error, "failed to fetch jobs of a workflow run");
+                        }
+                        Ok::<_, GithubError>(into_run(run, jobs))
+                    }
+                }
             })
             .buffered(JOBS_CONCURRENCY)
             .try_collect()
             .await
+    }
+
+    async fn run_jobs(&self, repo: &str, run_id: u64) -> Result<Vec<WireJob>> {
+        collect_pages("workflow jobs", |page| async move {
+            let page = page.to_string();
+            let response: JobsResponse = self
+                .rest_get(
+                    &format!("/repos/{repo}/actions/runs/{run_id}/jobs"),
+                    &[("per_page", &PER_PAGE.to_string()), ("page", &page)],
+                )
+                .await?;
+            Ok((response.jobs, response.total_count))
+        })
+        .await
     }
 }
 
@@ -158,8 +226,8 @@ mod tests {
         runs.workflow_runs
             .into_iter()
             .map(|run| {
-                let jobs = jobs.take().unwrap_or(JobsResponse { jobs: Vec::new() });
-                into_run(run, jobs)
+                let jobs = jobs.take().map_or_else(Vec::new, |jobs| jobs.jobs);
+                into_run(run, Ok(jobs))
             })
             .collect()
     }
@@ -278,6 +346,156 @@ mod tests {
         let coverage = &runs[0].jobs[6];
         assert_eq!(coverage.html_url, runs[0].html_url);
         assert!(coverage.steps.is_empty());
+    }
+
+    #[test]
+    fn run_whose_jobs_failed_to_load_keeps_the_error_and_no_jobs() {
+        let run: RunsResponse = serde_json::from_str(RUNS).unwrap();
+        let run = run.workflow_runs.into_iter().next().unwrap();
+        let run = into_run(run, Err(GithubError::Decode("jobs unavailable".into())));
+        assert!(run.jobs.is_empty());
+        assert_eq!(
+            run.jobs_error.as_deref(),
+            Some("decode error: jobs unavailable")
+        );
+        assert_eq!(run.status, RunStatus::Failure);
+    }
+
+    fn page_of(count: usize) -> Vec<usize> {
+        (0..count).collect()
+    }
+
+    #[tokio::test]
+    async fn pages_are_fetched_until_the_total_is_reached() {
+        let calls = std::cell::Cell::new(0);
+        let items = collect_pages("test", |page| {
+            calls.set(calls.get() + 1);
+            let count = if page < 3 { PER_PAGE } else { 50 };
+            async move { Ok((page_of(count), Some(250))) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(items.len(), 250);
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn pages_stop_at_the_cap_even_when_more_exist() {
+        let calls = std::cell::Cell::new(0);
+        let items = collect_pages("test", |_| {
+            calls.set(calls.get() + 1);
+            async { Ok((page_of(PER_PAGE), Some(450))) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(items.len(), 300);
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn single_short_page_needs_one_request() {
+        let calls = std::cell::Cell::new(0);
+        let items = collect_pages("test", |_| {
+            calls.set(calls.get() + 1);
+            async { Ok((page_of(7), None)) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(items.len(), 7);
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn empty_page_stops_even_when_the_total_claims_more() {
+        let calls = std::cell::Cell::new(0);
+        let items = collect_pages("test", |_| {
+            calls.set(calls.get() + 1);
+            async { Ok((Vec::<usize>::new(), Some(10))) }
+        })
+        .await
+        .unwrap();
+        assert!(items.is_empty());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn page_errors_propagate() {
+        let result = collect_pages("test", |_| async {
+            Err::<(Vec<usize>, Option<u64>), _>(GithubError::Decode("boom".into()))
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    fn client_for(port: u16) -> GithubClient {
+        let mut client = GithubClient::new("github.com", "test-token-not-real".to_string());
+        client.rest_url = format!("http://127.0.0.1:{port}");
+        client
+    }
+
+    fn two_runs_body() -> String {
+        let run = |id: u64| {
+            format!(
+                r#"{{"id":{id},"name":"CI","status":"completed","conclusion":"success","html_url":"https://github.com/orbita-health/atlas/actions/runs/{id}","run_attempt":1}}"#
+            )
+        };
+        format!(
+            r#"{{"total_count":2,"workflow_runs":[{},{}]}}"#,
+            run(1),
+            run(2)
+        )
+    }
+
+    #[tokio::test]
+    async fn failing_jobs_request_of_one_run_does_not_drop_the_others() {
+        use crate::test_server::{json_response, serve};
+
+        let port = serve(|request_line| {
+            if request_line.contains("/actions/runs/1/jobs") {
+                json_response("200 OK", include_str!("../tests/fixtures/jobs.json"))
+            } else if request_line.contains("/actions/runs/2/jobs") {
+                json_response("404 Not Found", r#"{"message":"Not Found"}"#)
+            } else if request_line.contains("/actions/runs?head_sha=3fa91c0de4&per_page=100&page=1")
+            {
+                json_response("200 OK", &two_runs_body())
+            } else {
+                json_response("500 Internal Server Error", "{}")
+            }
+        })
+        .await;
+
+        let runs = client_for(port)
+            .workflow_runs("orbita-health/atlas", "3fa91c0de4")
+            .await
+            .unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].jobs.len(), 7);
+        assert_eq!(runs[0].jobs_error, None);
+        assert!(runs[1].jobs.is_empty());
+        let error = runs[1].jobs_error.as_deref().unwrap();
+        assert!(error.contains("404"), "{error}");
+        assert!(!error.contains("127.0.0.1"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn auth_failure_while_fetching_jobs_still_fails_the_call() {
+        use crate::test_server::{json_response, serve};
+
+        let port = serve(|request_line| {
+            if request_line.contains("/jobs") {
+                json_response("401 Unauthorized", r#"{"message":"Bad credentials"}"#)
+            } else {
+                json_response("200 OK", &two_runs_body())
+            }
+        })
+        .await;
+
+        let result = client_for(port)
+            .workflow_runs("orbita-health/atlas", "3fa91c0de4")
+            .await;
+
+        assert!(matches!(result, Err(GithubError::AuthMissing { .. })));
     }
 
     #[test]

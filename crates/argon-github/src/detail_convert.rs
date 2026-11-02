@@ -16,13 +16,12 @@ use crate::wire::Actor;
 pub(crate) fn into_pr_detail(wire: WireDetail, host: &str) -> PrDetail {
     let pr = into_pull_request(wire.pr, host);
     let reviewers = reviewer_statuses(&pr);
-    let truncated_timeline = wire.timeline_items.page_info.has_next_page;
+    let truncated_timeline = wire.timeline_items.has_previous_page();
+    let truncated_threads = wire.review_threads.has_next_page();
     let timeline = wire
         .timeline_items
-        .nodes
-        .unwrap_or_default()
+        .into_items()
         .into_iter()
-        .flatten()
         .filter_map(timeline_item)
         .collect();
     PrDetail {
@@ -33,6 +32,7 @@ pub(crate) fn into_pr_detail(wire: WireDetail, host: &str) -> PrDetail {
         reviewers,
         timeline,
         truncated_timeline,
+        truncated_threads,
         threads: wire
             .review_threads
             .into_items()
@@ -120,6 +120,7 @@ fn thread(wire: WireThread) -> ReviewThread {
         path: wire.path,
         line: wire.line,
         start_line: wire.start_line,
+        truncated_comments: wire.comments.has_next_page(),
         side: match wire.diff_side {
             WireDiffSide::Left => Side::Left,
             WireDiffSide::Right | WireDiffSide::Unknown => Side::Right,
@@ -468,7 +469,7 @@ mod tests {
     #[test]
     fn untruncated_timeline_and_missing_body_use_defaults() {
         let json = DETAIL
-            .replace("\"hasNextPage\": true", "\"hasNextPage\": false")
+            .replace("\"hasPreviousPage\": true", "\"hasPreviousPage\": false")
             .replace(
                 "\"body\": \"Adds a retry budget so the slot finder stops hammering the scheduling API.\\n\\n- budget per request\\n- jittered backoff\"",
                 "\"body\": null",
@@ -476,6 +477,125 @@ mod tests {
         let detail = detail_from(&json);
         assert!(!detail.truncated_timeline);
         assert_eq!(detail.body, "");
+    }
+
+    #[test]
+    fn truncation_flags_come_from_the_page_info_of_each_connection() {
+        let detail = detail();
+        assert!(detail.truncated_timeline);
+        assert!(!detail.truncated_threads);
+        let flags: Vec<bool> = detail
+            .threads
+            .iter()
+            .map(|thread| thread.truncated_comments)
+            .collect();
+        assert_eq!(flags, vec![true, false, false]);
+
+        let json = DETAIL.replace(
+            "\"reviewThreads\": {
+        \"pageInfo\": { \"hasNextPage\": false }",
+            "\"reviewThreads\": {
+        \"pageInfo\": { \"hasNextPage\": true }",
+        );
+        assert!(detail_from(&json).truncated_threads);
+    }
+
+    #[test]
+    fn nested_field_errors_leave_the_field_empty_and_keep_the_detail() {
+        let json = DETAIL
+            .replace(
+                "\"labels\": {
+        \"nodes\": [
+          { \"name\": \"needs-review\", \"color\": \"fbca04\" },
+          { \"name\": \"backend\", \"color\": \"0e8a16\" }
+        ]
+      }",
+                "\"labels\": null",
+            )
+            .replace("\"reviewThreads\": {", "\"reviewThreadsGone\": {")
+            .replacen("\"data\": {", "\"errors\": [{ \"type\": \"FORBIDDEN\", \"path\": [\"node\", \"labels\"], \"message\": \"saml\" }, { \"type\": \"FORBIDDEN\", \"path\": [\"node\", \"reviewThreads\"], \"message\": \"saml\" }],
+  \"data\": {", 1);
+        assert!(json.contains("\"labels\": null"));
+        let envelope: Envelope<DetailData> = serde_json::from_str(&json).unwrap();
+        let parsed = envelope.into_data(Utc::now()).unwrap();
+        assert_eq!(parsed.dropped_nodes, 0);
+        assert_eq!(
+            parsed.partial_paths,
+            vec!["node.labels", "node.reviewThreads"]
+        );
+        let detail = into_pr_detail(parsed.data.node.unwrap(), "github.com");
+        assert!(detail.labels.is_empty());
+        assert!(detail.threads.is_empty());
+        assert_eq!(detail.commits.len(), 3);
+        assert_eq!(detail.timeline.len(), 15);
+    }
+
+    #[test]
+    fn malformed_nodes_inside_a_connection_are_skipped() {
+        let json = DETAIL.replace(
+            "\"label\": { \"name\": \"needs-review\" },",
+            "\"label\": null,",
+        );
+        assert_ne!(json, DETAIL);
+        let detail = detail_from(&json);
+        assert_eq!(detail.timeline.len(), 14);
+        assert!(
+            !detail
+                .timeline
+                .iter()
+                .any(|item| matches!(item, TimelineItem::Labeled { .. }))
+        );
+    }
+
+    #[test]
+    fn null_review_comments_connection_becomes_empty() {
+        let json = DETAIL.replace(
+            "\"comments\": { \"nodes\": [] }
+          },
+          {
+            \"__typename\": \"PullRequestReview\",
+            \"id\": \"PRR_kwDOOrbita03\"",
+            "\"comments\": null
+          },
+          {
+            \"__typename\": \"PullRequestReview\",
+            \"id\": \"PRR_kwDOOrbita03\"",
+        );
+        assert_ne!(json, DETAIL);
+        let detail = detail_from(&json);
+        assert!(matches!(
+            &detail.timeline[9],
+            TimelineItem::Review { comments, .. } if comments.is_empty()
+        ));
+    }
+
+    #[test]
+    fn errors_on_the_node_itself_or_at_the_root_still_fail() {
+        let node_error = r#"{
+            "data": { "node": null },
+            "errors": [{ "type": "FORBIDDEN", "path": ["node"], "message": "blocked" }]
+        }"#;
+        let envelope: Envelope<DetailData> = serde_json::from_str(node_error).unwrap();
+        assert!(envelope.into_data(Utc::now()).is_err());
+
+        let root_error = DETAIL.replacen(
+            "\"data\": {",
+            "\"errors\": [{ \"type\": \"INTERNAL\", \"message\": \"boom\" }],
+  \"data\": {",
+            1,
+        );
+        let envelope: Envelope<DetailData> = serde_json::from_str(&root_error).unwrap();
+        assert!(envelope.into_data(Utc::now()).is_err());
+    }
+
+    #[test]
+    fn nested_error_with_null_data_fails() {
+        let json = r#"{
+            "data": null,
+            "errors": [{ "type": "FORBIDDEN", "path": ["node", "labels"], "message": "blocked" }]
+        }"#;
+        let envelope: Envelope<DetailData> = serde_json::from_str(json).unwrap();
+        assert!(envelope.into_data(Utc::now()).is_err());
     }
 
     #[test]

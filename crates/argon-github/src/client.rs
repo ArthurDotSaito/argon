@@ -102,7 +102,9 @@ impl GithubClient {
                 reset_at: rate_limit_reset(response.headers()),
             });
         }
-        Ok(response.error_for_status()?)
+        Ok(response
+            .error_for_status()
+            .map_err(reqwest::Error::without_url)?)
     }
 
     pub(crate) async fn graphql<T: DeserializeOwned>(
@@ -140,6 +142,14 @@ impl GithubClient {
                 dropped = parsed.dropped_nodes,
                 kinds = ?parsed.dropped_kinds,
                 "dropped nodes with graphql errors"
+            );
+        }
+        if !parsed.partial_paths.is_empty() {
+            tracing::warn!(
+                host = %self.host,
+                operation,
+                paths = ?parsed.partial_paths,
+                "graphql returned partial data, missing fields left empty"
             );
         }
         Ok(parsed.data)

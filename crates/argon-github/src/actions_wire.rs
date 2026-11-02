@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub(crate) struct RunsResponse {
+    pub(crate) total_count: Option<u64>,
     pub(crate) workflow_runs: Vec<WireRun>,
 }
 
@@ -19,6 +20,7 @@ pub(crate) struct WireRun {
 
 #[derive(Deserialize)]
 pub(crate) struct JobsResponse {
+    pub(crate) total_count: Option<u64>,
     pub(crate) jobs: Vec<WireJob>,
 }
 

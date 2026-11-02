@@ -19,6 +19,7 @@ pub struct PrDetail {
     pub timeline: Vec<TimelineItem>,
     pub truncated_timeline: bool,
     pub threads: Vec<ReviewThread>,
+    pub truncated_threads: bool,
     pub commits: Vec<CommitInfo>,
 }
 
@@ -110,6 +111,7 @@ pub struct ReviewThread {
     pub start_line: Option<u32>,
     pub side: Side,
     pub comments: Vec<ThreadComment>,
+    pub truncated_comments: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

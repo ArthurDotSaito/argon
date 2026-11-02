@@ -106,6 +106,7 @@
         ]
       },
       "reviewThreads": {
+        "pageInfo": { "hasNextPage": false },
         "nodes": [
           {
             "id": "PRRT_kwDOOrbita01",
@@ -115,6 +116,7 @@
             "startLine": 38,
             "diffSide": "RIGHT",
             "comments": {
+              "pageInfo": { "hasNextPage": true },
               "nodes": [
                 {
                   "id": "PRRC_kwDOOrbita01",
@@ -171,7 +173,7 @@
         ]
       },
       "timelineItems": {
-        "pageInfo": { "hasNextPage": true },
+        "pageInfo": { "hasPreviousPage": true },
         "nodes": [
           {
             "__typename": "PullRequestCommit",

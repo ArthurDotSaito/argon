@@ -120,7 +120,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match first_failed_job(&runs) {
         Some(job) => {
             let log = client.job_log(repo, job.id).await?;
-            println!("first failed job log: {} bytes", log.len());
+            println!(
+                "first failed job log: {} bytes (truncated: {})",
+                log.text.len(),
+                log.truncated
+            );
         }
         None => println!("no failed job"),
     }

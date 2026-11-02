@@ -11,6 +11,8 @@ mod inbox;
 mod job_log;
 mod mutations;
 mod rest;
+#[cfg(test)]
+mod test_server;
 mod wire;
 
 pub use actions::{Job, RunStatus, Step, WorkflowRun};
@@ -21,4 +23,5 @@ pub use detail::{
     TimelineItem,
 };
 pub use error::{GithubError, Result};
+pub use job_log::JobLog;
 pub use mutations::MergeMethod;

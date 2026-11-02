@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::error::{GithubError, Result};
@@ -26,6 +26,7 @@ pub(crate) struct Parsed<T> {
     pub(crate) data: T,
     pub(crate) dropped_nodes: usize,
     pub(crate) dropped_kinds: Vec<String>,
+    pub(crate) partial_paths: Vec<String>,
 }
 
 impl GraphQlError {
@@ -54,6 +55,15 @@ impl GraphQlError {
         )
     }
 
+    fn partial_path(&self) -> Option<String> {
+        match self.path.as_deref()? {
+            [Value::String(root), Value::String(_), ..] if root == "node" => {
+                Some(describe_path(self.path.as_deref()?))
+            }
+            _ => None,
+        }
+    }
+
     fn describe(&self) -> String {
         match &self.kind {
             Some(kind) => format!("[{kind}] {}", self.message),
@@ -68,14 +78,28 @@ impl<T> Envelope<T> {
         if errors.iter().any(GraphQlError::is_rate_limited) {
             return Err(GithubError::RateLimited { reset_at });
         }
-        let (node_errors, root_errors): (Vec<_>, Vec<_>) =
+        let (node_errors, others): (Vec<_>, Vec<_>) =
             errors.iter().partition(|error| error.node_key().is_some());
+        let (partial_errors, root_errors): (Vec<_>, Vec<_>) = others
+            .into_iter()
+            .partition(|error| error.partial_path().is_some());
         if !root_errors.is_empty() {
             return Err(graphql_failure(&root_errors));
         }
         let Some(data) = self.data else {
-            return Err(graphql_failure(&node_errors));
+            let all: Vec<&GraphQlError> = node_errors
+                .iter()
+                .chain(partial_errors.iter())
+                .copied()
+                .collect();
+            return Err(graphql_failure(&all));
         };
+        let mut partial_paths: Vec<String> = partial_errors
+            .iter()
+            .filter_map(|error| error.partial_path())
+            .collect();
+        partial_paths.sort();
+        partial_paths.dedup();
         let dropped: HashSet<String> = node_errors
             .iter()
             .filter_map(|error| error.node_key())
@@ -90,8 +114,19 @@ impl<T> Envelope<T> {
             data,
             dropped_nodes: dropped.len(),
             dropped_kinds,
+            partial_paths,
         })
     }
+}
+
+fn describe_path(path: &[Value]) -> String {
+    path.iter()
+        .map(|segment| match segment {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn graphql_failure(errors: &[&GraphQlError]) -> GithubError {
@@ -101,9 +136,23 @@ fn graphql_failure(errors: &[&GraphQlError]) -> GithubError {
     GithubError::GraphQl(errors.iter().map(|error| error.describe()).collect())
 }
 
+pub(crate) fn null_as_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 pub(crate) struct Connection<T> {
     nodes: Option<Vec<Option<T>>>,
+}
+
+impl<T> Default for Connection<T> {
+    fn default() -> Self {
+        Self { nodes: None }
+    }
 }
 
 impl<T> Connection<T> {
@@ -173,10 +222,14 @@ pub(crate) struct WirePr {
     pub(crate) changed_files: u32,
     pub(crate) review_decision: Option<WireReviewDecision>,
     pub(crate) mergeable: WireMergeable,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) comments: TotalCount,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) review_requests: Connection<WireReviewRequest>,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) assignees: Connection<Actor>,
     pub(crate) latest_reviews: Option<Connection<WireReview>>,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) commits: Connection<WireCommitNode>,
 }
 
@@ -191,7 +244,7 @@ pub(crate) struct WireRepository {
     pub(crate) name_with_owner: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TotalCount {
     pub(crate) total_count: u32,

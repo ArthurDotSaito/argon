@@ -1,7 +1,72 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
 
-use crate::wire::{Actor, Connection, PageInfo, WirePr, WireReviewState, WireReviewer, WireRollup};
+use crate::wire::{Actor, WirePr, WireReviewState, WireReviewer, WireRollup, null_as_default};
+
+pub(crate) struct Lenient<T>(Option<T>);
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        match serde_json::from_value(value) {
+            Ok(item) => Ok(Self(Some(item))),
+            Err(error) => {
+                tracing::warn!(%error, "skipping malformed graphql node");
+                Ok(Self(None))
+            }
+        }
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageFlags {
+    #[serde(default)]
+    has_next_page: bool,
+    #[serde(default)]
+    has_previous_page: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    default,
+    bound(deserialize = "T: serde::de::DeserializeOwned")
+)]
+pub(crate) struct PagedConnection<T> {
+    page_info: PageFlags,
+    nodes: Option<Vec<Option<Lenient<T>>>>,
+}
+
+impl<T> Default for PagedConnection<T> {
+    fn default() -> Self {
+        Self {
+            page_info: PageFlags::default(),
+            nodes: None,
+        }
+    }
+}
+
+impl<T> PagedConnection<T> {
+    pub(crate) fn has_next_page(&self) -> bool {
+        self.page_info.has_next_page
+    }
+
+    pub(crate) fn has_previous_page(&self) -> bool {
+        self.page_info.has_previous_page
+    }
+
+    pub(crate) fn into_items(self) -> Vec<T> {
+        self.nodes
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|node| node.0)
+            .collect()
+    }
+}
 
 #[derive(Deserialize)]
 pub(crate) struct DetailData {
@@ -15,10 +80,14 @@ pub(crate) struct WireDetail {
     pub(crate) pr: WirePr,
     pub(crate) head_ref_oid: String,
     pub(crate) body: Option<String>,
-    pub(crate) labels: Connection<WireLabel>,
-    pub(crate) all_commits: Connection<WireDetailCommitNode>,
-    pub(crate) review_threads: Connection<WireThread>,
-    pub(crate) timeline_items: WireTimeline,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) labels: PagedConnection<WireLabel>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) all_commits: PagedConnection<WireDetailCommitNode>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) review_threads: PagedConnection<WireThread>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) timeline_items: PagedConnection<WireTimelineItem>,
 }
 
 #[derive(Deserialize)]
@@ -60,7 +129,8 @@ pub(crate) struct WireThread {
     pub(crate) line: Option<u32>,
     pub(crate) start_line: Option<u32>,
     pub(crate) diff_side: WireDiffSide,
-    pub(crate) comments: Connection<WireThreadComment>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) comments: PagedConnection<WireThreadComment>,
 }
 
 #[derive(Deserialize)]
@@ -79,13 +149,6 @@ pub(crate) enum WireDiffSide {
     Right,
     #[serde(other)]
     Unknown,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireTimeline {
-    pub(crate) page_info: PageInfo,
-    pub(crate) nodes: Option<Vec<Option<WireTimelineItem>>>,
 }
 
 #[derive(Deserialize)]
@@ -122,7 +185,8 @@ pub(crate) struct WireReviewItem {
     pub(crate) body: String,
     pub(crate) submitted_at: Option<DateTime<Utc>>,
     pub(crate) created_at: DateTime<Utc>,
-    pub(crate) comments: Connection<WireReviewComment>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) comments: PagedConnection<WireReviewComment>,
 }
 
 #[derive(Deserialize)]

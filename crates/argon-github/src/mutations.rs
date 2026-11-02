@@ -1,10 +1,11 @@
 use argon_core::PrId;
 use reqwest::Method;
+use serde::Deserialize;
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
 use crate::client::GithubClient;
-use crate::error::Result;
+use crate::error::{GithubError, Result};
 use crate::rest::repo_path;
 
 const ADD_COMMENT_QUERY: &str = include_str!("../queries/add_comment.graphql");
@@ -27,6 +28,24 @@ impl MergeMethod {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddCommentData {
+    add_comment: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeData {
+    merge_pull_request: Option<IgnoredAny>,
+}
+
+fn require_payload(payload: Option<IgnoredAny>, mutation: &str) -> Result<()> {
+    payload
+        .map(|_| ())
+        .ok_or_else(|| GithubError::GraphQl(vec![format!("{mutation} returned no payload")]))
+}
+
 fn add_comment_variables(pr: &PrId, body: &str) -> Value {
     json!({ "input": { "subjectId": pr.0, "body": body } })
 }
@@ -44,21 +63,21 @@ fn rerun_failed_path(repo: &str, run_id: u64) -> Result<String> {
 
 impl GithubClient {
     pub async fn add_comment(&self, pr: &PrId, body: &str) -> Result<()> {
-        let _: IgnoredAny = self
+        let data: AddCommentData = self
             .graphql(
                 "add_comment",
                 ADD_COMMENT_QUERY,
                 add_comment_variables(pr, body),
             )
             .await?;
-        Ok(())
+        require_payload(data.add_comment, "addComment")
     }
 
     pub async fn merge(&self, pr: &PrId, method: MergeMethod) -> Result<()> {
-        let _: IgnoredAny = self
+        let data: MergeData = self
             .graphql("merge", MERGE_QUERY, merge_variables(pr, method))
             .await?;
-        Ok(())
+        require_payload(data.merge_pull_request, "mergePullRequest")
     }
 
     pub async fn rerun_failed(&self, repo: &str, run_id: u64) -> Result<()> {
@@ -71,7 +90,10 @@ impl GithubClient {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
+    use crate::wire::Envelope;
 
     fn pr() -> PrId {
         PrId("PR_kwDOOrbita0412".to_string())
@@ -106,6 +128,53 @@ mod tests {
         assert!(ADD_COMMENT_QUERY.contains("$input: AddCommentInput!"));
         assert!(MERGE_QUERY.contains("mergePullRequest(input: $input)"));
         assert!(MERGE_QUERY.contains("$input: MergePullRequestInput!"));
+    }
+
+    fn merge_outcome(json: &str) -> Result<()> {
+        let envelope: Envelope<MergeData> = serde_json::from_str(json).unwrap();
+        let data = envelope.into_data(Utc::now())?.data;
+        require_payload(data.merge_pull_request, "mergePullRequest")
+    }
+
+    #[test]
+    fn merge_envelope_with_errors_and_null_payload_is_an_error() {
+        let json = r#"{
+            "data": { "mergePullRequest": null },
+            "errors": [{
+                "type": "UNPROCESSABLE",
+                "path": ["mergePullRequest"],
+                "message": "Pull request is not mergeable"
+            }]
+        }"#;
+        match merge_outcome(json) {
+            Err(GithubError::GraphQl(messages)) => {
+                assert_eq!(
+                    messages,
+                    vec!["[UNPROCESSABLE] Pull request is not mergeable"]
+                );
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_envelope_with_null_payload_and_no_errors_is_an_error() {
+        let json = r#"{ "data": { "mergePullRequest": null } }"#;
+        assert!(matches!(merge_outcome(json), Err(GithubError::GraphQl(_))));
+    }
+
+    #[test]
+    fn merge_envelope_with_payload_is_ok() {
+        let json = r#"{ "data": { "mergePullRequest": { "clientMutationId": null } } }"#;
+        assert!(merge_outcome(json).is_ok());
+    }
+
+    #[test]
+    fn add_comment_null_payload_is_an_error() {
+        let envelope: Envelope<AddCommentData> =
+            serde_json::from_str(r#"{ "data": { "addComment": null } }"#).unwrap();
+        let data = envelope.into_data(Utc::now()).unwrap().data;
+        assert!(require_payload(data.add_comment, "addComment").is_err());
     }
 
     #[test]

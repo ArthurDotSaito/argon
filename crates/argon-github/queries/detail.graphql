@@ -95,6 +95,9 @@ query PrDetail($id: ID!) {
         }
       }
       reviewThreads(first: 100) {
+        pageInfo {
+          hasNextPage
+        }
         nodes {
           id
           isResolved
@@ -103,6 +106,9 @@ query PrDetail($id: ID!) {
           startLine
           diffSide
           comments(first: 50) {
+            pageInfo {
+              hasNextPage
+            }
             nodes {
               id
               author {
@@ -115,7 +121,7 @@ query PrDetail($id: ID!) {
         }
       }
       timelineItems(
-        first: 100
+        last: 100
         itemTypes: [
           ISSUE_COMMENT
           PULL_REQUEST_REVIEW
@@ -129,7 +135,7 @@ query PrDetail($id: ID!) {
         ]
       ) {
         pageInfo {
-          hasNextPage
+          hasPreviousPage
         }
         nodes {
           __typename
