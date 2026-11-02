@@ -4,13 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use argon_core::Paths;
 use gpui_kit::component::dock::{DockArea, DockAreaState, DockPlacement};
 use gpui_kit::{App, AppContext as _, Entity, Task, WeakEntity, Window};
 
 pub const LAYOUT_VERSION: usize = 1;
 
-const APP_DIR: &str = "Argon";
-const LAYOUT_FILE: &str = "layout.json";
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(300);
 
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -58,12 +57,8 @@ pub fn restore(
     required_docks.iter().all(|dock| area.has_dock(*dock))
 }
 
-fn layout_path() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|dir| dir.join(APP_DIR).join(LAYOUT_FILE))
-}
-
 fn load() -> Option<DockAreaState> {
-    let path = layout_path()?;
+    let path = Paths::resolve().layout_file();
     let content = fs::read_to_string(&path).ok()?;
     match serde_json::from_str(&content) {
         Ok(state) => Some(state),
@@ -75,8 +70,7 @@ fn load() -> Option<DockAreaState> {
 }
 
 fn save(state: &DockAreaState) -> io::Result<()> {
-    let path = layout_path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no local data directory"))?;
+    let path = Paths::resolve().layout_file();
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

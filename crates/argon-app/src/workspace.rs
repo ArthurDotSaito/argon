@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::Utc;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::dock::{
     DockArea, DockEvent, DockLayout, DockPlacement, DockSkin, PaneRef, PanelId, PanelStyle,
@@ -19,12 +20,11 @@ use crate::keymap::WORKSPACE_CONTEXT;
 use crate::layout_store::{self, LAYOUT_VERSION, LayoutSaver};
 use crate::placeholders::{DockPlaceholder, DockSlot};
 use crate::status_bar::WorkspaceStatusBar;
+use crate::sync_status::SyncStatus;
 use crate::title_bar::AppTitleBar;
 
 const DOCK_AREA_ID: &str = "argon-workspace";
 const SAMPLE_PR: &str = "orbita-health/scheduling-api#482";
-const ACCOUNT_PLACEHOLDER: &str = "@arthursaito";
-const SYNC_PLACEHOLDER: &str = "sincronizado há 2 min";
 const NEEDS_YOU_PLACEHOLDER: usize = 4;
 const RUNNING_AGENTS_PLACEHOLDER: usize = 1;
 
@@ -69,12 +69,15 @@ pub struct Workspace {
     focus_handle: FocusHandle,
     layout_saver: LayoutSaver,
     center_subscriptions: HashMap<EntityId, Subscription>,
+    sync_status: Entity<SyncStatus>,
     _dock_subscription: Subscription,
+    _sync_subscription: Subscription,
 }
 
 impl Workspace {
     pub fn new(
         content_factory: CenterContentFactory,
+        sync_status: Entity<SyncStatus>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -84,6 +87,7 @@ impl Workspace {
         skin.set_toggle_button_visible(false, cx);
         skin.set_close_button_visible(true, cx);
         let dock_subscription = cx.subscribe(&dock_area, Self::on_dock_event);
+        let sync_subscription = cx.observe(&sync_status, |_, _, cx| cx.notify());
 
         let workspace = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -97,7 +101,9 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             layout_saver: LayoutSaver::default(),
             center_subscriptions: HashMap::new(),
+            sync_status,
             _dock_subscription: dock_subscription,
+            _sync_subscription: sync_subscription,
         };
         if !this.restore_layout(window, cx) {
             this.reset_layout(window, cx);
@@ -346,6 +352,12 @@ impl Render for Workspace {
             NEEDS_YOU_PLACEHOLDER,
             RUNNING_AGENTS_PLACEHOLDER,
         );
+        let sync_status = self.sync_status.read(cx);
+        let account = sync_status
+            .login
+            .as_ref()
+            .map(|login| format!("@{login}").into());
+        let title_bar = AppTitleBar::new(account, sync_status.indicator(Utc::now()));
         let theme = cx.theme();
 
         div()
@@ -363,7 +375,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_right_dock))
             .on_action(cx.listener(Self::on_toggle_bottom_dock))
             .on_action(cx.listener(Self::on_close_active_item))
-            .child(AppTitleBar::new(ACCOUNT_PLACEHOLDER, SYNC_PLACEHOLDER))
+            .child(title_bar)
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(status_bar)
     }
