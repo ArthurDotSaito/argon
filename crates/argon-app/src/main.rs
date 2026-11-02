@@ -9,11 +9,13 @@ mod keymap;
 mod layout_store;
 mod palette;
 mod placeholders;
+mod pr;
 mod services;
 mod status_bar;
 mod sync_status;
 mod theme;
 mod title_bar;
+mod ui;
 mod workspace;
 
 use argon_core::Paths;

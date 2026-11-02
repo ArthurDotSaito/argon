@@ -1,14 +1,15 @@
-use argon_core::{ChecksState, PrState, PullRequest};
+use argon_core::{ChecksState, PullRequest};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Stateful, Styled as _, div, hsla, prelude::FluentBuilder as _, px, white,
+    AnyElement, App, Div, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    Stateful, Styled as _, div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::InboxItem;
 use super::labels;
+use crate::ui::{self, avatar, state_icon};
 
 pub const PR_ROW_HEIGHT: f32 = 52.;
 const HEADER_HEIGHT: f32 = 28.;
@@ -25,8 +26,6 @@ const REVIEWERS_WIDTH: f32 = 46.;
 const DIFF_WIDTH: f32 = 104.;
 const COMMENTS_WIDTH: f32 = 40.;
 const AGE_WIDTH: f32 = 52.;
-const AVATAR_SATURATION: f32 = 0.45;
-const AVATAR_LIGHTNESS: f32 = 0.42;
 
 pub fn header(title: SharedString, count: usize, cx: &App) -> Div {
     let theme = cx.theme();
@@ -76,7 +75,7 @@ pub fn pr_row(
         .child(diff_stat(pr, cx))
         .child(comments(pr.comments, cx))
         .child(
-            mono(labels::age_label(now, pr.updated_at), cx)
+            mono(ui::age_label(now, pr.updated_at), cx)
                 .w(px(AGE_WIDTH))
                 .flex()
                 .justify_end(),
@@ -132,69 +131,12 @@ pub fn pr_row(
         .child(details)
 }
 
-pub fn avatar(login: &str, size: f32) -> Div {
-    div()
-        .size(px(size))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .bg(avatar_color(login))
-        .text_color(white())
-        .text_size(px(size * 0.45))
-        .font_semibold()
-        .child(initials(login))
-}
-
-fn initials(name: &str) -> String {
-    let parts: Vec<&str> = name
-        .split(['-', '_', '.', ' '])
-        .filter(|part| !part.is_empty())
-        .collect();
-    let picked: String = match parts.as_slice() {
-        [first, second, ..] => first
-            .chars()
-            .take(1)
-            .chain(second.chars().take(1))
-            .collect(),
-        _ => name
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .take(2)
-            .collect(),
-    };
-    picked.to_uppercase()
-}
-
-fn avatar_color(name: &str) -> Hsla {
-    let hash = name
-        .to_lowercase()
-        .bytes()
-        .fold(0x811c_9dc5_u32, |hash, byte| {
-            (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
-        });
-    let hue = (hash % 360) as f32 / 360.;
-    hsla(hue, AVATAR_SATURATION, AVATAR_LIGHTNESS, 1.)
-}
-
 fn unread_dot(unread: bool, cx: &App) -> Div {
     div()
         .size(px(UNREAD_DOT))
         .flex_none()
         .rounded_full()
         .when(unread, |this| this.bg(cx.theme().primary))
-}
-
-fn state_icon(pr: &PullRequest, cx: &App) -> Icon {
-    let theme = cx.theme();
-    let (icon, color) = match pr.state {
-        PrState::Open if pr.is_draft => (IconName::GitPullRequestDraft, theme.muted_foreground),
-        PrState::Open => (IconName::GitPullRequest, theme.success),
-        PrState::Merged => (IconName::GitMerge, theme.magenta),
-        PrState::Closed => (IconName::GitPullRequestClosed, theme.danger),
-    };
-    Icon::new(icon).small().text_color(color)
 }
 
 fn title(item: &InboxItem, cx: &App) -> Div {

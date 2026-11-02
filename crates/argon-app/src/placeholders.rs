@@ -1,12 +1,11 @@
-use argon_core::PrKey;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, v_flex};
 use gpui_kit::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
+    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Window, div,
 };
 
-use crate::inbox::{self, InboxModel};
+use crate::inbox;
 
 pub struct CenterPlaceholder {
     title: SharedString,
@@ -42,45 +41,6 @@ impl Render for CenterPlaceholder {
             self.description.clone(),
             cx,
         )
-    }
-}
-
-pub struct PrPlaceholder {
-    key: PrKey,
-    model: Entity<InboxModel>,
-    focus_handle: FocusHandle,
-    _subscription: Subscription,
-}
-
-impl PrPlaceholder {
-    pub fn new(key: PrKey, model: Entity<InboxModel>, cx: &mut Context<Self>) -> Self {
-        let subscription = cx.observe(&model, |_, _, cx| cx.notify());
-        Self {
-            key,
-            model,
-            focus_handle: cx.focus_handle(),
-            _subscription: subscription,
-        }
-    }
-}
-
-impl Focusable for PrPlaceholder {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for PrPlaceholder {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (title, description): (SharedString, SharedString) =
-            match self.model.read(cx).pr(&self.key) {
-                Some(pr) => (
-                    format!("#{} {}", pr.number, pr.title).into(),
-                    format!("{} · {}", pr.repo, inbox::PR_DETAIL_PENDING).into(),
-                ),
-                None => (inbox::PR_FALLBACK_TITLE.into(), inbox::PR_NOT_LOADED.into()),
-            };
-        placeholder_body(&self.focus_handle, title, description, cx)
     }
 }
 

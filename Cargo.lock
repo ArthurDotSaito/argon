@@ -228,6 +228,7 @@ dependencies = [
  "futures",
  "gpui-kit",
  "nucleo-matcher",
+ "open",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -10,8 +10,8 @@ use gpui_kit::{
 
 use super::items::{AccountEntry, OrgEntry};
 use super::model::InboxModel;
-use super::row::avatar;
 use super::{InboxView, labels};
+use crate::ui::avatar;
 
 pub const VIEWS_PANEL: &str = "argon.views";
 

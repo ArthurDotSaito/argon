@@ -10,13 +10,20 @@ gpui_kit::assets::icon_assets!(
         CircleDashed,
         CircleDot,
         Clock,
+        FileCode,
         FileDiff,
+        GitBranch,
+        GitCommitHorizontal,
         GitMerge,
         GitPullRequest,
         GitPullRequestClosed,
         GitPullRequestDraft,
         MessageSquare,
         Minus,
+        Sparkles,
+        Tag,
+        UserPlus,
+        Users,
         X
     ]
 );
