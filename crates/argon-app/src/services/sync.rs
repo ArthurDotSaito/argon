@@ -1,20 +1,24 @@
-use std::sync::{Arc, PoisonError, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::{Config, Paths};
+use argon_core::{Paths, PullRequest};
 use argon_github::{Account, GithubClient, GithubError, Viewer, discover_accounts, token_for};
 use chrono::{DateTime, Local, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::{error, info, warn};
 
-use super::store_handle::StoreHandle;
+use super::orgs::{admin_orgs, orgs_for_host};
+use super::shared::Shared;
+use super::store_handle::{StoreHandle, StoreStartup};
 
 const THREAD_NAME: &str = "argon-services";
 const RUNTIME_THREAD_NAME: &str = "argon-tokio";
 const RUNTIME_WORKERS: usize = 2;
 const DEFAULT_HOST: &str = "github.com";
+const LOCAL_STORE_HOST: &str = "argon.db";
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,54 +30,6 @@ pub enum SyncEvent {
 }
 
 pub(super) struct SyncRequest;
-
-pub(super) struct Shared {
-    config: RwLock<Config>,
-    accounts: RwLock<Vec<Account>>,
-}
-
-impl Shared {
-    pub(super) fn new(config: Config) -> Self {
-        Self {
-            config: RwLock::new(config),
-            accounts: RwLock::default(),
-        }
-    }
-
-    pub(super) fn config(&self) -> Config {
-        self.config
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    pub(super) fn accounts(&self) -> Vec<Account> {
-        self.accounts
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    fn set_accounts(&self, accounts: Vec<Account>) {
-        *self
-            .accounts
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = accounts;
-    }
-
-    fn initialize_orgs(&self, tracked: Vec<String>, paths: &Paths) {
-        let mut config = self.config.write().unwrap_or_else(PoisonError::into_inner);
-        config.orgs.tracked = tracked;
-        config.orgs.initialized = true;
-        match config.save(&paths.config_file()) {
-            Ok(()) => info!(
-                tracked = config.orgs.tracked.len(),
-                "initialized tracked organizations"
-            ),
-            Err(error) => warn!(%error, "failed to save initialized config"),
-        }
-    }
-}
 
 struct Session {
     account: Account,
@@ -91,6 +47,7 @@ pub(super) struct SyncWorker {
     pub(super) paths: Paths,
     pub(super) shared: Arc<Shared>,
     pub(super) store: StoreHandle,
+    pub(super) store_startup: StoreStartup,
     pub(super) events: UnboundedSender<SyncEvent>,
     pub(super) requests: UnboundedReceiver<SyncRequest>,
 }
@@ -127,24 +84,34 @@ impl SyncWorker {
 struct SyncLoop {
     worker: SyncWorker,
     sessions: Vec<Session>,
-    blocked_until: Option<Instant>,
+    blocked: HashMap<String, DateTime<Utc>>,
+    store_error: Option<String>,
+    seeding_orgs: bool,
+    seeded_hosts: HashSet<String>,
 }
 
 impl SyncLoop {
     fn new(worker: SyncWorker) -> Self {
+        let seeding_orgs = !worker.shared.config().orgs.initialized;
         Self {
             worker,
             sessions: Vec::new(),
-            blocked_until: None,
+            blocked: HashMap::new(),
+            store_error: None,
+            seeding_orgs,
+            seeded_hosts: HashSet::new(),
         }
     }
 
     async fn run(mut self) {
+        self.store_error = match (&mut self.worker.store_startup).await {
+            Ok(error) => error,
+            Err(_) => Some("o banco local não iniciou".into()),
+        };
         let mut pending = true;
         let mut next_cycle = Instant::now();
         loop {
             let due = if pending { Instant::now() } else { next_cycle };
-            let due = self.blocked_until.map_or(due, |until| due.max(until));
             tokio::select! {
                 () = tokio::time::sleep_until(due.into()) => {}
                 request = self.worker.requests.next() => {
@@ -179,13 +146,21 @@ impl SyncLoop {
         _ = self.worker.events.unbounded_send(event);
     }
 
+    fn fail(&self, host: &str, error: String) {
+        self.emit(SyncEvent::Failed {
+            host: host.into(),
+            error,
+        });
+    }
+
     async fn cycle(&mut self) {
         let started = Instant::now();
         self.emit(SyncEvent::Started);
         info!("sync cycle started");
-        if self.sessions.is_empty() {
-            self.connect().await;
+        if let Some(error) = &self.store_error {
+            self.fail(LOCAL_STORE_HOST, error.clone());
         }
+        self.connect_missing().await;
         if self.sessions.is_empty() {
             info!(
                 elapsed_ms = elapsed_ms(started),
@@ -197,7 +172,12 @@ impl SyncLoop {
         let config = self.worker.shared.config();
         let mut outcomes = Vec::with_capacity(self.sessions.len());
         for session in &self.sessions {
-            let orgs = orgs_for_host(&config.orgs.tracked, &session.account.host);
+            let host = &session.account.host;
+            if self.report_blocked(host) {
+                outcomes.push(AccountOutcome::Failed);
+                continue;
+            }
+            let orgs = orgs_for_host(&config.orgs.tracked, host);
             let fetched = Instant::now();
             let result = session
                 .client
@@ -209,42 +189,45 @@ impl SyncLoop {
                 .await;
             outcomes.push(match result {
                 Ok(prs) => self.save_prs(&session.account, prs, fetched).await,
-                Err(error) => self.report(&session.account.host, error),
+                Err(error) => self.report(host, error),
             });
         }
+        self.apply_outcomes(&outcomes);
 
-        for outcome in &outcomes {
-            if let AccountOutcome::RateLimited(reset_at) = outcome {
-                self.block_until(*reset_at);
-            }
-        }
-        let mut index = 0;
-        self.sessions.retain(|_| {
-            let keep = !matches!(outcomes[index], AccountOutcome::Expired);
-            index += 1;
-            keep
-        });
-        self.publish_accounts();
-
-        let failures = outcomes
+        let synced = outcomes
             .iter()
-            .filter(|outcome| !matches!(outcome, AccountOutcome::Synced))
+            .filter(|outcome| matches!(outcome, AccountOutcome::Synced))
             .count();
-        if failures > 0 {
+        let failures = outcomes.len() - synced;
+        if synced > 0 {
+            self.finish(started, failures).await;
+        } else {
             warn!(
                 failures,
                 elapsed_ms = elapsed_ms(started),
-                "sync cycle finished with errors"
+                "sync cycle finished without any synced account"
             );
-            return;
         }
-        self.finish(started).await;
+    }
+
+    fn apply_outcomes(&mut self, outcomes: &[AccountOutcome]) {
+        for (session, outcome) in self.sessions.iter().zip(outcomes) {
+            if let AccountOutcome::RateLimited(reset_at) = outcome {
+                self.blocked.insert(session.account.host.clone(), *reset_at);
+            }
+        }
+        let mut expired = outcomes
+            .iter()
+            .map(|outcome| matches!(outcome, AccountOutcome::Expired));
+        self.sessions
+            .retain(|_| !expired.next().unwrap_or_default());
+        self.publish_accounts();
     }
 
     async fn save_prs(
         &self,
         account: &Account,
-        prs: Vec<argon_core::PullRequest>,
+        prs: Vec<PullRequest>,
         fetched: Instant,
     ) -> AccountOutcome {
         let fetched_count = prs.len();
@@ -253,7 +236,9 @@ impl SyncLoop {
             .worker
             .store
             .call(move |store| store.replace_prs(&host, &prs))
-            .await;
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|saved| saved.map_err(|error| error.to_string()));
         match saved {
             Ok(()) => {
                 info!(
@@ -267,25 +252,28 @@ impl SyncLoop {
             }
             Err(error) => {
                 error!(host = %account.host, %error, "failed to store pull requests");
-                self.emit(SyncEvent::Failed {
-                    host: account.host.clone(),
-                    error: format!("falha ao gravar no banco local: {error}"),
-                });
+                self.fail(
+                    &account.host,
+                    format!("falha ao gravar no banco local: {error}"),
+                );
                 AccountOutcome::Failed
             }
         }
     }
 
-    async fn finish(&self, started: Instant) {
+    async fn finish(&self, started: Instant, failures: usize) {
         let counted = self
             .worker
             .store
             .call(|store| store.list_prs().map(|prs| prs.len()))
-            .await;
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|counted| counted.map_err(|error| error.to_string()));
         match counted {
             Ok(count) => {
                 info!(
                     count,
+                    failures,
                     elapsed_ms = elapsed_ms(started),
                     "sync cycle finished"
                 );
@@ -296,27 +284,27 @@ impl SyncLoop {
             }
             Err(error) => {
                 error!(%error, "failed to count stored pull requests");
-                self.emit(SyncEvent::Failed {
-                    host: DEFAULT_HOST.into(),
-                    error: format!("falha ao ler o banco local: {error}"),
-                });
+                self.fail(
+                    LOCAL_STORE_HOST,
+                    format!("falha ao ler o banco local: {error}"),
+                );
             }
         }
     }
 
-    async fn connect(&mut self) {
+    async fn connect_missing(&mut self) {
         let accounts = match discover_accounts() {
             Ok(accounts) => accounts,
             Err(error) => {
                 warn!(%error, "failed to read gh hosts");
-                self.emit(SyncEvent::Failed {
-                    host: DEFAULT_HOST.into(),
-                    error: format!("não foi possível ler a configuração do gh: {error}"),
-                });
+                self.fail(
+                    DEFAULT_HOST,
+                    format!("não foi possível ler a configuração do gh: {error}"),
+                );
                 return;
             }
         };
-        if accounts.is_empty() {
+        if accounts.is_empty() && self.sessions.is_empty() {
             info!("no gh accounts found");
             self.emit(SyncEvent::AuthMissing {
                 host: DEFAULT_HOST.into(),
@@ -324,20 +312,43 @@ impl SyncLoop {
             return;
         }
 
-        let mut viewers = Vec::new();
+        let mut connected = Vec::new();
         for account in accounts {
-            if let Some((session, viewer)) = self.open_session(&account.host).await {
+            let host = account.host;
+            if self.has_session(&host) || self.report_blocked(&host) {
+                continue;
+            }
+            if let Some((session, viewer)) = self.open_session(&host).await {
                 self.sessions.push(session);
-                viewers.push((account.host, viewer));
+                connected.push((host, viewer));
             }
         }
-        self.publish_accounts();
+        if !connected.is_empty() {
+            self.publish_accounts();
+            self.seed_orgs(&connected);
+        }
+    }
 
-        if !viewers.is_empty() && !self.worker.shared.config().orgs.initialized {
+    fn seed_orgs(&mut self, connected: &[(String, Viewer)]) {
+        if !self.seeding_orgs {
+            return;
+        }
+        let fresh: Vec<(String, Viewer)> = connected
+            .iter()
+            .filter(|(host, _)| self.seeded_hosts.insert(host.clone()))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
             self.worker
                 .shared
-                .initialize_orgs(admin_orgs(&viewers), &self.worker.paths);
+                .seed_tracked(admin_orgs(&fresh), &self.worker.paths);
         }
+    }
+
+    fn has_session(&self, host: &str) -> bool {
+        self.sessions
+            .iter()
+            .any(|session| session.account.host == host)
     }
 
     async fn open_session(&mut self, host: &str) -> Option<(Session, Viewer)> {
@@ -372,17 +383,19 @@ impl SyncLoop {
 
     fn report_connect(&mut self, host: &str, error: GithubError) {
         if let AccountOutcome::RateLimited(reset_at) = self.report(host, error) {
-            self.block_until(reset_at);
+            self.blocked.insert(host.to_string(), reset_at);
         }
     }
 
-    fn block_until(&mut self, reset_at: DateTime<Utc>) {
-        let wait = (reset_at - Utc::now()).to_std().unwrap_or_default();
-        let until = Instant::now() + wait;
-        self.blocked_until = Some(
-            self.blocked_until
-                .map_or(until, |current| current.max(until)),
-        );
+    fn report_blocked(&self, host: &str) -> bool {
+        match self.blocked.get(host) {
+            Some(reset_at) if *reset_at > Utc::now() => {
+                info!(host, %reset_at, "skipping rate limited host");
+                self.fail(host, rate_limit_message(*reset_at));
+                true
+            }
+            _ => false,
+        }
     }
 
     fn report(&self, host: &str, error: GithubError) -> AccountOutcome {
@@ -394,18 +407,12 @@ impl SyncLoop {
             }
             GithubError::RateLimited { reset_at } => {
                 warn!(host, %reset_at, "github rate limit reached");
-                self.emit(SyncEvent::Failed {
-                    host: host.into(),
-                    error: rate_limit_message(reset_at),
-                });
+                self.fail(host, rate_limit_message(reset_at));
                 AccountOutcome::RateLimited(reset_at)
             }
             error => {
                 error!(host, %error, "sync request failed");
-                self.emit(SyncEvent::Failed {
-                    host: host.into(),
-                    error: error.to_string(),
-                });
+                self.fail(host, error.to_string());
                 AccountOutcome::Failed
             }
         }
@@ -419,28 +426,6 @@ impl SyncLoop {
             .collect();
         self.worker.shared.set_accounts(accounts);
     }
-}
-
-fn orgs_for_host(tracked: &[String], host: &str) -> Vec<String> {
-    tracked
-        .iter()
-        .filter_map(|entry| entry.split_once('/'))
-        .filter(|(entry_host, _)| *entry_host == host)
-        .map(|(_, org)| org.to_string())
-        .collect()
-}
-
-fn admin_orgs(viewers: &[(String, Viewer)]) -> Vec<String> {
-    viewers
-        .iter()
-        .flat_map(|(host, viewer)| {
-            viewer
-                .orgs
-                .iter()
-                .filter(|org| org.can_admin)
-                .map(move |org| format!("{host}/{}", org.login))
-        })
-        .collect()
 }
 
 fn rate_limit_message(reset_at: DateTime<Utc>) -> String {

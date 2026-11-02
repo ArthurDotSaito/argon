@@ -1,5 +1,6 @@
 mod actions;
 mod center;
+mod config_load;
 mod keymap;
 mod layout_store;
 mod placeholders;
@@ -10,11 +11,13 @@ mod theme;
 mod title_bar;
 mod workspace;
 
-use argon_core::{Config, Paths};
+use argon_core::Paths;
 use gpui_kit::component::TitleBar;
 use gpui_kit::{
-    App, AppContext as _, Bounds, Entity, TitlebarOptions, WindowBounds, WindowOptions, px, size,
+    App, AppContext as _, Bounds, Entity, Global, TitlebarOptions, WindowBounds, WindowOptions, px,
+    size,
 };
+use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::services::{AppServices, Services};
 use crate::sync_status::SyncStatus;
@@ -24,15 +27,26 @@ const WINDOW_TITLE: &str = "Argon";
 const WINDOW_WIDTH: f32 = 1440.;
 const WINDOW_HEIGHT: f32 = 900.;
 
+struct LogGuard(Option<WorkerGuard>);
+
+impl Global for LogGuard {}
+
 fn main() {
     let paths = Paths::resolve();
-    services::init_logging(&paths.log_dir());
+    let log_guard = services::init_logging(&paths.log_dir());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "argon starting");
-    let config = load_config(&paths);
+    let config = config_load::load(&paths);
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
+            cx.set_global(LogGuard(log_guard));
+            cx.on_app_quit(|cx| {
+                tracing::info!("argon quitting");
+                cx.global_mut::<LogGuard>().0.take();
+                async {}
+            })
+            .detach();
             gpui_kit::init(cx);
             theme::apply_one_dark(cx);
             keymap::bind(cx);
@@ -42,16 +56,6 @@ fn main() {
             open_main_window(sync_status, cx);
             cx.activate(true);
         });
-}
-
-fn load_config(paths: &Paths) -> Config {
-    let path = paths.config_file();
-    Config::load(&path).unwrap_or_else(|error| {
-        tracing::warn!(%error, "failed to load config, using defaults without overwriting it");
-        let mut config = Config::default();
-        config.orgs.initialized = true;
-        config
-    })
 }
 
 fn open_main_window(sync_status: Entity<SyncStatus>, cx: &mut App) {

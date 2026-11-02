@@ -3,7 +3,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::UnboundedReceiver;
-use gpui_kit::{Context, SharedString, Task};
+use gpui_kit::{Context, EventEmitter, SharedString, Task};
 
 use crate::services::{Services, SyncEvent};
 
@@ -28,6 +28,12 @@ pub enum SyncTone {
     Danger,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastSync {
+    pub at: DateTime<Utc>,
+    pub count: usize,
+}
+
 pub struct SyncIndicator {
     pub label: SharedString,
     pub tone: SyncTone,
@@ -35,6 +41,7 @@ pub struct SyncIndicator {
 
 pub struct SyncStatus {
     pub state: SyncState,
+    pub last_ok: Option<LastSync>,
     pub login: Option<String>,
     _tasks: [Task<()>; 2],
 }
@@ -53,7 +60,8 @@ impl SyncStatus {
                     .next()
                     .map(|account| account.login);
                 let applied = this.update(cx, |status, cx| {
-                    status.apply(event, login);
+                    status.apply(&event, login);
+                    cx.emit(event);
                     cx.notify();
                 });
                 if applied.is_err() {
@@ -71,6 +79,7 @@ impl SyncStatus {
         });
         Self {
             state: SyncState::Idle,
+            last_ok: None,
             login: None,
             _tasks: [listener, clock],
         }
@@ -90,16 +99,29 @@ impl SyncStatus {
         }
     }
 
-    fn apply(&mut self, event: SyncEvent, login: Option<String>) {
+    fn apply(&mut self, event: &SyncEvent, login: Option<String>) {
         self.login = login;
-        self.state = match event {
-            SyncEvent::Started => SyncState::Syncing,
-            SyncEvent::Finished { at, count } => SyncState::Ok { at, count },
-            SyncEvent::Failed { error, .. } => SyncState::Error(error),
-            SyncEvent::AuthMissing { host } => SyncState::AuthMissing(host),
-        };
+        match event {
+            SyncEvent::Started => self.state = SyncState::Syncing,
+            SyncEvent::Finished { at, count } => {
+                self.last_ok = Some(LastSync {
+                    at: *at,
+                    count: *count,
+                });
+                if self.state == SyncState::Syncing {
+                    self.state = SyncState::Ok {
+                        at: *at,
+                        count: *count,
+                    };
+                }
+            }
+            SyncEvent::Failed { error, .. } => self.state = SyncState::Error(error.clone()),
+            SyncEvent::AuthMissing { host } => self.state = SyncState::AuthMissing(host.clone()),
+        }
     }
 }
+
+impl EventEmitter<SyncEvent> for SyncStatus {}
 
 fn synced_label(now: DateTime<Utc>, at: DateTime<Utc>) -> String {
     let minutes = (now - at).num_minutes().max(0);
