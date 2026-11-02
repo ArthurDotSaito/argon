@@ -2,7 +2,7 @@ use reqwest::header::{ACCEPT, USER_AGENT};
 use reqwest::{Method, RequestBuilder, Url};
 use serde::de::DeserializeOwned;
 
-use crate::client::GithubClient;
+use crate::client::{GithubClient, USER_AGENT_VALUE};
 use crate::error::{GithubError, Result};
 
 const API_VERSION: &str = "2022-11-28";
@@ -38,7 +38,7 @@ impl GithubClient {
         self.http
             .request(method, url)
             .bearer_auth(&self.token)
-            .header(USER_AGENT, concat!("argon/", env!("CARGO_PKG_VERSION")))
+            .header(USER_AGENT, USER_AGENT_VALUE)
             .header(ACCEPT, "application/vnd.github+json")
             .header("X-GitHub-Api-Version", API_VERSION)
     }

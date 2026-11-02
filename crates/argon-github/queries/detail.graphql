@@ -1,76 +1,13 @@
 query PrDetail($id: ID!) {
   node(id: $id) {
     ... on PullRequest {
-      id
-      number
-      title
-      url
-      isDraft
-      state
-      createdAt
-      updatedAt
-      closedAt
-      author {
-        login
-      }
-      repository {
-        nameWithOwner
-      }
-      baseRefName
-      headRefName
+      ...PullRequestFields
       headRefOid
       body
-      additions
-      deletions
-      changedFiles
-      reviewDecision
-      mergeable
-      comments {
-        totalCount
-      }
       labels(first: 50) {
         nodes {
           name
           color
-        }
-      }
-      reviewRequests(first: 20) {
-        nodes {
-          requestedReviewer {
-            ... on User {
-              login
-            }
-            ... on Team {
-              slug
-              organization {
-                login
-              }
-            }
-          }
-        }
-      }
-      assignees(first: 10) {
-        nodes {
-          login
-        }
-      }
-      latestReviews(first: 20) {
-        nodes {
-          author {
-            login
-          }
-          state
-          submittedAt
-        }
-      }
-      commits(last: 1) {
-        nodes {
-          commit {
-            committedDate
-            statusCheckRollup {
-              state
-            }
-          }
         }
       }
       allCommits: commits(first: 250) {
@@ -101,10 +38,14 @@ query PrDetail($id: ID!) {
         nodes {
           id
           isResolved
+          isOutdated
           path
           line
           startLine
+          originalLine
+          originalStartLine
           diffSide
+          startDiffSide
           comments(first: 50) {
             pageInfo {
               hasNextPage

@@ -7,7 +7,10 @@ use crate::detail_convert::into_pr_detail;
 use crate::detail_wire::DetailData;
 use crate::error::{GithubError, Result};
 
-const DETAIL_QUERY: &str = include_str!("../queries/detail.graphql");
+const DETAIL_QUERY: &str = concat!(
+    include_str!("../queries/detail.graphql"),
+    include_str!("../queries/pull_request_fields.graphql")
+);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PrDetail {
@@ -106,10 +109,14 @@ pub struct ThreadComment {
 pub struct ReviewThread {
     pub id: String,
     pub resolved: bool,
+    pub outdated: bool,
     pub path: String,
     pub line: Option<u32>,
     pub start_line: Option<u32>,
+    pub original_line: Option<u32>,
+    pub original_start_line: Option<u32>,
     pub side: Side,
+    pub start_side: Option<Side>,
     pub comments: Vec<ThreadComment>,
     pub truncated_comments: bool,
 }
@@ -136,5 +143,16 @@ impl GithubClient {
             GithubError::GraphQl(vec![format!("pull request {} not found", id.0)])
         })?;
         Ok(into_pr_detail(wire, &self.host))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detail_query_spreads_and_defines_the_shared_fragment() {
+        assert!(DETAIL_QUERY.contains("...PullRequestFields"));
+        assert!(DETAIL_QUERY.contains("fragment PullRequestFields on PullRequest"));
     }
 }

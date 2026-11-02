@@ -113,18 +113,26 @@ fn commit_info(commit: WireDetailCommit) -> CommitInfo {
     }
 }
 
+fn diff_side(side: WireDiffSide) -> Side {
+    match side {
+        WireDiffSide::Left => Side::Left,
+        WireDiffSide::Right | WireDiffSide::Unknown => Side::Right,
+    }
+}
+
 fn thread(wire: WireThread) -> ReviewThread {
     ReviewThread {
         id: wire.id,
         resolved: wire.is_resolved,
+        outdated: wire.is_outdated,
         path: wire.path,
         line: wire.line,
         start_line: wire.start_line,
+        original_line: wire.original_line,
+        original_start_line: wire.original_start_line,
         truncated_comments: wire.comments.has_next_page(),
-        side: match wire.diff_side {
-            WireDiffSide::Left => Side::Left,
-            WireDiffSide::Right | WireDiffSide::Unknown => Side::Right,
-        },
+        side: diff_side(wire.diff_side),
+        start_side: wire.start_diff_side.map(diff_side),
         comments: wire
             .comments
             .into_items()
@@ -434,6 +442,32 @@ mod tests {
         let outdated = &threads[2];
         assert_eq!(outdated.line, None);
         assert_eq!(outdated.side, Side::Right);
+
+        assert!(!open.outdated);
+        assert!(outdated.outdated);
+    }
+
+    #[test]
+    fn threads_carry_start_side_and_original_anchors() {
+        let threads = detail().threads;
+        assert_eq!(threads[0].start_side, Some(Side::Left));
+        assert_eq!(threads[0].side, Side::Right);
+        assert_eq!(
+            (threads[0].original_line, threads[0].original_start_line),
+            (Some(41), Some(38))
+        );
+        assert_eq!(threads[1].start_side, None);
+        assert_eq!(
+            (threads[1].original_line, threads[1].original_start_line),
+            (Some(12), None)
+        );
+        let outdated = &threads[2];
+        assert_eq!(outdated.line, None);
+        assert_eq!(
+            (outdated.original_line, outdated.original_start_line),
+            (Some(7), Some(5))
+        );
+        assert_eq!(outdated.start_side, Some(Side::Right));
     }
 
     #[test]

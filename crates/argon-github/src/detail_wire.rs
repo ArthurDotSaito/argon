@@ -125,10 +125,15 @@ pub(crate) struct WireGitActor {
 pub(crate) struct WireThread {
     pub(crate) id: String,
     pub(crate) is_resolved: bool,
+    #[serde(default)]
+    pub(crate) is_outdated: bool,
     pub(crate) path: String,
     pub(crate) line: Option<u32>,
     pub(crate) start_line: Option<u32>,
+    pub(crate) original_line: Option<u32>,
+    pub(crate) original_start_line: Option<u32>,
     pub(crate) diff_side: WireDiffSide,
+    pub(crate) start_diff_side: Option<WireDiffSide>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) comments: PagedConnection<WireThreadComment>,
 }

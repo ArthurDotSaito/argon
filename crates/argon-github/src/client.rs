@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::error::{GithubError, Result};
 use crate::wire::{Envelope, ViewerData};
 
+pub(crate) const USER_AGENT_VALUE: &str = concat!("argon/", env!("CARGO_PKG_VERSION"));
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const FALLBACK_RESET: chrono::Duration = chrono::Duration::seconds(60);
 const VIEWER_QUERY: &str = include_str!("../queries/viewer.graphql");
@@ -118,7 +119,7 @@ impl GithubClient {
             .http
             .post(&self.graphql_url)
             .bearer_auth(&self.token)
-            .header(USER_AGENT, concat!("argon/", env!("CARGO_PKG_VERSION")))
+            .header(USER_AGENT, USER_AGENT_VALUE)
             .json(&json!({ "query": query, "variables": variables }))
             .send()
             .await?;

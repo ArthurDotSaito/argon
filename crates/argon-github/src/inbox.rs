@@ -12,7 +12,10 @@ use crate::error::{GithubError, Result};
 use crate::wire::{HydrateData, IdsData, RateLimit};
 
 const IDS_QUERY: &str = include_str!("../queries/inbox_ids.graphql");
-const HYDRATE_QUERY: &str = include_str!("../queries/inbox_hydrate.graphql");
+const HYDRATE_QUERY: &str = concat!(
+    include_str!("../queries/inbox_hydrate.graphql"),
+    include_str!("../queries/pull_request_fields.graphql")
+);
 const PAGE_SIZE: usize = 100;
 const MIN_BATCH: usize = 10;
 const HYDRATE_CHUNK: usize = 40;
@@ -228,6 +231,12 @@ mod tests {
     use super::*;
     use crate::convert::tests::fixture_prs;
     use crate::wire::Envelope;
+
+    #[test]
+    fn hydrate_query_spreads_and_defines_the_shared_fragment() {
+        assert!(HYDRATE_QUERY.contains("...PullRequestFields"));
+        assert!(HYDRATE_QUERY.contains("fragment PullRequestFields on PullRequest"));
+    }
 
     #[test]
     fn merge_ors_involvement_of_the_same_pr_across_searches() {

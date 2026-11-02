@@ -111,10 +111,14 @@
           {
             "id": "PRRT_kwDOOrbita01",
             "isResolved": false,
+            "isOutdated": false,
             "path": "src/retry/budget.ts",
             "line": 41,
             "startLine": 38,
+            "originalLine": 41,
+            "originalStartLine": 38,
             "diffSide": "RIGHT",
+            "startDiffSide": "LEFT",
             "comments": {
               "pageInfo": { "hasNextPage": true },
               "nodes": [
@@ -136,10 +140,14 @@
           {
             "id": "PRRT_kwDOOrbita02",
             "isResolved": true,
+            "isOutdated": false,
             "path": "src/retry/legacy.ts",
             "line": 12,
             "startLine": null,
+            "originalLine": 12,
+            "originalStartLine": null,
             "diffSide": "LEFT",
+            "startDiffSide": null,
             "comments": {
               "nodes": [
                 {
@@ -154,10 +162,14 @@
           {
             "id": "PRRT_kwDOOrbita03",
             "isResolved": false,
+            "isOutdated": true,
             "path": "docs/retry.md",
             "line": null,
             "startLine": null,
+            "originalLine": 7,
+            "originalStartLine": 5,
             "diffSide": "FUTURE_SIDE",
+            "startDiffSide": "FUTURE_SIDE",
             "comments": {
               "nodes": [
                 {
