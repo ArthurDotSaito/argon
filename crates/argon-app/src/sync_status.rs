@@ -10,6 +10,7 @@ use crate::services::{Services, SyncEvent};
 const CLOCK_TICK: Duration = Duration::from_secs(30);
 const DEFAULT_HOST: &str = "github.com";
 const MAX_ERROR_CHARS: usize = 60;
+const SERVICES_STOPPED: &str = "sincronização parou — reinicie o Argon";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
@@ -65,9 +66,14 @@ impl SyncStatus {
                     cx.notify();
                 });
                 if applied.is_err() {
-                    break;
+                    return;
                 }
             }
+            this.update(cx, |status, cx| {
+                status.state = SyncState::Error(SERVICES_STOPPED.to_string());
+                cx.notify();
+            })
+            .ok();
         });
         let clock = cx.spawn(async move |this, cx| {
             loop {

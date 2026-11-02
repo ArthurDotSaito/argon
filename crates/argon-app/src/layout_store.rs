@@ -50,7 +50,7 @@ pub fn restore(
         return false;
     }
     if let Err(error) = area.update(cx, |area, cx| area.load(state, window, cx)) {
-        eprintln!("failed to restore layout: {error:#}");
+        tracing::warn!("failed to restore layout: {error:#}");
         return false;
     }
     let area = area.read(cx);
@@ -63,7 +63,7 @@ fn load() -> Option<DockAreaState> {
     match serde_json::from_str(&content) {
         Ok(state) => Some(state),
         Err(error) => {
-            eprintln!("ignoring invalid layout at {}: {error}", path.display());
+            tracing::warn!("ignoring invalid layout at {}: {error}", path.display());
             None
         }
     }
@@ -89,6 +89,6 @@ fn staging_path(path: &Path) -> PathBuf {
 
 fn report_save(result: io::Result<()>) {
     if let Err(error) = result {
-        eprintln!("failed to save layout: {error}");
+        tracing::warn!("failed to save layout: {error}");
     }
 }

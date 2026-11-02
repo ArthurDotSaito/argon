@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 
 use serde::Deserialize;
 use tokio::process::Command;
@@ -10,6 +11,7 @@ use crate::error::{GithubError, Result};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
@@ -41,7 +43,9 @@ pub async fn token_for(host: &str) -> Result<String> {
         .kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
-    let output = command.output().await?;
+    let output = tokio::time::timeout(TOKEN_TIMEOUT, command.output())
+        .await
+        .map_err(|_| std::io::Error::new(ErrorKind::TimedOut, "gh auth token timed out"))??;
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() || token.is_empty() {
         return Err(GithubError::AuthMissing {
