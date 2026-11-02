@@ -6,6 +6,7 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
+use crate::actions::OpenPalette;
 use crate::services::AppServices;
 use crate::sync_status::{SyncIndicator, SyncTone};
 
@@ -37,7 +38,7 @@ fn tone_color(tone: SyncTone, cx: &App) -> Hsla {
     }
 }
 
-fn request_sync(cx: &mut App) {
+pub fn request_sync(cx: &mut App) {
     if let Some(services) = cx.try_global::<AppServices>() {
         services.0.sync_now();
     }
@@ -92,6 +93,7 @@ impl RenderOnce for AppTitleBar {
             .cursor_pointer()
             .hover(|this| this.text_color(theme.foreground))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenPalette), cx))
             .child(Icon::new(IconName::Search).xsmall())
             .child(div().flex_1().text_xs().child(SEARCH_PLACEHOLDER))
             .child(

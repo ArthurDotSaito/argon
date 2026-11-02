@@ -1,9 +1,11 @@
+use gpui_kit::base::actions::{SelectDown, SelectUp};
 use gpui_kit::{App, KeyBinding};
 
 use crate::actions::{
-    ArchiveSelected, ClearFilter, CloseActiveItem, FocusFilter, OpenSelected, SelectNext,
-    SelectPrevious, ToggleBottomDock, ToggleLeftDock, ToggleRead, ToggleRightDock,
+    ArchiveSelected, ClearFilter, CloseActiveItem, FocusFilter, OpenPalette, OpenSelected,
+    SelectNext, SelectPrevious, ToggleBottomDock, ToggleLeftDock, ToggleRead, ToggleRightDock,
 };
+use crate::palette::PALETTE_CONTEXT;
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 pub const INBOX_CONTEXT: &str = "Inbox";
@@ -15,6 +17,9 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("ctrl-alt-b", ToggleRightDock, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("ctrl-j", ToggleBottomDock, Some(WORKSPACE_CONTEXT)),
         KeyBinding::new("ctrl-w", CloseActiveItem, Some(WORKSPACE_CONTEXT)),
+        KeyBinding::new("ctrl-k", OpenPalette, Some(WORKSPACE_CONTEXT)),
+        KeyBinding::new("ctrl-n", SelectDown, Some(PALETTE_CONTEXT)),
+        KeyBinding::new("ctrl-p", SelectUp, Some(PALETTE_CONTEXT)),
         KeyBinding::new("j", SelectNext, Some(INBOX_LIST_CONTEXT)),
         KeyBinding::new("down", SelectNext, Some(INBOX_LIST_CONTEXT)),
         KeyBinding::new("k", SelectPrevious, Some(INBOX_LIST_CONTEXT)),

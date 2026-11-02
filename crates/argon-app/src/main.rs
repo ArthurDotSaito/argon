@@ -7,6 +7,7 @@ mod dock_items;
 mod inbox;
 mod keymap;
 mod layout_store;
+mod palette;
 mod placeholders;
 mod services;
 mod status_bar;

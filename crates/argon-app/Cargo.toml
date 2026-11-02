@@ -16,6 +16,7 @@ argon-store = { path = "../argon-store" }
 gpui-kit.workspace = true
 chrono.workspace = true
 futures.workspace = true
+nucleo-matcher.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

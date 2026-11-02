@@ -1,3 +1,5 @@
+use crate::inbox::InboxView;
+
 gpui_kit::actions!(
     argon,
     [
@@ -11,6 +13,13 @@ gpui_kit::actions!(
         ArchiveSelected,
         ToggleRead,
         FocusFilter,
-        ClearFilter
+        ClearFilter,
+        OpenPalette,
+        SyncNow,
+        OpenSettings
     ]
 );
+
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = argon, no_json)]
+pub struct GoToView(pub InboxView);

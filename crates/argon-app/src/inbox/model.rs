@@ -123,6 +123,10 @@ impl InboxModel {
         self.sections.visible.len()
     }
 
+    pub fn items(&self) -> &[InboxItem] {
+        &self.items
+    }
+
     pub fn item_at(&self, position: usize) -> Option<&InboxItem> {
         let ix = *self.sections.visible.get(position)?;
         self.items.get(ix)

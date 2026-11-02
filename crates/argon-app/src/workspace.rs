@@ -13,7 +13,10 @@ use gpui_kit::{
     Window, div, px,
 };
 
-use crate::actions::{CloseActiveItem, ToggleBottomDock, ToggleLeftDock, ToggleRightDock};
+use crate::actions::{
+    CloseActiveItem, GoToView, OpenPalette, OpenSettings, SyncNow, ToggleBottomDock,
+    ToggleLeftDock, ToggleRightDock,
+};
 use crate::center::{
     CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel, CenterPanelEvent,
 };
@@ -21,10 +24,11 @@ use crate::dock_items;
 use crate::inbox::{InboxEvent, InboxModel, InboxView, ViewsPanel};
 use crate::keymap::WORKSPACE_CONTEXT;
 use crate::layout_store::{self, LAYOUT_VERSION, LayoutSaver};
+use crate::palette::{Palette, PaletteEvent};
 use crate::placeholders::{DockPlaceholder, DockSlot};
 use crate::status_bar::WorkspaceStatusBar;
 use crate::sync_status::SyncStatus;
-use crate::title_bar::AppTitleBar;
+use crate::title_bar::{self, AppTitleBar};
 
 const DOCK_AREA_ID: &str = "argon-workspace";
 
@@ -63,6 +67,12 @@ impl DockPosition {
     }
 }
 
+struct PaletteSlot {
+    view: Entity<Palette>,
+    previous_focus: Option<FocusHandle>,
+    _subscription: Subscription,
+}
+
 pub struct Workspace {
     dock_area: Entity<DockArea>,
     content_factory: CenterContentFactory,
@@ -72,6 +82,7 @@ pub struct Workspace {
     last_focused: Option<PanelId>,
     sync_status: Entity<SyncStatus>,
     inbox: Entity<InboxModel>,
+    palette: Option<PaletteSlot>,
     _subscriptions: [Subscription; 4],
 }
 
@@ -108,6 +119,7 @@ impl Workspace {
             last_focused: None,
             sync_status,
             inbox,
+            palette: None,
             _subscriptions: [
                 dock_subscription,
                 sync_subscription,
@@ -180,6 +192,64 @@ impl Workspace {
 
     pub fn show_view(&mut self, view: InboxView, cx: &mut Context<Self>) {
         self.inbox.update(cx, |inbox, cx| inbox.show_view(view, cx));
+    }
+
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.close_palette(window, cx);
+            return;
+        }
+        let previous_focus = window.focused(cx);
+        let view = cx.new(|cx| Palette::new(&self.inbox, window, cx));
+        let subscription = cx.subscribe_in(&view, window, Self::on_palette_event);
+        self.palette = Some(PaletteSlot {
+            view,
+            previous_focus,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(slot) = self.palette.take() else {
+            return;
+        };
+        if slot.view.read(cx).contains_focus(window, cx) {
+            match slot.previous_focus {
+                Some(handle) => handle.focus(window, cx),
+                None => self.focus_handle.focus(window, cx),
+            }
+        }
+        cx.notify();
+    }
+
+    fn on_palette_event(
+        &mut self,
+        _: &Entity<Palette>,
+        event: &PaletteEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_palette(window, cx);
+        if let PaletteEvent::OpenPr(key) = event {
+            self.open_item(CenterItem::Pr(key.clone()), false, window, cx);
+        }
+    }
+
+    fn on_open_palette(&mut self, _: &OpenPalette, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_palette(window, cx);
+    }
+
+    fn on_go_to_view(&mut self, action: &GoToView, _: &mut Window, cx: &mut Context<Self>) {
+        self.show_view(action.0, cx);
+    }
+
+    fn on_sync_now(&mut self, _: &SyncNow, _: &mut Window, cx: &mut Context<Self>) {
+        title_bar::request_sync(cx);
+    }
+
+    fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_item(CenterItem::Settings, false, window, cx);
     }
 
     fn on_inbox_event(
@@ -448,8 +518,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_right_dock))
             .on_action(cx.listener(Self::on_toggle_bottom_dock))
             .on_action(cx.listener(Self::on_close_active_item))
+            .on_action(cx.listener(Self::on_open_palette))
+            .on_action(cx.listener(Self::on_go_to_view))
+            .on_action(cx.listener(Self::on_sync_now))
+            .on_action(cx.listener(Self::on_open_settings))
             .child(title_bar)
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(status_bar)
+            .children(self.palette.as_ref().map(|slot| slot.view.clone()))
     }
 }
