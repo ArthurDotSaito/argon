@@ -145,7 +145,13 @@ impl Workspace {
             (Some(panel), true) => Some(panel.clone()),
             (None, true) => panels
                 .iter()
-                .find(|panel| panel.read(cx).is_preview())
+                .find(|panel| {
+                    panel.read(cx).is_preview()
+                        && dock_items::is_visible(
+                            self.dock_area.read(cx),
+                            PanelId::from(panel.entity_id()),
+                        )
+                })
                 .cloned()
                 .inspect(|panel| {
                     panel.update(cx, |panel, cx| panel.replace(item.clone(), window, cx));
@@ -258,19 +264,20 @@ impl Workspace {
 
     fn last_focused_panel(&self, cx: &App) -> Option<PanelId> {
         let id = self.last_focused?;
-        self.dock_area.read(cx).panel(id).map(|_| id)
+        dock_items::is_visible(self.dock_area.read(cx), id).then_some(id)
     }
 
     fn active_center_panel(&self, window: &Window, cx: &App) -> Option<Entity<CenterPanel>> {
         let panels = self.center_panels(cx);
-        let focused = panels
-            .iter()
-            .find(|panel| panel.read(cx).focus_handle(cx).contains_focused(window, cx));
+        let area = self.dock_area.read(cx);
+        let focused = panels.iter().find(|panel| {
+            panel.read(cx).focus_handle(cx).contains_focused(window, cx)
+                && dock_items::is_visible(area, PanelId::from(panel.entity_id()))
+        });
         if let Some(panel) = focused {
             return Some(panel.clone());
         }
 
-        let area = self.dock_area.read(cx);
         let active = self
             .last_focused_panel(cx)
             .and_then(|panel| dock_items::active_in_group_of(area, panel))

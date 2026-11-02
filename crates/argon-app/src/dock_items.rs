@@ -17,6 +17,12 @@ pub fn locate(area: &DockArea, panel: PanelId) -> Option<(DockPlacement, NodeId)
     })
 }
 
+pub fn is_visible(area: &DockArea, panel: PanelId) -> bool {
+    locate(area, panel).is_some_and(|(placement, _)| {
+        placement == DockPlacement::Center || area.is_dock_open(placement)
+    })
+}
+
 pub fn center_panels(area: &DockArea) -> Vec<Entity<CenterPanel>> {
     ITEM_PLACEMENTS
         .iter()

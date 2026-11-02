@@ -89,11 +89,15 @@ impl Shared {
         info!(viewers = cached.len(), "loaded cached gh accounts");
     }
 
-    pub(super) fn forget(&self, host: &str) {
+    pub(super) fn drop_client(&self, host: &str) {
         self.clients
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&host_key(host));
+    }
+
+    pub(super) fn forget(&self, host: &str) {
+        self.drop_client(host);
         self.accounts
             .write()
             .unwrap_or_else(PoisonError::into_inner)

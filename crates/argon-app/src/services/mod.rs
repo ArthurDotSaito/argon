@@ -10,7 +10,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use argon_core::{Config, Paths};
-use argon_github::{Account, GithubClient, token_for};
+use argon_github::{Account, GithubClient, GithubError, discover_accounts, token_for};
+use argon_store::CachedViewer;
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui_kit::{App, Global, Task};
 use tokio::runtime::Handle;
@@ -82,30 +83,70 @@ impl Services {
     reason = "bridge for the PR detail, comment and merge actions of Tasks 9 and 10"
 )]
 impl Services {
-    pub async fn github(&self, host: &str) -> Result<Arc<GithubClient>, ServiceError> {
-        if let Some(client) = self.shared.client(host) {
-            return Ok(client);
-        }
-        let token = token_for(host).await?;
-        let client = Arc::new(GithubClient::new(host, token));
-        tracing::info!(host, "github client connected on demand");
-        Ok(self.shared.register_client(host, client))
-    }
-
     pub fn spawn<F, R>(&self, cx: &App, fut: F) -> Task<Result<R, ServiceError>>
     where
         F: Future<Output = R> + Send + 'static,
         R: Send + 'static,
     {
-        tasks::spawn_on(self.runtime.as_ref(), cx, fut)
+        tasks::run_on(self.runtime.as_ref(), cx, async move { Ok(fut.await) })
     }
+
+    pub fn spawn_github<F, Fut, R>(
+        &self,
+        cx: &App,
+        host: impl Into<String>,
+        f: F,
+    ) -> Task<Result<R, ServiceError>>
+    where
+        F: FnOnce(Arc<GithubClient>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, GithubError>> + Send,
+        R: Send + 'static,
+    {
+        let host = host.into();
+        let shared = self.shared.clone();
+        tasks::run_on(self.runtime.as_ref(), cx, async move {
+            let client = github(&shared, &host).await?;
+            let result = f(client).await;
+            if let Err(GithubError::AuthMissing { .. }) = &result {
+                shared.drop_client(&host);
+            }
+            Ok(result?)
+        })
+    }
+}
+
+async fn github(shared: &Shared, host: &str) -> Result<Arc<GithubClient>, ServiceError> {
+    if let Some(client) = shared.client(host) {
+        return Ok(client);
+    }
+    let token = token_for(host).await?;
+    let client = Arc::new(GithubClient::new(host, token));
+    tracing::info!(host, "github client connected on demand");
+    Ok(shared.register_client(host, client))
 }
 
 fn load_cached_viewers(store: &StoreHandle, shared: Arc<Shared>) {
     store.submit(move |store| match store.viewers() {
-        Ok(viewers) => shared.load_cached(&viewers),
+        Ok(viewers) => shared.load_cached(&known_hosts_only(viewers)),
         Err(error) => tracing::warn!(%error, "failed to load cached gh accounts"),
     });
+}
+
+fn known_hosts_only(viewers: Vec<CachedViewer>) -> Vec<CachedViewer> {
+    match discover_accounts() {
+        Ok(accounts) => viewers
+            .into_iter()
+            .filter(|viewer| {
+                accounts
+                    .iter()
+                    .any(|account| account.host.eq_ignore_ascii_case(&viewer.host))
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "failed to read gh hosts, keeping cached accounts");
+            viewers
+        }
+    }
 }
 
 pub struct AppServices(pub Services);
