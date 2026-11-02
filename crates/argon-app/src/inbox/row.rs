@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
 use gpui_kit::{
-    AnyElement, App, Div, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Stateful, Styled as _, div, prelude::FluentBuilder as _, px,
+    App, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful, Styled as _,
+    div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::InboxItem;
@@ -161,32 +161,12 @@ fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
 }
 
 fn checks(checks: Option<ChecksState>, cx: &App) -> Div {
-    let theme = cx.theme();
-    let glyph: AnyElement = match checks {
-        Some(ChecksState::Success) => Icon::new(IconName::Check)
-            .xsmall()
-            .text_color(theme.success)
-            .into_any_element(),
-        Some(ChecksState::Failure | ChecksState::Error) => Icon::new(IconName::X)
-            .xsmall()
-            .text_color(theme.danger)
-            .into_any_element(),
-        Some(ChecksState::Pending) => Icon::new(IconName::CircleDashed)
-            .xsmall()
-            .text_color(theme.warning)
-            .into_any_element(),
-        None => Icon::new(IconName::Minus)
-            .xsmall()
-            .text_color(theme.muted_foreground)
-            .into_any_element(),
-    };
     h_flex()
         .w(px(CI_WIDTH))
         .flex_none()
         .justify_center()
-        .child(glyph)
+        .child(ui::checks_glyph(checks, cx))
 }
-
 fn reviewers(pr: &PullRequest, cx: &App) -> Div {
     let theme = cx.theme();
     let mut logins: Vec<&str> = Vec::new();
@@ -215,24 +195,11 @@ fn reviewers(pr: &PullRequest, cx: &App) -> Div {
 }
 
 fn diff_stat(pr: &PullRequest, cx: &App) -> Div {
-    let theme = cx.theme();
     h_flex()
         .w(px(DIFF_WIDTH))
         .flex_none()
         .justify_end()
-        .gap_1p5()
-        .font_family(theme.mono_font_family.clone())
-        .text_xs()
-        .child(
-            div()
-                .text_color(theme.success)
-                .child(format!("+{}", pr.additions)),
-        )
-        .child(
-            div()
-                .text_color(theme.danger)
-                .child(format!("−{}", pr.deletions)),
-        )
+        .child(ui::diff_stat(pr.additions, pr.deletions, cx))
 }
 
 fn comments(count: u32, cx: &App) -> Div {

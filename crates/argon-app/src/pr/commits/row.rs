@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
-    ClickEvent, Context, Div, InteractiveElement as _, MouseButton, ParentElement as _, Stateful,
+    ClickEvent, Context, Div, InteractiveElement as _, ParentElement as _, Stateful,
     StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
 };
 
@@ -120,8 +120,8 @@ fn headline(
             .hover(|style| style.text_color(theme.foreground))
             .tooltip(|window, cx| Tooltip::new(labels::TOGGLE_MESSAGE).build(window, cx))
             .child(ELLIPSIS)
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
                 this.toggle_message(ix, cx);
             }))
     });
@@ -163,8 +163,8 @@ fn sha(commit: &CommitInfo, state: CommitRow, cx: &mut Context<CommitsTab>) -> S
         .hover(|style| style.bg(theme.muted))
         .tooltip(|window, cx| Tooltip::new(labels::COPY_SHA).build(window, cx))
         .child(text.to_string())
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
             this.copy_sha(ix, cx);
         }))
 }

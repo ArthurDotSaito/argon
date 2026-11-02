@@ -249,20 +249,7 @@ fn branch(id: &'static str, name: &str, cx: &App) -> Div {
 
 fn stats(pr: &PullRequest, detail: Option<&PrDetail>, cx: &App) -> Div {
     let theme = cx.theme();
-    let diff = h_flex()
-        .gap_1p5()
-        .font_family(theme.mono_font_family.clone())
-        .text_xs()
-        .child(
-            div()
-                .text_color(theme.success)
-                .child(format!("+{}", pr.additions)),
-        )
-        .child(
-            div()
-                .text_color(theme.danger)
-                .child(format!("−{}", pr.deletions)),
-        );
+    let diff = ui::diff_stat(pr.additions, pr.deletions, cx);
     let files = h_flex()
         .gap_1()
         .items_center()

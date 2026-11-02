@@ -5,9 +5,9 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    ClickEvent, Context, Div, EventEmitter, InteractiveElement as _, IntoElement,
+    App, ClickEvent, Context, Div, EventEmitter, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Task, Window, div, px,
+    Styled as _, Task, Window, div, point, px,
 };
 
 use super::commit_files::commit_files_list;
@@ -27,6 +27,13 @@ fn commit_banner(oid: &str, headline: &str) -> String {
 
 fn files_failed(error: &str) -> String {
     format!("Falha ao carregar os arquivos do commit: {error}")
+}
+
+fn commit_gone(oid: &str) -> String {
+    format!(
+        "O commit {} não faz mais parte do PR (force-push)",
+        short_sha(oid)
+    )
 }
 
 fn commit_file_count(count: usize) -> String {
@@ -61,6 +68,7 @@ pub struct ReviewTab {
     detail: Option<Rc<PrDetail>>,
     scope: ReviewScope,
     files: CommitFiles,
+    notice: Option<SharedString>,
     epoch: u64,
     load_task: Option<Task<()>>,
     scroll: ScrollHandle,
@@ -74,6 +82,7 @@ impl ReviewTab {
             detail: None,
             scope: ReviewScope::All,
             files: CommitFiles::Idle,
+            notice: None,
             epoch: 0,
             load_task: None,
             scroll: ScrollHandle::new(),
@@ -81,6 +90,13 @@ impl ReviewTab {
     }
 
     pub fn set_detail(&mut self, detail: Rc<PrDetail>, cx: &mut Context<Self>) {
+        if let ReviewScope::Commit { oid, .. } = &self.scope
+            && !detail.commits.iter().any(|commit| commit.oid == *oid)
+        {
+            self.notice = Some(commit_gone(oid).into());
+            self.scope = ReviewScope::All;
+            self.files = CommitFiles::Idle;
+        }
         self.detail = Some(detail);
         if matches!(self.files, CommitFiles::Idle) {
             self.load_files(cx);
@@ -98,7 +114,9 @@ impl ReviewTab {
         if scope != self.scope {
             self.files = CommitFiles::Idle;
             self.scope = scope;
+            self.scroll.set_offset(point(px(0.), px(0.)));
         }
+        self.notice = None;
         if matches!(self.files, CommitFiles::Idle | CommitFiles::Failed(_)) {
             self.load_files(cx);
         }
@@ -230,15 +248,44 @@ impl ReviewTab {
     }
 }
 
+fn notice_banner(message: SharedString, cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .w_full()
+        .flex_none()
+        .px_4()
+        .py_2()
+        .gap_2()
+        .items_center()
+        .border_b_1()
+        .border_color(theme.warning.opacity(0.5))
+        .bg(theme.warning.opacity(0.08))
+        .text_sm()
+        .text_color(theme.foreground)
+        .child(
+            Icon::new(IconName::TriangleAlert)
+                .small()
+                .text_color(theme.warning),
+        )
+        .child(message)
+}
+
 impl Render for ReviewTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ReviewScope::Commit { oid, headline } = self.scope.clone() else {
-            return tab_placeholder(
+            let placeholder = tab_placeholder(
                 IconName::FileDiff,
                 labels::UNDER_CONSTRUCTION,
                 labels::REVIEW_SOON,
                 cx,
             );
+            return match self.notice.clone() {
+                Some(notice) => v_flex()
+                    .size_full()
+                    .child(notice_banner(notice, cx))
+                    .child(placeholder.flex_1().min_h_0()),
+                None => placeholder,
+            };
         };
         let banner = self.banner(&oid, &headline, cx);
         let files = self.files_body(cx);
