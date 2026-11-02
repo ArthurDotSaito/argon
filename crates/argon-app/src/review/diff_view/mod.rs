@@ -7,7 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use argon_core::Side;
-use gpui_kit::component::diff::{DiffEvent, DiffLinePosition, DiffMode as KitMode, DiffState};
+use gpui_kit::component::diff::{
+    DiffEvent, DiffLinePosition, DiffLineRange, DiffMode as KitMode, DiffState,
+};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Task,
 };
@@ -73,10 +75,11 @@ pub struct DiffView {
     viewed_enabled: bool,
     comments_enabled: bool,
     github_url: Option<String>,
-    flash: Option<DiffLinePosition>,
+    flash: Option<(String, (u32, Side))>,
     pending_reveal: Option<(String, u32, Side)>,
-    last_line: Option<DiffLinePosition>,
+    saving: HashSet<String>,
     flash_task: Option<Task<()>>,
+    pointer_selection: bool,
     _subscriptions: [Subscription; 2],
 }
 
@@ -93,12 +96,12 @@ impl DiffView {
         let mode = DiffMode::default();
         let state = cx.new(|cx| DiffState::new(Vec::new(), cx).with_mode(mode.kit()));
         let subscriptions = [
-            cx.subscribe(&state, |this, state, event, cx| {
-                if let DiffEvent::SelectionEnded(range) = event {
-                    this.on_selection(range, &state, cx);
-                }
-            }),
             cx.observe(&state, |_, _, cx| cx.notify()),
+            cx.subscribe(&state, |this, _, event, cx| match event {
+                DiffEvent::SelectionStarted(_) => this.pointer_selection = true,
+                DiffEvent::SelectionEnded(range) => this.on_selection_ended(range, cx),
+                _ => {}
+            }),
         ];
         Self {
             state,
@@ -112,8 +115,9 @@ impl DiffView {
             github_url: None,
             flash: None,
             pending_reveal: None,
-            last_line: None,
+            saving: HashSet::new(),
             flash_task: None,
+            pointer_selection: false,
             _subscriptions: subscriptions,
         }
     }
@@ -125,7 +129,8 @@ impl DiffView {
         self.flash = None;
         self.flash_task = None;
         self.pending_reveal = None;
-        self.last_line = None;
+        self.blocks.clear();
+        self.saving.clear();
         self.state
             .update(cx, |state, cx| state.set_files(Vec::new(), cx));
         cx.notify();
@@ -133,6 +138,10 @@ impl DiffView {
 
     pub fn set_files(&mut self, files: Vec<FileDiff>, cx: &mut Context<Self>) {
         let reload = self.ready && !self.files.is_empty();
+        if reload && same_documents(&self.files, &files) {
+            self.replace_files(files, cx);
+            return;
+        }
         let previous: HashSet<String> = self.files.iter().map(|f| f.meta.path.clone()).collect();
         let state = self.state.read(cx);
         let collapsed: HashSet<String> = previous
@@ -140,8 +149,11 @@ impl DiffView {
             .filter(|path| state.is_file_collapsed(path))
             .cloned()
             .collect();
-        let selection = state.selected_lines();
-        let anchor = self.last_line.clone();
+        let selection = state.selected_lines().filter(|_| reload);
+        let focus_line = selection
+            .as_ref()
+            .map(|range| DiffLinePosition::new(range.path().clone(), range.end_side(), range.end()))
+            .or_else(|| self.editor_line().filter(|_| reload));
         let documents: Vec<_> = files.iter().map(|file| file.document.clone()).collect();
         self.state.update(cx, |state, cx| {
             state.set_files(documents, cx);
@@ -154,13 +166,17 @@ impl DiffView {
                 };
                 state.set_file_collapsed(path, collapse, cx);
             }
-            if reload {
-                state.set_selected_lines(selection, cx);
-                if let Some(anchor) = anchor {
-                    state.scroll_to_line(anchor, cx);
-                }
+            state.set_selected_lines(selection, cx);
+            if let Some(line) = focus_line
+                && !state.is_file_collapsed(line.path())
+            {
+                state.scroll_to_line(line, cx);
             }
         });
+        self.replace_files(files, cx);
+    }
+
+    fn replace_files(&mut self, files: Vec<FileDiff>, cx: &mut Context<Self>) {
         self.index = files
             .iter()
             .enumerate()
@@ -172,6 +188,17 @@ impl DiffView {
             self.reveal(&path, line, side, cx);
         }
         cx.notify();
+    }
+
+    fn editor_line(&self) -> Option<DiffLinePosition> {
+        self.files.iter().find_map(|file| {
+            let anchor = self
+                .blocks
+                .get(&file.meta.path)?
+                .first_line(BlockSource::Editor)?;
+            file.has_line(anchor)
+                .then(|| position(&file.meta.path, anchor))
+        })
     }
 
     pub fn files(&self) -> &[FileDiff] {
@@ -200,6 +227,15 @@ impl DiffView {
             self.files[ix].viewed = viewed;
             self.state
                 .update(cx, |state, cx| state.set_file_collapsed(path, viewed, cx));
+        }
+        cx.notify();
+    }
+
+    pub fn set_viewed_saving(&mut self, path: &str, saving: bool, cx: &mut Context<Self>) {
+        if saving {
+            self.saving.insert(path.to_string());
+        } else {
+            self.saving.remove(path);
         }
         cx.notify();
     }
@@ -255,14 +291,13 @@ impl DiffView {
         let context = (line.saturating_sub(REVEAL_CONTEXT)..line)
             .find(|above| file.has_line((*above, side)))
             .unwrap_or(line);
-        let target = position(path, (line, side));
         let scroll = position(path, (context, side));
         self.state
             .update(cx, |state, cx| state.scroll_to_line(scroll, cx));
-        self.start_flash(target, cx);
+        self.start_flash((path.to_string(), (line, side)), cx);
     }
 
-    fn start_flash(&mut self, target: DiffLinePosition, cx: &mut Context<Self>) {
+    fn start_flash(&mut self, target: (String, (u32, Side)), cx: &mut Context<Self>) {
         self.flash = Some(target.clone());
         self.flash_task = Some(cx.spawn(async move |this, cx| {
             for (visible, millis) in FLASH_STEPS {
@@ -288,18 +323,18 @@ impl DiffView {
         cx.notify();
     }
 
-    fn on_selection(
-        &mut self,
-        range: &gpui_kit::component::diff::DiffLineRange,
-        state: &Entity<DiffState>,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.comments_enabled {
-            state.update(cx, |state, cx| state.set_selected_lines(None, cx));
+    fn on_selection_ended(&mut self, range: &DiffLineRange, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.pointer_selection) || !self.comments_enabled {
             return;
         }
-        let gutter = gutter_range(range);
-        self.last_line = Some(position(&gutter.path, (gutter.line, gutter.side)));
+        let Some(file) = self
+            .index
+            .get(range.path().as_ref())
+            .map(|ix| &self.files[*ix])
+        else {
+            return;
+        };
+        let gutter = gutter_range(range, |anchor| file.line_order(anchor));
         cx.emit(DiffViewEvent::GutterClicked {
             path: gutter.path,
             line: gutter.line,
@@ -307,4 +342,12 @@ impl DiffView {
             start: gutter.start,
         });
     }
+}
+
+fn same_documents(old: &[FileDiff], new: &[FileDiff]) -> bool {
+    old.len() == new.len()
+        && old
+            .iter()
+            .zip(new)
+            .all(|(old, new)| old.meta.path == new.meta.path && old.fingerprint == new.fingerprint)
 }

@@ -127,7 +127,7 @@ impl ReviewTab {
             return;
         };
         self.error = None;
-        self.viewed_inflight.insert(path.clone());
+        self.set_saving(&path, true, cx);
         self.apply_viewed(&path, viewed, cx);
         let id = detail.pr.id.clone();
         let remote_path = path.clone();
@@ -135,20 +135,35 @@ impl ReviewTab {
             client.set_viewed(&id, &remote_path, viewed).await
         });
         let key = path.clone();
+        let epoch = self.epoch;
         let job = cx.spawn(async move |this, cx| {
             let result = task.await;
             _ = this.update(cx, |this, cx| {
-                this.viewed_inflight.remove(&path);
+                this.set_saving(&path, false, cx);
                 let Err(error) = result else {
                     return;
                 };
                 tracing::warn!(%error, path, "failed to update viewed state");
-                this.apply_viewed(&path, !viewed, cx);
+                if epoch == this.epoch {
+                    this.apply_viewed(&path, !viewed, cx);
+                }
                 this.error = Some(labels::viewed_failed(&path, &error.to_string()).into());
                 cx.notify();
             });
         });
         self.viewed_tasks.insert(key, job);
+    }
+
+    fn set_saving(&mut self, path: &str, saving: bool, cx: &mut Context<Self>) {
+        if saving {
+            self.viewed_inflight.insert(path.to_string());
+        } else {
+            self.viewed_inflight.remove(path);
+        }
+        self.diff
+            .update(cx, |diff, cx| diff.set_viewed_saving(path, saving, cx));
+        self.tree
+            .update(cx, |tree, cx| tree.set_saving(path, saving, cx));
     }
 
     fn apply_viewed(&mut self, path: &str, viewed: bool, cx: &mut Context<Self>) {

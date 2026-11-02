@@ -37,13 +37,15 @@ pub struct GutterRange {
     pub start: Option<(u32, Side)>,
 }
 
-pub fn gutter_range(range: &DiffLineRange) -> GutterRange {
+pub fn gutter_range(
+    range: &DiffLineRange,
+    order: impl Fn((u32, Side)) -> Option<usize>,
+) -> GutterRange {
     let first = (range.start() as u32, app_side(range.side()));
     let last = (range.end() as u32, app_side(range.end_side()));
-    let (start, end) = if first.1 == last.1 && first.0 > last.0 {
-        (last, first)
-    } else {
-        (first, last)
+    let (start, end) = match (order(first), order(last)) {
+        (Some(a), Some(b)) if b < a => (last, first),
+        _ => (first, last),
     };
     GutterRange {
         path: range.path().to_string(),
@@ -57,14 +59,30 @@ pub fn gutter_range(range: &DiffLineRange) -> GutterRange {
 mod tests {
     use super::*;
 
+    fn unified_order(anchor: (u32, Side)) -> Option<usize> {
+        [
+            ((8, Side::Left), 0),
+            ((8, Side::Right), 0),
+            ((9, Side::Left), 1),
+            ((10, Side::Left), 2),
+            ((9, Side::Right), 3),
+            ((10, Side::Right), 4),
+            ((11, Side::Right), 5),
+            ((12, Side::Right), 6),
+        ]
+        .into_iter()
+        .find_map(|(key, ix)| (key == anchor).then_some(ix))
+    }
+
     #[test]
     fn single_line_has_no_start() {
-        let range = range("a.rs", (7, Side::Right), (7, Side::Right));
+        let range = range("a.rs", (9, Side::Right), (9, Side::Right));
+        let gutter = gutter_range(&range, unified_order);
         assert_eq!(
-            gutter_range(&range),
+            gutter,
             GutterRange {
                 path: "a.rs".to_string(),
-                line: 7,
+                line: 9,
                 side: Side::Right,
                 start: None,
             }
@@ -72,21 +90,37 @@ mod tests {
     }
 
     #[test]
-    fn upward_drag_on_one_side_is_normalized() {
-        let range = range("a.rs", (12, Side::Left), (9, Side::Left));
-        let gutter = gutter_range(&range);
-        assert_eq!(gutter.line, 12);
-        assert_eq!(gutter.side, Side::Left);
+    fn upward_unified_drag_across_sides_starts_at_the_upper_line() {
+        let range = range("a.rs", (12, Side::Right), (9, Side::Left));
+        let gutter = gutter_range(&range, unified_order);
         assert_eq!(gutter.start, Some((9, Side::Left)));
+        assert_eq!((gutter.line, gutter.side), (12, Side::Right));
     }
 
     #[test]
-    fn cross_side_range_keeps_both_sides() {
-        let range = range("a.rs", (3, Side::Left), (5, Side::Right));
-        let gutter = gutter_range(&range);
-        assert_eq!(gutter.line, 5);
-        assert_eq!(gutter.side, Side::Right);
-        assert_eq!(gutter.start, Some((3, Side::Left)));
+    fn upward_split_drag_on_each_side_is_ordered() {
+        let left = gutter_range(
+            &range("a.rs", (10, Side::Left), (8, Side::Left)),
+            unified_order,
+        );
+        assert_eq!(left.start, Some((8, Side::Left)));
+        assert_eq!((left.line, left.side), (10, Side::Left));
+        let right = gutter_range(
+            &range("a.rs", (12, Side::Right), (9, Side::Right)),
+            unified_order,
+        );
+        assert_eq!(right.start, Some((9, Side::Right)));
+        assert_eq!((right.line, right.side), (12, Side::Right));
+    }
+
+    #[test]
+    fn downward_drag_keeps_its_direction() {
+        let gutter = gutter_range(
+            &range("a.rs", (9, Side::Left), (11, Side::Right)),
+            unified_order,
+        );
+        assert_eq!(gutter.start, Some((9, Side::Left)));
+        assert_eq!((gutter.line, gutter.side), (11, Side::Right));
     }
 
     #[test]

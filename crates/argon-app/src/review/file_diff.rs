@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash as _, Hasher as _};
 use std::sync::Arc;
 
 use argon_core::{Hunk, LineKind, Side, parse_patch};
@@ -29,13 +31,18 @@ pub struct FileDiff {
     pub meta: FileMeta,
     pub body: FileBody,
     pub document: DiffFile,
-    pub lines: Arc<HashSet<(u32, Side)>>,
+    pub order: Arc<HashMap<(u32, Side), usize>>,
+    pub fingerprint: u64,
     pub viewed: bool,
 }
 
 impl FileDiff {
     pub fn has_line(&self, anchor: (u32, Side)) -> bool {
-        self.lines.contains(&anchor)
+        self.order.contains_key(&anchor)
+    }
+
+    pub fn line_order(&self, anchor: (u32, Side)) -> Option<usize> {
+        self.order.get(&anchor).copied()
     }
 }
 
@@ -68,17 +75,25 @@ pub fn synthetic_patch(meta: &FileMeta, body: Option<&str>) -> String {
     out
 }
 
-fn line_set(hunks: &[Hunk]) -> HashSet<(u32, Side)> {
-    let mut lines = HashSet::new();
-    for line in hunks.iter().flat_map(|hunk| hunk.lines.iter()) {
+pub fn patch_order(hunks: &[Hunk]) -> HashMap<(u32, Side), usize> {
+    let mut order = HashMap::new();
+    for (ix, line) in hunks.iter().flat_map(|hunk| hunk.lines.iter()).enumerate() {
         if let (Some(old), false) = (line.old_no, line.kind == LineKind::Added) {
-            lines.insert((old, Side::Left));
+            order.insert((old, Side::Left), ix);
         }
         if let (Some(new), false) = (line.new_no, line.kind == LineKind::Removed) {
-            lines.insert((new, Side::Right));
+            order.insert((new, Side::Right), ix);
         }
     }
-    lines
+    order
+}
+
+fn fingerprint(meta: &FileMeta, patch: Option<&str>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    meta.path.hash(&mut hasher);
+    meta.previous_path.hash(&mut hasher);
+    patch.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn document(meta: &FileMeta, body: Option<&str>) -> Option<DiffFile> {
@@ -102,6 +117,7 @@ pub fn prepare(file: PrFile, viewed: bool) -> FileDiff {
         additions: file.additions,
         deletions: file.deletions,
     };
+    let fingerprint = fingerprint(&meta, file.patch.as_deref());
     let parsed = match file.patch.as_deref() {
         None => Err(FileBody::Missing),
         Some(patch) if patch.trim().is_empty() => Ok((FileBody::Empty, Vec::new(), "")),
@@ -116,10 +132,10 @@ pub fn prepare(file: PrFile, viewed: bool) -> FileDiff {
     };
     let (body, lines, document) = match parsed {
         Ok((body, hunks, patch)) => match document(&meta, Some(patch)) {
-            Some(document) => (body, line_set(&hunks), Some(document)),
-            None => (FileBody::Invalid, HashSet::new(), None),
+            Some(document) => (body, patch_order(&hunks), Some(document)),
+            None => (FileBody::Invalid, HashMap::new(), None),
         },
-        Err(body) => (body, HashSet::new(), None),
+        Err(body) => (body, HashMap::new(), None),
     };
     let document = document
         .or_else(|| self::document(&meta, None))
@@ -128,7 +144,8 @@ pub fn prepare(file: PrFile, viewed: bool) -> FileDiff {
         meta,
         body,
         document,
-        lines: Arc::new(lines),
+        order: Arc::new(lines),
+        fingerprint,
         viewed,
     }
 }
@@ -205,6 +222,10 @@ mod tests {
         assert!(prepared.has_line((2, Side::Left)));
         assert!(prepared.has_line((2, Side::Right)));
         assert!(!prepared.has_line((3, Side::Right)));
+        assert_eq!(prepared.line_order((1, Side::Left)), Some(0));
+        assert_eq!(prepared.line_order((1, Side::Right)), Some(0));
+        assert_eq!(prepared.line_order((2, Side::Left)), Some(1));
+        assert_eq!(prepared.line_order((2, Side::Right)), Some(2));
     }
 
     #[test]

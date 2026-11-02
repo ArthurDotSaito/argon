@@ -4,7 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, ClickEvent, Context, ElementId, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
@@ -154,6 +154,7 @@ impl FileTree {
                 ix as u64,
             ))
             .checked(file.viewed)
+            .disabled(self.saving.contains(&file.path))
             .xsmall()
             .on_click(cx.listener(move |_, checked: &bool, _, cx| {
                 cx.emit(FileTreeEvent::ToggleViewed {

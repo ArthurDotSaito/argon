@@ -6,6 +6,8 @@ pub const NO_FILES: &str = "Nenhum arquivo alterado.";
 pub const NO_FILTER_MATCH: &str = "Nenhum arquivo corresponde ao filtro.";
 pub const FILTER_PLACEHOLDER: &str = "Filtrar arquivos";
 pub const VIEWED: &str = "Visto";
+pub const SAVING: &str = "Salvando…";
+pub const SAVING_VIEWED: &str = "Salvando o estado de visto no GitHub…";
 pub const SPLIT: &str = "Split";
 pub const INLINE: &str = "Inline";
 pub const MODE_SHORTCUT: &str = "Alternar Split/Inline (s)";
@@ -54,10 +56,6 @@ pub fn file_count(count: usize) -> String {
         1 => "1 arquivo".to_string(),
         count => format!("{count} arquivos"),
     }
-}
-
-pub fn renamed_from(previous: &str) -> String {
-    format!("{previous} →")
 }
 
 pub fn original_line(line: Option<u32>) -> String {

@@ -89,7 +89,7 @@ pub fn file_threads(
                 .push(InlineBlock::file(key, render)),
         }
     }
-    let mut out: HashMap<String, Vec<InlineBlock>> = HashMap::new();
+    let mut out: HashMap<String, Vec<InlineBlock>> = files;
     for (path, blocks) in outdated {
         let header = InlineBlock::file(
             format!("thread-outdated-{path}"),
@@ -99,7 +99,7 @@ pub fn file_threads(
         entry.push(header);
         entry.extend(blocks);
     }
-    for (path, blocks) in files.into_iter().chain(lines) {
+    for (path, blocks) in lines {
         out.entry(path).or_default().extend(blocks);
     }
     out

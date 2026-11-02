@@ -33,6 +33,7 @@ pub struct FileTree {
     query: String,
     rows: Vec<TreeRow>,
     active: Option<String>,
+    saving: HashSet<String>,
     viewed_enabled: bool,
     filter: Entity<InputState>,
     scroll: UniformListScrollHandle,
@@ -58,6 +59,7 @@ impl FileTree {
             query: String::new(),
             rows: Vec::new(),
             active: None,
+            saving: HashSet::new(),
             viewed_enabled: true,
             filter,
             scroll: UniformListScrollHandle::new(),
@@ -74,6 +76,7 @@ impl FileTree {
         self.files = files;
         self.viewed_enabled = viewed_enabled;
         self.active = None;
+        self.saving.clear();
         self.refresh_rows();
         cx.notify();
     }
@@ -83,6 +86,15 @@ impl FileTree {
             file.viewed = viewed;
             cx.notify();
         }
+    }
+
+    pub fn set_saving(&mut self, path: &str, saving: bool, cx: &mut Context<Self>) {
+        if saving {
+            self.saving.insert(path.to_string());
+        } else {
+            self.saving.remove(path);
+        }
+        cx.notify();
     }
 
     pub fn set_active(&mut self, path: Option<String>, cx: &mut Context<Self>) {

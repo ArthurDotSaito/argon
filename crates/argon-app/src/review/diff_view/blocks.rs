@@ -85,6 +85,16 @@ impl BlockSet {
     pub fn iter(&self) -> impl Iterator<Item = &InlineBlock> {
         self.sources.values().flatten()
     }
+
+    pub fn first_line(&self, source: BlockSource) -> Option<(u32, Side)> {
+        self.sources
+            .get(&source)?
+            .iter()
+            .find_map(|block| match block.target {
+                BlockTarget::Line { anchor, .. } => Some(anchor),
+                BlockTarget::File => None,
+            })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +155,8 @@ mod tests {
             vec![InlineBlock::file("t2", render())],
         );
         assert_eq!(keys(&set), vec!["t2", "d1", "editor"]);
+        assert_eq!(set.first_line(BlockSource::Editor), Some((3, Side::Right)));
+        assert_eq!(set.first_line(BlockSource::Threads), None);
         set.set(BlockSource::Drafts, Vec::new());
         assert_eq!(keys(&set), vec!["t2", "editor"]);
     }

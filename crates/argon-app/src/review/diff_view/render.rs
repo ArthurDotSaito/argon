@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::diff::{
-    Diff, DiffAnnotation, DiffDecoration, DiffHoverHighlight, DiffLinePosition,
-};
+use gpui_kit::component::diff::{Diff, DiffAnnotation, DiffDecoration, DiffHoverHighlight};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement as _, IntoElement,
@@ -15,7 +13,7 @@ use gpui_kit::{
 use super::DiffView;
 use super::blocks::{BlockRender, place};
 use super::convert::{position, range};
-use super::header::file_header;
+use super::header::viewed_toggle;
 use crate::actions::ToggleDiffMode;
 use crate::keymap::DIFF_VIEW_CONTEXT;
 use crate::review::file_diff::FileBody;
@@ -44,7 +42,7 @@ impl DiffView {
             };
             let placed = place(set, |anchor| file.has_line(anchor));
             for (block, placed) in set.iter().zip(placed) {
-                let id = ElementId::Name(block.key.clone());
+                let id = ElementId::Name(format!("{path}::{}", block.key).into());
                 annotations.push(match placed.line {
                     Some(anchor) => DiffAnnotation::line(id.clone(), position(path, anchor)),
                     None => DiffAnnotation::file(id.clone(), path.to_string()),
@@ -58,9 +56,9 @@ impl DiffView {
                 renders.insert(id, block.render.clone());
             }
         }
-        if let Some(flash) = &self.flash {
+        if let Some((path, anchor)) = &self.flash {
             decorations.push(
-                DiffDecoration::new(flash_range(flash))
+                DiffDecoration::new(range(path, *anchor, *anchor))
                     .with_background(theme.warning.opacity(FLASH_ALPHA)),
             );
         }
@@ -78,15 +76,6 @@ impl DiffView {
             notice(message.clone(), url.clone(), cx)
         }))
     }
-}
-
-fn flash_range(flash: &DiffLinePosition) -> gpui_kit::component::diff::DiffLineRange {
-    gpui_kit::component::diff::DiffLineRange::new(
-        flash.path().clone(),
-        flash.side(),
-        flash.line(),
-        flash.line(),
-    )
 }
 
 fn notice(message: SharedString, url: Option<String>, cx: &mut App) -> AnyElement {
@@ -120,7 +109,6 @@ impl Render for DiffView {
         let (annotations, renders, decorations) = self.layers(cx);
         let renders = Rc::new(renders);
         let header_view = cx.entity();
-        let hover_view = cx.entity().downgrade();
         let diff = Diff::new(&self.state)
             .hover_highlight(DiffHoverHighlight::LineNumber)
             .soft_wrap(true)
@@ -132,16 +120,8 @@ impl Render for DiffView {
                 },
             )
             .decorations(decorations)
-            .render_header(move |document, _, cx| file_header(&header_view, document, cx))
-            .on_line_hover(move |line, _, cx| {
-                if let Some(line) = line {
-                    let line = line.clone();
-                    _ = hover_view.update(cx, |this, _| this.last_line = Some(line));
-                }
-            })
-            .flex_1()
-            .min_h_0()
-            .border_0();
+            .render_header_suffix(move |document, _, cx| viewed_toggle(&header_view, document, cx));
+        let diff = diff.flex_1().min_h_0().border_0();
         v_flex()
             .size_full()
             .key_context(DIFF_VIEW_CONTEXT)
