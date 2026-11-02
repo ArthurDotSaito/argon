@@ -1,4 +1,5 @@
 mod actions;
+mod comment_check;
 mod commit_files;
 mod commits;
 mod conversation;

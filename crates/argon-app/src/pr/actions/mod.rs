@@ -41,6 +41,7 @@ pub struct ActionsTab {
     painted_at: Option<Instant>,
     expanded: HashMap<u64, bool>,
     active: bool,
+    opened: bool,
     auto_opened: Option<String>,
     rerun: Rerun,
     scroll: ScrollHandle,
@@ -65,6 +66,7 @@ impl ActionsTab {
             painted_at: None,
             expanded: HashMap::new(),
             active: false,
+            opened: false,
             auto_opened: None,
             rerun: Rerun::Idle,
             scroll: ScrollHandle::new(),
@@ -85,7 +87,11 @@ impl ActionsTab {
             self.sync_ticker(cx);
         }
         self.detail = Some(detail);
-        self.reload(cx);
+        if self.opened {
+            self.reload(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
@@ -93,7 +99,10 @@ impl ActionsTab {
             return;
         }
         self.active = active;
-        if active {
+        if active && !self.opened {
+            self.opened = true;
+            self.reload(cx);
+        } else if active {
             self.auto_open_failed_job(cx);
         }
         self.sync_ticker(cx);

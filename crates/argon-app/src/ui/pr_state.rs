@@ -29,6 +29,10 @@ pub fn state_style_for(state: PrState, is_draft: bool, cx: &App) -> StateStyle {
 }
 
 pub fn state_icon(pr: &PullRequest, cx: &App) -> Icon {
-    let style = state_style(pr, cx);
+    state_icon_for(pr.state, pr.is_draft, cx)
+}
+
+pub fn state_icon_for(state: PrState, is_draft: bool, cx: &App) -> Icon {
+    let style = state_style_for(state, is_draft, cx);
     Icon::new(style.icon).small().text_color(style.color)
 }

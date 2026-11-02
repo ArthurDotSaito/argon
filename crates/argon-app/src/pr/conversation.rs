@@ -14,6 +14,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 
+use super::comment_check::{SentComment, is_transport_error};
 use super::labels;
 use super::timeline_item::{self, Entry, MarkdownBlock, card, card_body, card_text, timeline_item};
 use crate::services::AppServices;
@@ -24,6 +25,8 @@ const COMMENT_MAX_ROWS: usize = 12;
 
 pub enum ConversationEvent {
     Commented,
+    CommentConfirmed,
+    Recheck,
     OpenOnGithub,
 }
 
@@ -43,6 +46,9 @@ pub struct Conversation {
     input: Entity<TextareaState>,
     sending: bool,
     error: Option<SharedString>,
+    notice: Option<SharedString>,
+    unconfirmed: Option<SentComment>,
+    clear_input: Option<String>,
     send_task: Option<Task<()>>,
     scroll: ScrollHandle,
 }
@@ -65,6 +71,9 @@ impl Conversation {
             input,
             sending: false,
             error: None,
+            notice: None,
+            unconfirmed: None,
+            clear_input: None,
             send_task: None,
             scroll: ScrollHandle::new(),
         }
@@ -79,6 +88,14 @@ impl Conversation {
             .collect();
         self.description = (!detail.body.trim().is_empty())
             .then(|| MarkdownBlock::new("pr-description".to_string(), &detail.body));
+        if let Some(sent) = self.unconfirmed.take()
+            && sent.landed_in(&detail.timeline)
+        {
+            self.error = None;
+            self.notice = Some(labels::COMMENT_SENT.into());
+            self.clear_input = Some(sent.body().to_string());
+            cx.emit(ConversationEvent::CommentConfirmed);
+        }
         self.detail = Some(detail);
         cx.notify();
     }
@@ -98,6 +115,14 @@ impl Conversation {
         };
         self.sending = true;
         self.error = None;
+        self.notice = None;
+        self.unconfirmed = None;
+        let author = services
+            .accounts()
+            .into_iter()
+            .find(|account| account.host.eq_ignore_ascii_case(&self.key.host))
+            .map(|account| account.login);
+        let sent_body = body.clone();
         let id = self.key.id.clone();
         let task = services.spawn_github(cx, self.key.host.clone(), move |client| async move {
             client.add_comment(&id, &body).await
@@ -115,6 +140,10 @@ impl Conversation {
                     Err(error) => {
                         tracing::warn!(%error, "failed to add pr comment");
                         this.error = Some(labels::comment_failed(&error.to_string()).into());
+                        if let Some(author) = author.filter(|_| is_transport_error(&error)) {
+                            this.unconfirmed = Some(SentComment::new(author, sent_body));
+                            cx.emit(ConversationEvent::Recheck);
+                        }
                     }
                 }
                 cx.notify();
@@ -192,6 +221,14 @@ impl Conversation {
                 .text_color(theme.danger)
                 .child(error)
         });
+        let notice = self.notice.clone().map(|notice| {
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(theme.success)
+                .child(notice)
+        });
         v_flex()
             .w_full()
             .gap_2()
@@ -202,6 +239,7 @@ impl Conversation {
                     .gap_2()
                     .items_center()
                     .children(error)
+                    .children(notice)
                     .child(div().flex_1())
                     .child(
                         Button::new("pr-comment-submit")
@@ -219,7 +257,13 @@ impl Conversation {
 }
 
 impl Render for Conversation {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(sent) = self.clear_input.take()
+            && self.input.read(cx).value().trim() == sent
+        {
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         let scroller = div()
             .id("pr-conversation-scroll")
             .size_full()

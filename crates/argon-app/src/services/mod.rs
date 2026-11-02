@@ -78,19 +78,7 @@ impl Services {
     }
 }
 
-#[expect(
-    dead_code,
-    reason = "bridge for the PR detail, comment and merge actions of Tasks 9 and 10"
-)]
 impl Services {
-    pub fn spawn<F, R>(&self, cx: &App, fut: F) -> Task<Result<R, ServiceError>>
-    where
-        F: Future<Output = R> + Send + 'static,
-        R: Send + 'static,
-    {
-        tasks::run_on(self.runtime.as_ref(), cx, async move { Ok(fut.await) })
-    }
-
     pub fn spawn_github<F, Fut, R>(
         &self,
         cx: &App,

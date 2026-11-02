@@ -12,36 +12,9 @@ use gpui_kit::{
 
 use super::commit_files::commit_files_list;
 use super::conversation::CONTENT_MAX_WIDTH;
-use super::labels::{self, short_sha};
+use super::labels;
 use super::placeholder::tab_placeholder;
 use crate::services::AppServices;
-
-const SEPARATOR: &str = "·";
-const SHOW_ALL: &str = "Ver todos";
-const LOADING_FILES: &str = "Carregando arquivos do commit…";
-const NO_FILES: &str = "Este commit não alterou arquivos.";
-
-fn commit_banner(oid: &str, headline: &str) -> String {
-    format!("Mostrando só o commit {} — {headline}", short_sha(oid))
-}
-
-fn files_failed(error: &str) -> String {
-    format!("Falha ao carregar os arquivos do commit: {error}")
-}
-
-fn commit_gone(oid: &str) -> String {
-    format!(
-        "O commit {} não faz mais parte do PR (force-push)",
-        short_sha(oid)
-    )
-}
-
-fn commit_file_count(count: usize) -> String {
-    match count {
-        1 => "1 arquivo neste commit".to_string(),
-        count => format!("{count} arquivos neste commit"),
-    }
-}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ReviewScope {
@@ -53,7 +26,7 @@ pub enum ReviewScope {
     },
 }
 
-pub enum ReviewEvent {
+pub enum ReviewTabEvent {
     ShowAll,
 }
 
@@ -74,7 +47,7 @@ pub struct ReviewTab {
     scroll: ScrollHandle,
 }
 
-impl EventEmitter<ReviewEvent> for ReviewTab {}
+impl EventEmitter<ReviewTabEvent> for ReviewTab {}
 
 impl ReviewTab {
     pub fn new(_: &mut Window, _: &mut Context<Self>) -> Self {
@@ -93,7 +66,7 @@ impl ReviewTab {
         if let ReviewScope::Commit { oid, .. } = &self.scope
             && !detail.commits.iter().any(|commit| commit.oid == *oid)
         {
-            self.notice = Some(commit_gone(oid).into());
+            self.notice = Some(labels::commit_gone(oid).into());
             self.scope = ReviewScope::All;
             self.files = CommitFiles::Idle;
         }
@@ -138,7 +111,8 @@ impl ReviewTab {
             .try_global::<AppServices>()
             .map(|global| global.0.clone())
         else {
-            self.files = CommitFiles::Failed(files_failed(labels::SERVICES_UNAVAILABLE).into());
+            self.files =
+                CommitFiles::Failed(labels::files_failed(labels::SERVICES_UNAVAILABLE).into());
             return;
         };
         self.files = CommitFiles::Loading;
@@ -158,7 +132,7 @@ impl ReviewTab {
                     Ok(files) => CommitFiles::Ready(files),
                     Err(error) => {
                         tracing::warn!(%error, "failed to load commit files");
-                        CommitFiles::Failed(files_failed(&error.to_string()).into())
+                        CommitFiles::Failed(labels::files_failed(&error.to_string()).into())
                     }
                 };
                 cx.notify();
@@ -189,13 +163,13 @@ impl ReviewTab {
                     .min_w_0()
                     .truncate()
                     .text_color(theme.foreground)
-                    .child(commit_banner(oid, headline)),
+                    .child(labels::commit_banner(oid, headline)),
             )
             .child(
                 div()
                     .flex_none()
                     .text_color(theme.muted_foreground)
-                    .child(SEPARATOR),
+                    .child(labels::SEPARATOR),
             )
             .child(
                 div()
@@ -204,9 +178,9 @@ impl ReviewTab {
                     .text_color(theme.link)
                     .cursor_pointer()
                     .hover(|style| style.underline())
-                    .child(SHOW_ALL)
+                    .child(labels::REVIEW_SHOW_ALL)
                     .on_click(
-                        cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ReviewEvent::ShowAll)),
+                        cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ReviewTabEvent::ShowAll)),
                     ),
             )
     }
@@ -215,9 +189,10 @@ impl ReviewTab {
         let theme = cx.theme();
         let note = |text: SharedString, color| div().text_sm().text_color(color).child(text);
         match &self.files {
-            CommitFiles::Idle | CommitFiles::Loading => {
-                v_flex().child(note(LOADING_FILES.into(), theme.muted_foreground))
-            }
+            CommitFiles::Idle | CommitFiles::Loading => v_flex().child(note(
+                labels::REVIEW_LOADING_FILES.into(),
+                theme.muted_foreground,
+            )),
             CommitFiles::Failed(message) => v_flex()
                 .gap_2()
                 .child(note(message.clone(), theme.danger))
@@ -235,12 +210,12 @@ impl ReviewTab {
                         })),
                 ),
             CommitFiles::Ready(files) if files.is_empty() => {
-                v_flex().child(note(NO_FILES.into(), theme.muted_foreground))
+                v_flex().child(note(labels::REVIEW_NO_FILES.into(), theme.muted_foreground))
             }
             CommitFiles::Ready(files) => v_flex()
                 .gap_2()
                 .child(note(
-                    commit_file_count(files.len()).into(),
+                    labels::commit_file_count(files.len()).into(),
                     theme.muted_foreground,
                 ))
                 .child(commit_files_list(files, cx)),

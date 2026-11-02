@@ -17,6 +17,7 @@ use gpui_kit::{
 use self::entries::{COMING_SOON, CommandKind, CommandSpec, PrEntry, command_specs};
 use self::ranking::{Ranker, prs_first};
 use crate::inbox::InboxModel;
+use crate::ui;
 
 pub const PALETTE_CONTEXT: &str = "Palette";
 
@@ -186,17 +187,6 @@ fn pr_item(entry: &PrEntry) -> CommandItem {
         .child(move |_, cx| pr_row(&title, &reference, state, is_draft, cx))
 }
 
-fn state_icon(state: PrState, is_draft: bool, cx: &App) -> Icon {
-    let theme = cx.theme();
-    let (icon, color) = match state {
-        PrState::Open if is_draft => (IconName::GitPullRequestDraft, theme.muted_foreground),
-        PrState::Open => (IconName::GitPullRequest, theme.success),
-        PrState::Merged => (IconName::GitMerge, theme.magenta),
-        PrState::Closed => (IconName::GitPullRequestClosed, theme.danger),
-    };
-    Icon::new(icon).small().text_color(color)
-}
-
 fn pr_row(
     title: &SharedString,
     reference: &SharedString,
@@ -210,7 +200,7 @@ fn pr_row(
         .min_w_0()
         .gap_2()
         .items_center()
-        .child(state_icon(state, is_draft, cx))
+        .child(ui::state_icon_for(state, is_draft, cx))
         .child(div().flex_1().min_w_0().truncate().child(title.clone()))
         .child(
             div()

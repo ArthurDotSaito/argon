@@ -29,6 +29,7 @@ pub enum CommitsEvent {
 
 pub struct CommitsTab {
     detail: Option<Rc<PrDetail>>,
+    groups: Vec<DayGroup>,
     expanded: HashSet<String>,
     copied: Option<String>,
     copied_reset: Option<Task<()>>,
@@ -41,6 +42,7 @@ impl CommitsTab {
     pub fn new(_: &mut Window, _: &mut Context<Self>) -> Self {
         Self {
             detail: None,
+            groups: Vec::new(),
             expanded: HashSet::new(),
             copied: None,
             copied_reset: None,
@@ -49,6 +51,8 @@ impl CommitsTab {
     }
 
     pub fn set_detail(&mut self, detail: Rc<PrDetail>, cx: &mut Context<Self>) {
+        let days: Vec<_> = detail.commits.iter().map(local_day).collect();
+        self.groups = group_by_day(&days);
         self.detail = Some(detail);
         cx.notify();
     }
@@ -140,9 +144,8 @@ impl Render for CommitsTab {
         }
         let now = Utc::now();
         let today = now.with_timezone(&Local).date_naive();
-        let days: Vec<_> = detail.commits.iter().map(local_day).collect();
-        let groups = group_by_day(&days);
-        let sections: Vec<Div> = groups
+        let sections: Vec<Div> = self
+            .groups
             .iter()
             .map(|group| {
                 let rows: Vec<_> = group
