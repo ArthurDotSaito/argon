@@ -1,0 +1,41 @@
+{
+  "sha": "3fa91c0de4b7a1d2e5f60718293a4b5c6d7e8f90",
+  "node_id": "C_kwDOOrbita0412",
+  "commit": {
+    "author": { "name": "Marina Couto", "email": "mcouto@example.com", "date": "2026-10-30T12:00:00Z" },
+    "committer": { "name": "Marina Couto", "email": "mcouto@example.com", "date": "2026-10-30T12:00:00Z" },
+    "message": "feat: add retry budget",
+    "comment_count": 0
+  },
+  "parents": [{ "sha": "9e8d7c6b5a49382716059483726150493827160a" }],
+  "stats": { "total": 9, "additions": 7, "deletions": 2 },
+  "files": [
+    {
+      "sha": "b1c2d3e4f5a6978800112233445566778899aabb",
+      "filename": "src/reschedule/retry-budget.ts",
+      "status": "added",
+      "additions": 4,
+      "deletions": 0,
+      "changes": 4,
+      "patch": "@@ -0,0 +1,4 @@\n+export const RETRY_BUDGET = 3;\n"
+    },
+    {
+      "sha": "0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+      "filename": "src/reschedule/slot-finder.ts",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 2,
+      "changes": 5,
+      "patch": "@@ -58,7 +58,8 @@ export function findSlot() {\n-  return old;\n+  return next;\n"
+    },
+    {
+      "sha": "2222222222222222222222222222222222222222",
+      "filename": "src/core/clock.ts",
+      "previous_filename": "src/clock.ts",
+      "status": "renamed",
+      "additions": 0,
+      "deletions": 0,
+      "changes": 0
+    }
+  ]
+}

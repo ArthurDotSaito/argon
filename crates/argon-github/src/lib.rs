@@ -7,12 +7,15 @@ mod detail;
 mod detail_convert;
 mod detail_wire;
 mod error;
+mod files;
+mod files_wire;
 mod inbox;
 mod job_log;
 mod mutations;
 mod rest;
 #[cfg(test)]
 mod test_server;
+mod viewed;
 mod wire;
 
 pub use actions::{Job, RunStatus, Step, WorkflowRun};
@@ -23,5 +26,7 @@ pub use detail::{
     TimelineItem,
 };
 pub use error::{GithubError, Result};
+pub use files::{FileStatus, PrFile};
 pub use job_log::JobLog;
 pub use mutations::MergeMethod;
+pub use viewed::ViewedState;

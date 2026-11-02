@@ -1,0 +1,16 @@
+query PrViewedFiles($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      files(first: 100, after: $after) {
+        nodes {
+          path
+          viewerViewedState
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}

@@ -40,7 +40,7 @@ struct MergeData {
     merge_pull_request: Option<IgnoredAny>,
 }
 
-fn require_payload(payload: Option<IgnoredAny>, mutation: &str) -> Result<()> {
+pub(crate) fn require_payload(payload: Option<IgnoredAny>, mutation: &str) -> Result<()> {
     payload
         .map(|_| ())
         .ok_or_else(|| GithubError::GraphQl(vec![format!("{mutation} returned no payload")]))

@@ -9,7 +9,7 @@ use crate::error::{GithubError, Result};
 use crate::rest::repo_path;
 
 const JOBS_CONCURRENCY: usize = 3;
-const PER_PAGE: usize = 100;
+pub(crate) const PER_PAGE: usize = 100;
 const MAX_PAGES: u32 = 3;
 const UNNAMED_RUN: &str = "workflow";
 
@@ -118,17 +118,29 @@ fn into_run(run: WireRun, jobs: Result<Vec<WireJob>>) -> WorkflowRun {
     }
 }
 
-fn is_sha(value: &str) -> bool {
+pub(crate) fn is_sha(value: &str) -> bool {
     !value.is_empty() && value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-async fn collect_pages<T, F, Fut>(what: &str, mut fetch: F) -> Result<Vec<T>>
+async fn collect_pages<T, F, Fut>(what: &str, fetch: F) -> Result<Vec<T>>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: Future<Output = Result<(Vec<T>, Option<u64>)>>,
+{
+    collect_pages_capped(what, MAX_PAGES, fetch).await
+}
+
+pub(crate) async fn collect_pages_capped<T, F, Fut>(
+    what: &str,
+    max_pages: u32,
+    mut fetch: F,
+) -> Result<Vec<T>>
 where
     F: FnMut(u32) -> Fut,
     Fut: Future<Output = Result<(Vec<T>, Option<u64>)>>,
 {
     let mut items = Vec::new();
-    for page in 1..=MAX_PAGES {
+    for page in 1..=max_pages {
         let (batch, total) = fetch(page).await?;
         let batch_len = batch.len();
         items.extend(batch);

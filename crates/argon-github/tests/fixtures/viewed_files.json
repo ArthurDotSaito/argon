@@ -1,0 +1,25 @@
+{
+  "data": {
+    "node": {
+      "files": {
+        "nodes": [
+          { "path": "src/reschedule/slot-finder.ts", "viewerViewedState": "VIEWED" },
+          { "path": "src/reschedule/retry-budget.ts", "viewerViewedState": "UNVIEWED" },
+          { "path": "docs/adr/0007-retry.md", "viewerViewedState": "DISMISSED" },
+          null,
+          { "path": "assets/logo.png", "viewerViewedState": "SOMETHING_NEW" },
+          { "path": "src/legacy/old.ts", "viewerViewedState": null },
+          { "path": null, "viewerViewedState": "VIEWED" }
+        ],
+        "pageInfo": { "hasNextPage": true, "endCursor": "Y3Vyc29yOjEwMA==" }
+      }
+    }
+  },
+  "errors": [
+    {
+      "type": "FORBIDDEN",
+      "path": ["node", "files", "nodes", 3],
+      "message": "Resource not accessible"
+    }
+  ]
+}
