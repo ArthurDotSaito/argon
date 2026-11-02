@@ -109,11 +109,12 @@ impl ReviewTab {
 
     fn bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         let drafts = self.drafts.read(cx);
-        if !drafts.in_progress() {
+        if !drafts.in_progress() && self.scope != ReviewScope::All {
             return None;
         }
         let props = BarProps {
             count: drafts.drafts().len(),
+            in_progress: drafts.in_progress(),
             head_moved: drafts.head_moved(),
             sending: drafts.is_sending(),
         };

@@ -62,7 +62,7 @@ impl ReviewTab {
         self.thread_tasks.insert(key, task);
     }
 
-    pub(super) fn open_finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .finish
             .as_ref()

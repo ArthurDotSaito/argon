@@ -9,6 +9,7 @@ use super::labels;
 
 pub struct BarProps {
     pub count: usize,
+    pub in_progress: bool,
     pub head_moved: bool,
     pub sending: bool,
 }
@@ -38,6 +39,34 @@ pub fn review_bar(
             )
             .child(labels::HEAD_MOVED)
     });
+    let (summary, button) = if props.count == 0 {
+        (
+            labels::NO_PENDING_COMMENTS.to_string(),
+            labels::START_REVIEW,
+        )
+    } else {
+        (labels::pending_count(props.count), labels::FINISH_REVIEW)
+    };
+    let progress = props.in_progress.then(|| {
+        h_flex()
+            .gap_2()
+            .child(
+                div()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child(labels::REVIEW_IN_PROGRESS),
+            )
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(labels::SEPARATOR),
+            )
+    });
+    let icon_color = if props.in_progress {
+        theme.warning
+    } else {
+        theme.muted_foreground
+    };
     let status = h_flex()
         .w_full()
         .h_10()
@@ -48,30 +77,20 @@ pub fn review_bar(
         .child(
             Icon::new(IconName::MessageSquare)
                 .small()
-                .text_color(theme.warning),
+                .text_color(icon_color),
         )
-        .child(
-            div()
-                .font_semibold()
-                .text_color(theme.foreground)
-                .child(labels::REVIEW_IN_PROGRESS),
-        )
-        .child(
-            div()
-                .text_color(theme.muted_foreground)
-                .child(labels::SEPARATOR),
-        )
+        .children(progress)
         .child(
             div()
                 .min_w_0()
                 .truncate()
                 .text_color(theme.muted_foreground)
-                .child(labels::pending_count(props.count)),
+                .child(summary),
         )
         .child(div().flex_1())
         .child(
             Button::new("review-finish")
-                .label(labels::FINISH_REVIEW)
+                .label(button)
                 .small()
                 .primary()
                 .loading(props.sending)

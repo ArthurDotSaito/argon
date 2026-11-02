@@ -6,7 +6,7 @@ use gpui_kit::{Context, EventEmitter, SharedString, Task};
 
 use super::summary::{head_moved, review_error};
 use crate::review::labels;
-use crate::services::{AppServices, Services, StoreHandle};
+use crate::services::{AppServices, Services, StoreHandle, flatten};
 
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 
@@ -312,12 +312,4 @@ fn empty_review() -> DraftReview {
         body: String::new(),
         event: ReviewEvent::Comment,
     }
-}
-
-fn flatten<T, E: std::fmt::Display, F: std::fmt::Display>(
-    result: Result<Result<T, E>, F>,
-) -> Result<T, String> {
-    result
-        .map_err(|error| error.to_string())
-        .and_then(|inner| inner.map_err(|error| error.to_string()))
 }

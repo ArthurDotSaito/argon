@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -74,6 +75,12 @@ impl StoreHandle {
             Err(_) => Err(StoreHandleError::Stopped),
         }
     }
+}
+
+pub fn flatten<T, E: Display, F: Display>(result: Result<Result<T, E>, F>) -> Result<T, String> {
+    result
+        .map_err(|error| error.to_string())
+        .and_then(|inner| inner.map_err(|error| error.to_string()))
 }
 
 fn open(data_dir: &Path, db_file: &Path) -> (Option<Store>, Option<String>) {

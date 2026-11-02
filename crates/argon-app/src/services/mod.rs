@@ -18,7 +18,7 @@ use tokio::runtime::Handle;
 
 pub use error::ServiceError;
 pub use logging::init as init_logging;
-pub use store_handle::StoreHandle;
+pub use store_handle::{StoreHandle, flatten};
 pub use sync::SyncEvent;
 
 use shared::Shared;

@@ -122,6 +122,10 @@ impl CenterPanel {
         Self::new(item, preview, content_factory, window, cx)
     }
 
+    pub fn view(&self) -> &AnyView {
+        &self.content.view
+    }
+
     pub fn item(&self) -> &CenterItem {
         &self.item
     }

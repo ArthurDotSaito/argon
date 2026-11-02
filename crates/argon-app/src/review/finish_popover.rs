@@ -52,10 +52,16 @@ pub fn open(
     let finish = cx.new(|cx| FinishReview::new(drafts, options, window, cx));
     let content = finish.clone();
     window.open_dialog(cx, move |dialog, _, cx| {
-        let sending = content.read(cx).drafts.read(cx).is_sending();
+        let drafts = content.read(cx).drafts.read(cx);
+        let sending = drafts.is_sending();
+        let title = if drafts.drafts().is_empty() {
+            labels::START_REVIEW
+        } else {
+            labels::FINISH_REVIEW
+        };
         dialog
             .w(px(DIALOG_WIDTH))
-            .title(labels::FINISH_REVIEW)
+            .title(title)
             .overlay_closable(false)
             .keyboard(!sending)
             .close_button(!sending)

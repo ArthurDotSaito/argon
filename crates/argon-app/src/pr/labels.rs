@@ -4,6 +4,8 @@ use argon_github::MergeMethod;
 pub const OPEN_ON_GITHUB: &str = "Abrir no GitHub";
 pub const REFRESH: &str = "Atualizar";
 pub const MERGE: &str = "Merge";
+pub const REVIEW: &str = "Revisar";
+pub const REVIEW_TOOLTIP: &str = "Abrir a review deste PR";
 pub const AI_REVIEW: &str = "Revisar com IA";
 pub const AI_REVIEW_SOON: &str =
     "Em breve: review com agentes de IA (Claude Code, Codex, OpenCode…)";

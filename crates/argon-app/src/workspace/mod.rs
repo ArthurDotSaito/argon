@@ -14,12 +14,13 @@ use gpui_kit::{
 
 pub use self::docks::DockPosition;
 use self::palette_slot::PaletteSlot;
-use crate::actions::{GoToView, OpenSettings, SyncNow};
+use crate::actions::{GoToView, OpenSettings, StartReview, SyncNow};
 use crate::bottom;
 use crate::center::{CenterContentFactory, CenterItem};
 use crate::inbox::{InboxEvent, InboxModel, InboxView};
 use crate::keymap::WORKSPACE_CONTEXT;
 use crate::layout_store::{LAYOUT_VERSION, LayoutSaver};
+use crate::pr::PrView;
 use crate::status_bar::WorkspaceStatusBar;
 use crate::sync_status::SyncStatus;
 use crate::title_bar::{self, AppTitleBar};
@@ -108,6 +109,16 @@ impl Workspace {
         title_bar::request_sync(cx);
     }
 
+    fn on_start_review(&mut self, _: &StartReview, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self.active_center_panel(window, cx) else {
+            return;
+        };
+        let Ok(view) = panel.read(cx).view().clone().downcast::<PrView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| view.start_review(window, cx));
+    }
+
     fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.open_item(CenterItem::Settings, false, window, cx);
     }
@@ -160,6 +171,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_go_to_view))
             .on_action(cx.listener(Self::on_sync_now))
             .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_start_review))
             .child(title_bar)
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(status_bar)

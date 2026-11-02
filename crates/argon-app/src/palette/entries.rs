@@ -4,8 +4,8 @@ use gpui_kit::{Action, SharedString};
 
 use super::ranking::Candidate;
 use crate::actions::{
-    CloseActiveItem, GoToView, OpenSettings, SyncNow, ToggleBottomDock, ToggleLeftDock,
-    ToggleRightDock,
+    CloseActiveItem, GoToView, OpenSettings, StartReview, SyncNow, ToggleBottomDock,
+    ToggleLeftDock, ToggleRightDock,
 };
 use crate::inbox::InboxView;
 
@@ -114,6 +114,7 @@ pub fn command_specs() -> Vec<CommandSpec> {
                 ToggleRightDock,
             ),
             CommandSpec::new("Fechar aba", IconName::X, CloseActiveItem),
+            CommandSpec::new("Enviar review", IconName::Send, StartReview),
             CommandSpec {
                 title: REVIEW_WITH_AI_TITLE,
                 icon: IconName::Sparkles,

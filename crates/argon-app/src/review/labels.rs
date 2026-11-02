@@ -45,6 +45,8 @@ pub const DELETE_DRAFT_TITLE: &str = "Excluir rascunho?";
 pub const DELETE_DRAFT_MESSAGE: &str = "O comentário pendente será apagado.";
 pub const REVIEW_IN_PROGRESS: &str = "Review em andamento";
 pub const FINISH_REVIEW: &str = "Finish review";
+pub const START_REVIEW: &str = "Review";
+pub const NO_PENDING_COMMENTS: &str = "Nenhum comentário pendente";
 pub const HEAD_MOVED: &str =
     "O PR recebeu commits novos — confira se os comentários ainda estão nas linhas certas";
 pub const GENERAL_COMMENT_PLACEHOLDER: &str = "Comentário geral (markdown)";

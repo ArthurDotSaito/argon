@@ -142,12 +142,22 @@ fn actions(props: &HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
                 cx.listener(|this, _: &ClickEvent, window, cx| this.open_merge_dialog(window, cx)),
             )
     });
+    let review = (props.pr.state == PrState::Open).then(|| {
+        Button::new("pr-review")
+            .icon(Icon::new(IconName::FileDiff))
+            .label(labels::REVIEW)
+            .small()
+            .outline()
+            .tooltip(labels::REVIEW_TOOLTIP)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.start_review(window, cx)))
+    });
     let ai_review = ai_review_button(cx);
     h_flex()
         .gap_1()
         .items_center()
         .child(open)
         .child(refresh)
+        .children(review)
         .children(merge)
         .child(ai_review)
 }

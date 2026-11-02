@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt::Display;
 
 use argon_core::{PrKey, PullRequest, ViewSet};
 use argon_store::Store;
@@ -10,7 +9,7 @@ use super::InboxView;
 use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, load_items};
 use super::labels;
 use super::sections::{InboxRow, Sections};
-use crate::services::{Services, SyncEvent};
+use crate::services::{Services, SyncEvent, flatten};
 use crate::sync_status::SyncStatus;
 
 pub enum InboxEvent {
@@ -451,9 +450,3 @@ impl InboxModel {
 }
 
 impl EventEmitter<InboxEvent> for InboxModel {}
-
-fn flatten<T, E: Display, F: Display>(result: Result<Result<T, E>, F>) -> Result<T, String> {
-    result
-        .map_err(|error| error.to_string())
-        .and_then(|inner| inner.map_err(|error| error.to_string()))
-}

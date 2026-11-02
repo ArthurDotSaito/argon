@@ -204,6 +204,12 @@ impl PrView {
             .update(cx, |review, cx| review.reveal(path, line, side, cx));
     }
 
+    pub fn start_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_review_scope(ReviewScope::All, cx);
+        self.review
+            .update(cx, |review, cx| review.open_finish(window, cx));
+    }
+
     pub fn open_on_github(&mut self, _: &mut Context<Self>) {
         let Some(url) = self.pr().map(|pr| pr.url.clone()) else {
             return;

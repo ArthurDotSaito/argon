@@ -18,7 +18,8 @@ gpui_kit::actions!(
         SyncNow,
         OpenSettings,
         ToggleDiffMode,
-        CancelComment
+        CancelComment,
+        StartReview
     ]
 );
 
