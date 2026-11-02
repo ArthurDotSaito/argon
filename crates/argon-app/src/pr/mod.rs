@@ -1,4 +1,4 @@
-mod actions_tab;
+mod actions;
 mod commits;
 mod conversation;
 mod header;

@@ -13,7 +13,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
-use super::actions_tab::ActionsTab;
+use super::actions::ActionsTab;
 use super::commits::CommitsTab;
 use super::conversation::{self, CONTENT_MAX_WIDTH, Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
@@ -161,6 +161,9 @@ impl PrView {
     pub fn set_tab(&mut self, tab: PrTab, cx: &mut Context<Self>) {
         if self.tab != tab {
             self.tab = tab;
+            self.actions.update(cx, |actions, cx| {
+                actions.set_active(tab == PrTab::Actions, cx)
+            });
             cx.notify();
         }
     }

@@ -1,5 +1,6 @@
 mod actions;
 mod assets;
+mod bottom;
 mod center;
 mod config_load;
 mod content;

@@ -21,7 +21,6 @@ pub const NO_REVIEWERS: &str = "sem reviewers";
 pub const FILES: &str = "arquivos";
 pub const UNDER_CONSTRUCTION: &str = "Em construção";
 pub const COMMITS_SOON: &str = "A lista de commits chega em breve.";
-pub const ACTIONS_SOON: &str = "Workflows e logs do Actions chegam em breve.";
 pub const REVIEW_SOON: &str = "Diff e comentários chegam na Fase 3";
 pub const MERGE_DIALOG_TITLE: &str = "Fazer merge do PR";
 pub const MERGE_METHOD: &str = "Método de merge";
@@ -33,13 +32,6 @@ pub const TAB_CONVERSATION: &str = "Conversa";
 pub const TAB_COMMITS: &str = "Commits";
 pub const TAB_ACTIONS: &str = "Actions";
 pub const TAB_REVIEW: &str = "Review";
-
-pub fn actions_soon(head_oid: &str) -> String {
-    format!(
-        "Workflows e logs do commit {} chegam em breve.",
-        short_sha(head_oid)
-    )
-}
 
 pub fn short_sha(oid: &str) -> &str {
     oid.get(..7).unwrap_or(oid)

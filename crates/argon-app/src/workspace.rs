@@ -17,6 +17,7 @@ use crate::actions::{
     CloseActiveItem, GoToView, OpenPalette, OpenSettings, SyncNow, ToggleBottomDock,
     ToggleLeftDock, ToggleRightDock,
 };
+use crate::bottom::{self, JobLogEvent, JobLogModel, LogPanel};
 use crate::center::{
     CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel, CenterPanelEvent,
 };
@@ -83,7 +84,7 @@ pub struct Workspace {
     sync_status: Entity<SyncStatus>,
     inbox: Entity<InboxModel>,
     palette: Option<PaletteSlot>,
-    _subscriptions: [Subscription; 4],
+    _subscriptions: [Subscription; 5],
 }
 
 impl Workspace {
@@ -94,6 +95,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let job_log = bottom::init(cx);
         register_panels(content_factory.clone(), inbox.clone(), cx);
         let (dock_area, skin) = DockSkin::dock_area(DOCK_AREA_ID, Some(LAYOUT_VERSION), window, cx);
         skin.set_panel_style(PanelStyle::TabBar, cx);
@@ -103,6 +105,7 @@ impl Workspace {
         let sync_subscription = cx.observe(&sync_status, |_, _, cx| cx.notify());
         let inbox_observation = cx.observe(&inbox, |_, _, cx| cx.notify());
         let inbox_subscription = cx.subscribe_in(&inbox, window, Self::on_inbox_event);
+        let job_log_subscription = cx.subscribe_in(&job_log, window, Self::on_job_log_event);
 
         let workspace = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -125,6 +128,7 @@ impl Workspace {
                 sync_subscription,
                 inbox_observation,
                 inbox_subscription,
+                job_log_subscription,
             ],
         };
         if !this.restore_layout(window, cx) {
@@ -267,6 +271,29 @@ impl Workspace {
         }
     }
 
+    fn on_job_log_event(
+        &mut self,
+        _: &Entity<JobLogModel>,
+        event: &JobLogEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let JobLogEvent::Reveal = event;
+        self.dock_area.update(cx, |area, cx| {
+            let Some((placement, id)) = bottom::locate_log_panel(area) else {
+                if !area.is_dock_open(DockPlacement::Bottom) {
+                    area.toggle_dock(DockPlacement::Bottom, window, cx);
+                }
+                return;
+            };
+            if placement != DockPlacement::Center && !area.is_dock_open(placement) {
+                area.toggle_dock(placement, window, cx);
+            }
+            area.select_panel(id, window, cx);
+        });
+        cx.notify();
+    }
+
     pub fn close_active_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(panel) = self.active_center_panel(window, cx) else {
             return;
@@ -403,7 +430,7 @@ impl Workspace {
         self.dock_area.update(cx, |area, cx| {
             area.set_center(DockLayout::tabs(), window, cx);
             for dock in DockPosition::ALL {
-                let panel = dock_panel(dock.slot(), &inbox, cx);
+                let panel = dock_panel(dock.slot(), &inbox, window, cx);
                 area.set_dock(
                     dock.placement(),
                     DockLayout::tabs().panel_view(panel, cx),
@@ -477,16 +504,22 @@ fn register_panels(content_factory: CenterContentFactory, inbox: Entity<InboxMod
     });
     for slot in DockSlot::ALL {
         let inbox = inbox.clone();
-        register_panel(cx, slot.panel_name(), move |_, _, cx| {
-            dock_panel(slot, &inbox, cx)
+        register_panel(cx, slot.panel_name(), move |_, window, cx| {
+            dock_panel(slot, &inbox, window, cx)
         });
     }
 }
 
-fn dock_panel(slot: DockSlot, inbox: &Entity<InboxModel>, cx: &mut App) -> Arc<dyn BasePanelView> {
-    match slot {
-        DockSlot::Views => panel_handle(cx.new(|cx| ViewsPanel::new(inbox.clone(), cx))),
-        slot => panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx))),
+fn dock_panel(
+    slot: DockSlot,
+    inbox: &Entity<InboxModel>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Arc<dyn BasePanelView> {
+    match (slot, JobLogModel::global(cx)) {
+        (DockSlot::Views, _) => panel_handle(cx.new(|cx| ViewsPanel::new(inbox.clone(), cx))),
+        (DockSlot::Log, Some(model)) => panel_handle(cx.new(|cx| LogPanel::new(model, window, cx))),
+        (slot, _) => panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx))),
     }
 }
 
