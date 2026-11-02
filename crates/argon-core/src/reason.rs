@@ -1,5 +1,7 @@
 use crate::model::{ChecksState, Mergeable, PullRequest, ReviewState};
-use crate::views::{already_done, changes_requested, is_mine, is_ready, waiting_on_others};
+use crate::views::{
+    already_done, changes_requested, is_mine, is_ready, needs_you, waiting_on_others,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
@@ -23,11 +25,12 @@ pub fn reason(pr: &PullRequest, me: &str) -> Reason {
     if is_mine(pr, me) && is_ready(pr) {
         return Reason::ReadyToMerge;
     }
-    if pr.involvement.requested {
-        return Reason::ReviewRequestedBy(pr.author.clone());
-    }
-    if pr.involvement.assigned {
-        return Reason::AssignedBy(None);
+    if needs_you(pr, me) {
+        return if pr.involvement.requested {
+            Reason::ReviewRequestedBy(pr.author.clone())
+        } else {
+            Reason::AssignedBy(None)
+        };
     }
     if already_done(pr, me) {
         return Reason::ApprovedByYouWaitingAuthor;
@@ -56,7 +59,7 @@ fn latest_changes_requester(pr: &PullRequest) -> Option<String> {
 mod tests {
     use super::*;
     use crate::fixtures::{ME, assigned, days_ago, mine, pr, requested, review};
-    use crate::model::ReviewDecision;
+    use crate::model::{PrState, ReviewDecision};
 
     fn changes_requested_mine() -> PullRequest {
         PullRequest {
@@ -117,6 +120,33 @@ mod tests {
                     ..pr()
                 },
                 Reason::ReviewRequestedBy("someone".into()),
+            ),
+            (
+                "closed pr with review requested is only tracking",
+                PullRequest {
+                    state: PrState::Merged,
+                    involvement: requested(),
+                    ..pr()
+                },
+                Reason::Tracking,
+            ),
+            (
+                "closed pr assigned to me is only tracking",
+                PullRequest {
+                    state: PrState::Closed,
+                    involvement: assigned(),
+                    ..pr()
+                },
+                Reason::Tracking,
+            ),
+            (
+                "requested but already reviewed after the last commit",
+                PullRequest {
+                    involvement: requested(),
+                    latest_reviews: vec![review(ME, ReviewState::Commented, days_ago(1))],
+                    ..pr()
+                },
+                Reason::Tracking,
             ),
             (
                 "requested wins over assigned",

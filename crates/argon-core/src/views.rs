@@ -90,7 +90,8 @@ fn is_open_and_mine(pr: &PullRequest, me: &str) -> bool {
 fn my_review<'a>(pr: &'a PullRequest, me: &str) -> Option<&'a LatestReview> {
     pr.latest_reviews
         .iter()
-        .find(|review| review.author.eq_ignore_ascii_case(me))
+        .filter(|review| review.author.eq_ignore_ascii_case(me))
+        .max_by_key(|review| review.submitted_at)
 }
 
 fn in_inbox(pr: &PullRequest, now: DateTime<Utc>, closed_window_days: i64) -> bool {
@@ -100,7 +101,7 @@ fn in_inbox(pr: &PullRequest, now: DateTime<Utc>, closed_window_days: i64) -> bo
             .is_some_and(|closed_at| now - closed_at <= Duration::days(closed_window_days))
 }
 
-fn needs_you(pr: &PullRequest, me: &str) -> bool {
+pub(crate) fn needs_you(pr: &PullRequest, me: &str) -> bool {
     is_open(pr)
         && !is_mine(pr, me)
         && (pr.involvement.requested || pr.involvement.assigned)
@@ -184,6 +185,15 @@ mod tests {
                     ..pr()
                 },
                 inbox,
+            ),
+            (
+                "my review exactly at the last commit keeps needs you",
+                PullRequest {
+                    involvement: requested(),
+                    latest_reviews: vec![review(ME, ReviewState::Commented, days_ago(2))],
+                    ..pr()
+                },
+                inbox | ViewSet::NEEDS_YOU,
             ),
             (
                 "review by someone else after the commit keeps needs you",
@@ -344,6 +354,28 @@ mod tests {
                     ..approved_by_me()
                 },
                 inbox | ViewSet::NEEDS_YOU | ViewSet::ALREADY_DONE,
+            ),
+            (
+                "older approval superseded by my newer changes requested",
+                PullRequest {
+                    latest_reviews: vec![
+                        review(ME, ReviewState::Approved, days_ago(3)),
+                        review(ME, ReviewState::ChangesRequested, days_ago(1)),
+                    ],
+                    ..approved_by_me()
+                },
+                inbox,
+            ),
+            (
+                "newer approval supersedes my older changes requested",
+                PullRequest {
+                    latest_reviews: vec![
+                        review(ME, ReviewState::Approved, days_ago(1)),
+                        review(ME, ReviewState::ChangesRequested, days_ago(3)),
+                    ],
+                    ..approved_by_me()
+                },
+                inbox | ViewSet::ALREADY_DONE,
             ),
             (
                 "approved by me but checks failing",

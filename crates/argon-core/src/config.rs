@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -110,7 +110,9 @@ impl Default for ReviewCfg {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceCfg {
+    #[serde(deserialize_with = "lenient_enum")]
     pub theme: ThemeChoice,
+    #[serde(deserialize_with = "lenient_enum")]
     pub density: Density,
 }
 
@@ -130,11 +132,39 @@ impl Default for NotificationsCfg {
     }
 }
 
+fn lenient_enum<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
+}
+
+fn known_agents<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<AgentKind, AgentCfg>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = BTreeMap::<String, toml::Value>::deserialize(deserializer)?;
+    let mut agents = BTreeMap::new();
+    for (key, value) in raw {
+        let Ok(kind) = AgentKind::deserialize(toml::Value::String(key)) else {
+            continue;
+        };
+        let cfg = AgentCfg::deserialize(value).map_err(serde::de::Error::custom)?;
+        agents.insert(kind, cfg);
+    }
+    Ok(agents)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub sync: SyncCfg,
     pub orgs: OrgsCfg,
+    #[serde(deserialize_with = "known_agents")]
     pub agents: BTreeMap<AgentKind, AgentCfg>,
     pub review: ReviewCfg,
     pub appearance: AppearanceCfg,
@@ -168,7 +198,15 @@ impl Config {
             std::fs::create_dir_all(parent).map_err(io_error)?;
         }
         let text = toml::to_string_pretty(self)?;
-        std::fs::write(path, text).map_err(io_error)
+        let mut temp_name = path.file_name().unwrap_or_default().to_os_string();
+        temp_name.push(format!(".{}.tmp", std::process::id()));
+        let temp_path = path.with_file_name(temp_name);
+        let written =
+            std::fs::write(&temp_path, text).and_then(|()| std::fs::rename(&temp_path, path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temp_path);
+        }
+        written.map_err(io_error)
     }
 }
 
@@ -307,6 +345,39 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn unknown_agents_are_discarded() {
+        let text = "[agents.foo]\ncommand = \"foo\"\n\n[agents.codex]\ndefault_model = \"m\"\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(parsed.agents.len(), 1);
+        assert_eq!(
+            parsed.agents[&AgentKind::Codex].default_model.as_deref(),
+            Some("m")
+        );
+    }
+
+    #[test]
+    fn unknown_enum_values_fall_back_to_defaults() {
+        let text = "[appearance]\ntheme = \"solarized\"\ndensity = \"xyz\"\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(parsed.appearance, AppearanceCfg::default());
+        let text = "[appearance]\ntheme = \"one-light\"\ndensity = \"xyz\"\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(parsed.appearance.theme, ThemeChoice::OneLight);
+        assert_eq!(parsed.appearance.density, Density::Comfortable);
+    }
+
+    #[test]
+    fn save_overwrites_existing_file_without_leaving_temp_files() {
+        let dir = TempDir::new("atomic");
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        let config = customized();
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
