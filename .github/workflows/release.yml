@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches crate version
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'argon-app' | ForEach-Object version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match argon-app version $version"
+          }
+      - run: cargo install cargo-packager --locked --version 0.11.8
+      - run: cargo build -p argon-app --release
+      - run: cargo packager --release --formats nsis
+      - uses: softprops/action-gh-release@v3.0.3
+        with:
+          files: target/release/argon_*_x64-setup.exe
+          generate_release_notes: true

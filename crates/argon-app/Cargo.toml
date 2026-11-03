@@ -39,5 +39,26 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-winrt-notification.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_UI_Shell"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 argon-core = { path = "../argon-core", features = ["test-fixtures"] }
+
+[package.metadata.packager]
+productName = "Argon"
+identifier = "br.com.nuria.argon"
+publisher = "Nuria"
+copyright = "Copyright (c) Nuria"
+description = "Aplicativo desktop de review de Pull Requests do GitHub"
+formats = ["nsis"]
+icons = ["../../assets/icon.ico"]
+
+[package.metadata.packager.nsis]
+installMode = "currentUser"
+languages = ["PortugueseBR"]
+installerIcon = "../../assets/icon.ico"
+template = "../../packaging/nsis/installer.nsi"

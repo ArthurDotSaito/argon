@@ -1,5 +1,8 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod actions;
 mod agents;
+mod app_id;
 mod assets;
 mod bottom;
 mod center;
@@ -49,6 +52,7 @@ struct LogGuard(Option<WorkerGuard>);
 impl Global for LogGuard {}
 
 fn main() {
+    app_id::register_process();
     let paths = Paths::resolve();
     let log_guard = services::init_logging(&paths.log_dir());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "argon starting");
