@@ -16,4 +16,5 @@ which.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util"] }
 serde_json.workspace = true
+serde.workspace = true
 tracing-subscriber.workspace = true
