@@ -37,6 +37,7 @@ pub struct AgentForm {
     pub(super) env: Vec<EnvRow>,
     pub(super) model_select: Entity<SelectState<Vec<Choice>>>,
     pub(super) model: Option<String>,
+    pub(super) full_access: bool,
     pub(super) error: Option<SharedString>,
     test_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -107,6 +108,7 @@ impl AgentForm {
             status: Status::Detecting,
             detected: None,
             model: saved.default_model.clone(),
+            full_access: saved.full_access,
             command,
             args,
             env: Vec::new(),
@@ -172,6 +174,7 @@ impl AgentForm {
             args: split_args(&self.args.read(cx).value())?,
             env: parse_env(&rows)?,
             default_model: self.model.clone(),
+            full_access: self.full_access,
         })
     }
 
@@ -300,6 +303,7 @@ impl AgentForm {
             self.push_env(key, value, window, cx);
         }
         self.model = saved.default_model;
+        self.full_access = saved.full_access;
         self.error = None;
         self.refresh_models(window, cx);
         cx.notify();

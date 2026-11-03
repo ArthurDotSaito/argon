@@ -55,7 +55,12 @@ impl Shared {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let known_kind = state.tool_kinds.get(tool_call_id).cloned();
-        match decide(&value, known_kind.as_deref(), &self.config.cwd) {
+        match decide(
+            &value,
+            known_kind.as_deref(),
+            &self.config.cwd,
+            self.config.full_access,
+        ) {
             PermissionDecision::Allow { option_id } => {
                 if let Err(error) = responder.respond(selected(&option_id)) {
                     tracing::warn!(%error, "failed to auto-allow permission");

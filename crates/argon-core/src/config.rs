@@ -85,6 +85,7 @@ pub struct AgentCfg {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub default_model: Option<String>,
+    pub full_access: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +249,7 @@ mod tests {
                 args: vec!["--verbose".into()],
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
+                full_access: true,
             },
         );
         agents.insert(AgentKind::Antigravity, AgentCfg::default());

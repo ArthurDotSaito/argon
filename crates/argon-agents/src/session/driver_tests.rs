@@ -38,6 +38,7 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             allowed_files: vec!["src/lib.rs".into()],
             writer: writer.clone(),
             stderr: Arc::default(),
+            full_access: false,
         },
         events,
     );

@@ -3,6 +3,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
@@ -103,6 +104,20 @@ impl AgentForm {
         v_flex().gap_1().children(rows).child(h_flex().child(add))
     }
 
+    fn full_access_control(&self, cx: &mut Context<Self>) -> Div {
+        let toggle = Switch::new(("settings-agent-full-access", self.kind as usize))
+            .checked(self.full_access)
+            .small()
+            .on_click(cx.listener(|this, on: &bool, _, cx| {
+                this.full_access = *on;
+                cx.notify();
+            }));
+        v_flex()
+            .gap_1()
+            .child(h_flex().child(toggle))
+            .child(note(labels::FULL_ACCESS_NOTE, cx.theme().muted_foreground))
+    }
+
     fn actions(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let dirty = self.is_dirty(cx);
@@ -169,6 +184,7 @@ impl Render for AgentForm {
             .child(field(labels::ARGS, Input::new(&self.args).small(), cx))
             .child(field(labels::ENV, self.env_rows(cx), cx))
             .child(field(labels::DEFAULT_MODEL, model, cx))
+            .child(field(labels::FULL_ACCESS, self.full_access_control(cx), cx))
             .child(self.actions(cx))
     }
 }

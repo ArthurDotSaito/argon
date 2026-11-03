@@ -170,6 +170,7 @@ pub(super) async fn launch(
             allowed_files: ctx.allowed_files.clone(),
             writer: writer.clone(),
             stderr: Arc::clone(&tail),
+            full_access: spec.full_access,
         },
         events,
     ));

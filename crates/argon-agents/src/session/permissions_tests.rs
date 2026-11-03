@@ -58,6 +58,7 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
             &request(Some(kind), &[inside("src/a.rs")], json!({})),
             None,
             &cwd(),
+            false,
         );
         assert!(allowed(&decision), "{kind}: {decision:?}");
     }
@@ -65,6 +66,7 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
         &request(Some("read"), &["src/a.rs".into()], json!({})),
         None,
         &cwd(),
+        false,
     );
     assert!(allowed(&relative));
     let search_in_cwd = decide(
@@ -75,6 +77,7 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
         ),
         None,
         &cwd(),
+        false,
     );
     assert!(allowed(&search_in_cwd));
 }
@@ -82,14 +85,14 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
 #[test]
 fn fetch_always_asks() {
     for input in [json!({"url": "https://example.com"}), json!({})] {
-        let decision = decide(&request(Some("fetch"), &[], input), None, &cwd());
+        let decision = decide(&request(Some("fetch"), &[], input), None, &cwd(), false);
         assert!(asks(&decision), "{decision:?}");
     }
 }
 
 #[test]
 fn read_without_any_path_asks() {
-    let decision = decide(&request(Some("read"), &[], json!({})), None, &cwd());
+    let decision = decide(&request(Some("read"), &[], json!({})), None, &cwd(), false);
     assert!(asks(&decision));
 }
 
@@ -100,7 +103,7 @@ fn search_without_any_path_asks() {
         json!({"pattern": "fn main"}),
         json!({"query": "token"}),
     ] {
-        let decision = decide(&request(Some("search"), &[], input), None, &cwd());
+        let decision = decide(&request(Some("search"), &[], input), None, &cwd(), false);
         assert!(asks(&decision), "{decision:?}");
     }
 }
@@ -112,13 +115,19 @@ fn reads_outside_worktree_ask() {
         vec!["../other/secret.txt".to_string()],
         vec![inside("src/a.rs"), outside().to_string()],
     ] {
-        let decision = decide(&request(Some("read"), &locations, json!({})), None, &cwd());
+        let decision = decide(
+            &request(Some("read"), &locations, json!({})),
+            None,
+            &cwd(),
+            false,
+        );
         assert!(asks(&decision), "{locations:?}");
     }
     let via_input = decide(
         &request(Some("read"), &[], json!({"file_path": outside()})),
         None,
         &cwd(),
+        false,
     );
     assert!(asks(&via_input));
 }
@@ -136,7 +145,12 @@ fn search_patterns_escaping_the_worktree_ask() {
         json!({"pattern": "secret", "include": "../../**"}),
         json!({"path": outside()}),
     ] {
-        let decision = decide(&request(Some("search"), &[], input.clone()), None, &cwd());
+        let decision = decide(
+            &request(Some("search"), &[], input.clone()),
+            None,
+            &cwd(),
+            false,
+        );
         assert!(asks(&decision), "{input}");
     }
     let inside_glob = format!("{}/**/*.rs", cwd().display());
@@ -144,6 +158,7 @@ fn search_patterns_escaping_the_worktree_ask() {
         &request(Some("search"), &[], json!({"glob": inside_glob})),
         None,
         &cwd(),
+        false,
     );
     assert!(allowed(&decision));
 }
@@ -162,6 +177,7 @@ fn edit_execute_and_unknown_kinds_ask_with_all_options() {
             &request(kind, &[inside("src/a.rs")], json!({})),
             None,
             &cwd(),
+            false,
         );
         let PermissionDecision::Ask(prompt) = decision else {
             panic!("{kind:?} should ask");
@@ -182,15 +198,47 @@ fn edit_execute_and_unknown_kinds_ask_with_all_options() {
 #[test]
 fn kind_from_earlier_tool_call_is_used_when_request_omits_it() {
     let req = request(None, &[inside("src/a.rs")], json!({}));
-    assert!(allowed(&decide(&req, Some("read"), &cwd())));
-    assert!(asks(&decide(&req, Some("edit"), &cwd())));
+    assert!(allowed(&decide(&req, Some("read"), &cwd(), false)));
+    assert!(asks(&decide(&req, Some("edit"), &cwd(), false)));
 }
 
 #[test]
 fn read_without_allow_once_option_asks() {
     let mut req = request(Some("read"), &[inside("a.rs")], json!({}));
     req["options"] = json!([{"optionId": "always", "name": "Always", "kind": "allow_always"}]);
-    assert!(asks(&decide(&req, None, &cwd())));
+    assert!(asks(&decide(&req, None, &cwd(), false)));
+}
+
+#[test]
+fn full_access_allows_every_kind_with_allow_once() {
+    let cases = [
+        request(Some("execute"), &[], json!({"command": "rm -rf /"})),
+        request(Some("edit"), &[inside("src/a.rs")], json!({})),
+        request(Some("fetch"), &[], json!({"url": "https://example.com"})),
+        request(Some("read"), &[outside().to_string()], json!({})),
+        request(None, &[], json!({})),
+    ];
+    for req in cases {
+        let decision = decide(&req, None, &cwd(), true);
+        assert!(allowed(&decision), "{req}: {decision:?}");
+    }
+}
+
+#[test]
+fn full_access_never_picks_allow_always() {
+    let mut req = request(Some("execute"), &[], json!({}));
+    req["options"] = json!([
+        {"optionId": "allow-always", "name": "Always allow", "kind": "allow_always"},
+        {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"}
+    ]);
+    assert!(allowed(&decide(&req, None, &cwd(), true)));
+}
+
+#[test]
+fn full_access_without_allow_once_option_asks() {
+    let mut req = request(Some("execute"), &[], json!({}));
+    req["options"] = json!([{"optionId": "always", "name": "Always", "kind": "allow_always"}]);
+    assert!(asks(&decide(&req, None, &cwd(), true)));
 }
 
 #[test]

@@ -5,6 +5,7 @@ use super::{Load, Phase, StartDialog, app_services, fresh_session_id};
 use crate::agents::labels;
 use crate::agents::launcher::{LaunchRequest, LaunchStage};
 use crate::agents::launches::{LaunchState, SessionMeta};
+use crate::config_watch;
 
 pub(super) enum Status {
     Busy(SharedString),
@@ -83,8 +84,13 @@ impl StartDialog {
         let gathered = self.context.ready()?;
         let sessions = Self::sessions(cx)?;
         let sessions = sessions.read(cx);
+        let mut spec = option.spec.clone();
+        spec.full_access = config_watch::current(cx)
+            .agents
+            .get(&spec.kind)
+            .is_some_and(|agent| agent.full_access);
         let request = LaunchRequest {
-            spec: option.spec.clone(),
+            spec,
             session_id: self.session_id.clone().ok()?,
             pr: self.pr.key(),
             repo: self.pr.repo.clone(),

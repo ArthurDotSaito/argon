@@ -52,6 +52,7 @@ pub(super) struct SharedConfig {
     pub allowed_files: Vec<String>,
     pub writer: SessionWriter,
     pub stderr: Arc<StderrTail>,
+    pub full_access: bool,
 }
 
 pub(super) struct Shared {

@@ -155,7 +155,12 @@ fn is_local_read(kind: &str, tool_call: &Value, cwd: &Path) -> bool {
     !paths.is_empty() && paths.iter().all(|path| is_inside(cwd, path))
 }
 
-pub fn decide(request: &Value, known_kind: Option<&str>, cwd: &Path) -> PermissionDecision {
+pub fn decide(
+    request: &Value,
+    known_kind: Option<&str>,
+    cwd: &Path,
+    full_access: bool,
+) -> PermissionDecision {
     let tool_call = request.get("toolCall").cloned().unwrap_or(Value::Null);
     let kind = json_text(&tool_call, "kind")
         .or_else(|| known_kind.map(str::to_owned))
@@ -166,7 +171,7 @@ pub fn decide(request: &Value, known_kind: Option<&str>, cwd: &Path) -> Permissi
         .find(|option| option.kind == ALLOW_ONCE)
         .map(|option| option.id.clone());
     match allow_once {
-        Some(option_id) if is_local_read(&kind, &tool_call, cwd) => {
+        Some(option_id) if full_access || is_local_read(&kind, &tool_call, cwd) => {
             PermissionDecision::Allow { option_id }
         }
         _ => PermissionDecision::Ask(PermissionPrompt {
