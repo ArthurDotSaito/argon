@@ -9,7 +9,7 @@ use crate::Store;
 use crate::error::Result;
 
 const DRAFT_COLUMNS: &str =
-    "id, host, pr_id, path, line, side, start_line, start_side, body, source, session_id";
+    "id, host, pr_id, path, line, side, start_line, start_side, body, source, session_id, head_oid";
 
 fn invalid_column(index: usize, kind: &str, value: &str) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
@@ -38,6 +38,7 @@ fn draft_from_row(row: &Row<'_>) -> rusqlite::Result<DraftComment> {
         body: row.get(8)?,
         source: DraftSource::parse(&source).ok_or_else(|| invalid_column(9, "source", &source))?,
         session_id: row.get(10)?,
+        head_oid: row.get(11)?,
     })
 }
 
@@ -45,8 +46,8 @@ impl Store {
     pub fn add_draft(&mut self, draft: &DraftComment) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO draft_comments
-                (host, pr_id, path, line, side, start_line, start_side, body, source, session_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                (host, pr_id, path, line, side, start_line, start_side, body, source, session_id, head_oid, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 draft.pr.host,
                 draft.pr.id.0,
@@ -58,6 +59,7 @@ impl Store {
                 draft.body,
                 draft.source.as_str(),
                 draft.session_id,
+                draft.head_oid,
                 Utc::now().timestamp_millis(),
             ],
         )?;
@@ -86,6 +88,19 @@ impl Store {
     pub fn delete_draft(&mut self, id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM draft_comments WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn delete_drafts(&mut self, pr: &PrKey, ids: &[i64]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx
+                .prepare("DELETE FROM draft_comments WHERE host = ?1 AND pr_id = ?2 AND id = ?3")?;
+            for id in ids {
+                stmt.execute(params![pr.host, pr.id.0, id])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -183,6 +198,7 @@ mod tests {
             body: format!("note on {path}:{line}"),
             source: DraftSource::User,
             session_id: None,
+            head_oid: Some("3fa91c0".to_string()),
         }
     }
 
@@ -197,6 +213,7 @@ mod tests {
             start_side: Some(Side::Left),
             source: DraftSource::Agent,
             session_id: Some("sess-1".to_string()),
+            head_oid: None,
             ..draft(&pr, "src/b.ts", 9)
         };
         let first = store.add_draft(&plain).unwrap();
@@ -354,6 +371,26 @@ mod tests {
         assert_eq!(store.draft_review(&public).unwrap(), None);
         assert_eq!(store.drafts(&enterprise).unwrap().len(), 1);
         assert!(store.draft_review(&enterprise).unwrap().is_some());
+    }
+
+    #[test]
+    fn delete_drafts_removes_only_the_listed_ids_of_that_pr() {
+        let mut store = Store::open_in_memory().unwrap();
+        let pr = key(DEFAULT_HOST, "PR_1");
+        let other = key(GHE, "PR_1");
+        let sent = store.add_draft(&draft(&pr, "a.ts", 1)).unwrap();
+        let late = store.add_draft(&draft(&pr, "b.ts", 2)).unwrap();
+        let foreign = store.add_draft(&draft(&other, "c.ts", 3)).unwrap();
+        store
+            .save_draft_review(&pr, "body", ReviewEvent::Comment)
+            .unwrap();
+
+        store.delete_drafts(&pr, &[sent, foreign, 999]).unwrap();
+
+        let left: Vec<i64> = store.drafts(&pr).unwrap().iter().map(|d| d.id).collect();
+        assert_eq!(left, [late]);
+        assert_eq!(store.drafts(&other).unwrap().len(), 1);
+        assert!(store.draft_review(&pr).unwrap().is_some());
     }
 
     #[test]

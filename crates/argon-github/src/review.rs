@@ -154,6 +154,7 @@ mod tests {
             body: format!("comment {id}"),
             source: DraftSource::User,
             session_id: None,
+            head_oid: None,
         }
     }
 

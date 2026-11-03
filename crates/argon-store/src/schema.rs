@@ -162,7 +162,13 @@ CREATE TABLE viewers (
 );
 ";
 
-const MIGRATIONS: &[M<'static>] = &[M::up(INITIAL), M::up(COMPOSITE_PR_KEY)];
+const DRAFT_HEAD_OID: &str = "ALTER TABLE draft_comments ADD COLUMN head_oid TEXT;";
+
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(INITIAL),
+    M::up(COMPOSITE_PR_KEY),
+    M::up(DRAFT_HEAD_OID),
+];
 
 fn migrations() -> Migrations<'static> {
     Migrations::from_slice(MIGRATIONS)
@@ -279,5 +285,31 @@ mod tests {
                 (PrKey::new(GHE, "archived"), true, true),
             ]
         );
+    }
+
+    #[test]
+    fn migration_three_adds_head_oid_and_keeps_drafts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 2).unwrap();
+        conn.execute_batch(
+            "INSERT INTO draft_comments
+                (host, pr_id, path, line, side, start_line, start_side, body, source, session_id, created_at)
+             VALUES ('github.com', 'PR_1', 'src/a.ts', 12, 'RIGHT', 10, 'RIGHT', 'keep me', 'user', NULL, 1);
+             INSERT INTO draft_reviews (host, pr_id, body, event)
+             VALUES ('github.com', 'PR_1', 'general', 'COMMENT');",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let store = Store { conn };
+        let pr = PrKey::new(DEFAULT_HOST, "PR_1");
+        let drafts = store.drafts(&pr).unwrap();
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].body, "keep me");
+        assert_eq!(drafts[0].start_line, Some(10));
+        assert_eq!(drafts[0].head_oid, None);
+        assert_eq!(store.draft_review(&pr).unwrap().unwrap().body, "general");
     }
 }

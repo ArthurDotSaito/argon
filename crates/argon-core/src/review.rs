@@ -82,6 +82,7 @@ pub struct DraftComment {
     pub body: String,
     pub source: DraftSource,
     pub session_id: Option<String>,
+    pub head_oid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +223,7 @@ mod tests {
             body: format!("comment {id}"),
             source: DraftSource::User,
             session_id: None,
+            head_oid: None,
         }
     }
 
