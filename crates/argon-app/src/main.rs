@@ -25,6 +25,7 @@ mod sync_status;
 mod theme;
 mod title_bar;
 mod ui;
+mod update;
 mod workspace;
 
 use argon_core::Paths;
@@ -78,6 +79,7 @@ fn main() {
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));
             config_watch::init(cx);
+            update::init(cx);
             theme::init(cx);
             cx.set_global(InboxHandle(inbox.clone()));
             notify::init(&sync_status, &inbox, cx);

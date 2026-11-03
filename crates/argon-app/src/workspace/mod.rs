@@ -15,7 +15,7 @@ use gpui_kit::{
 
 pub use self::docks::DockPosition;
 use self::palette_slot::PaletteSlot;
-use crate::actions::{GoToView, OpenSettings, StartReview, SyncNow};
+use crate::actions::{CheckForUpdates, GoToView, OpenSettings, StartReview, SyncNow};
 use crate::agents::AgentSessions;
 use crate::bottom;
 use crate::center::{CenterContentFactory, CenterItem};
@@ -23,9 +23,11 @@ use crate::inbox::{InboxEvent, InboxModel, InboxView};
 use crate::keymap::WORKSPACE_CONTEXT;
 use crate::layout_store::{LAYOUT_VERSION, LayoutSaver};
 use crate::pr::PrView;
+use crate::settings::SettingsView;
 use crate::status_bar::WorkspaceStatusBar;
 use crate::sync_status::SyncStatus;
 use crate::title_bar::{self, AppTitleBar};
+use crate::update;
 
 const DOCK_AREA_ID: &str = "argon-workspace";
 
@@ -59,6 +61,7 @@ impl Workspace {
         let dock_subscription = cx.subscribe(&dock_area, Self::on_dock_event);
         let sync_subscription = cx.observe(&sync_status, |_, _, cx| cx.notify());
         let inbox_observation = cx.observe(&inbox, |_, _, cx| cx.notify());
+        let update_observation = cx.observe(&update::entity(cx), |_, _, cx| cx.notify());
         let inbox_subscription = cx.subscribe_in(&inbox, window, Self::on_inbox_event);
         let job_log_subscription = cx.subscribe_in(&job_log, window, Self::on_job_log_event);
 
@@ -86,6 +89,7 @@ impl Workspace {
                 dock_subscription,
                 sync_subscription,
                 inbox_observation,
+                update_observation,
                 inbox_subscription,
                 job_log_subscription,
             ],
@@ -136,6 +140,35 @@ impl Workspace {
         self.open_item(CenterItem::Settings, false, window, cx);
     }
 
+    pub fn show_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_item(CenterItem::Settings, false, window, cx);
+        let settings = self
+            .center_panels(cx)
+            .into_iter()
+            .find(|panel| panel.read(cx).item() == &CenterItem::Settings)
+            .and_then(|panel| {
+                panel
+                    .read(cx)
+                    .view()
+                    .clone()
+                    .downcast::<SettingsView>()
+                    .ok()
+            });
+        if let Some(settings) = settings {
+            settings.update(cx, |settings, cx| settings.show_about(window, cx));
+        }
+    }
+
+    fn on_check_for_updates(
+        &mut self,
+        _: &CheckForUpdates,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        update::entity(cx).update(cx, |model, cx| model.check(cx));
+        self.show_about(window, cx);
+    }
+
     fn on_inbox_event(
         &mut self,
         _: &Entity<InboxModel>,
@@ -159,7 +192,9 @@ impl Render for Workspace {
         let agents = AgentSessions::global(cx)
             .map(|sessions| sessions.read(cx).activity(cx))
             .unwrap_or_default();
-        let status_bar = WorkspaceStatusBar::new(cx.weak_entity(), docks, needs_you, agents);
+        let update_label = update::entity(cx).read(cx).status_bar_label();
+        let status_bar =
+            WorkspaceStatusBar::new(cx.weak_entity(), docks, needs_you, agents, update_label);
         let sync_status = self.sync_status.read(cx);
         let account = sync_status
             .login
@@ -187,6 +222,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_go_to_view))
             .on_action(cx.listener(Self::on_sync_now))
             .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_check_for_updates))
             .on_action(cx.listener(Self::on_start_review))
             .on_action(cx.listener(Self::on_review_with_ai))
             .child(title_bar)

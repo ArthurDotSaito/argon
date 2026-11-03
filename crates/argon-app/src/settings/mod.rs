@@ -1,3 +1,4 @@
+mod about;
 mod accounts;
 mod agents;
 mod appearance;
@@ -17,6 +18,7 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px,
 };
 
+use self::about::AboutSection;
 use self::accounts::AccountsSection;
 use self::agents::AgentsSection;
 use self::orgs::OrgsSection;
@@ -36,16 +38,18 @@ enum Section {
     Templates,
     Notifications,
     Appearance,
+    About,
 }
 
 impl Section {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Accounts,
         Self::Orgs,
         Self::Agents,
         Self::Templates,
         Self::Notifications,
         Self::Appearance,
+        Self::About,
     ];
 
     fn title(self) -> &'static str {
@@ -56,6 +60,7 @@ impl Section {
             Self::Templates => labels::TEMPLATES,
             Self::Notifications => labels::NOTIFICATIONS,
             Self::Appearance => labels::APPEARANCE,
+            Self::About => labels::ABOUT,
         }
     }
 
@@ -67,6 +72,7 @@ impl Section {
             Self::Templates => IconName::FileText,
             Self::Notifications => IconName::Bell,
             Self::Appearance => IconName::Palette,
+            Self::About => IconName::Info,
         }
     }
 }
@@ -79,6 +85,7 @@ pub struct SettingsView {
     orgs: Option<Entity<OrgsSection>>,
     agents: Option<Entity<AgentsSection>>,
     templates: Option<Entity<TemplatesSection>>,
+    about: Option<Entity<AboutSection>>,
     _subscription: Subscription,
 }
 
@@ -94,6 +101,7 @@ impl SettingsView {
             orgs: None,
             agents: None,
             templates: None,
+            about: None,
             _subscription: subscription,
         }
     }
@@ -115,6 +123,10 @@ impl SettingsView {
             });
         }
         cx.notify();
+    }
+
+    pub fn show_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show(Section::About, window, cx);
     }
 
     fn show(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
@@ -151,6 +163,11 @@ impl SettingsView {
                 .into_any_element(),
             Section::Notifications => appearance::notifications(cx).into_any_element(),
             Section::Appearance => appearance::appearance(cx).into_any_element(),
+            Section::About => self
+                .about
+                .get_or_insert_with(|| cx.new(AboutSection::new))
+                .clone()
+                .into_any_element(),
         }
     }
 

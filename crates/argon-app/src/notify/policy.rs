@@ -7,6 +7,7 @@ pub fn allowed(config: NotificationsCfg, channel: Channel, window_focused: bool)
         Channel::NeedsYou => config.needs_you && !window_focused,
         Channel::AgentPermission => config.agent_events,
         Channel::AgentOutcome => config.agent_events && !window_focused,
+        Channel::AppUpdate => true,
     }
 }
 
@@ -48,5 +49,15 @@ mod tests {
         assert!(!allowed(agents_off, Channel::AgentPermission, false));
         assert!(!allowed(agents_off, Channel::AgentOutcome, false));
         assert!(allowed(agents_off, Channel::NeedsYou, false));
+    }
+
+    #[test]
+    fn app_updates_are_announced_regardless_of_switches_and_focus() {
+        let all_off = NotificationsCfg {
+            needs_you: false,
+            agent_events: false,
+        };
+        assert!(allowed(all_off, Channel::AppUpdate, true));
+        assert!(allowed(ALL_ON, Channel::AppUpdate, false));
     }
 }

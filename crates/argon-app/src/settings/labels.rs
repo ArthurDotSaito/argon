@@ -4,6 +4,7 @@ pub const AGENTS: &str = "Agentes";
 pub const TEMPLATES: &str = "Templates de prompt";
 pub const NOTIFICATIONS: &str = "Notificações";
 pub const APPEARANCE: &str = "Aparência";
+pub const ABOUT: &str = "Sobre";
 
 pub const SAVE: &str = "Salvar";
 pub const UNSAVED: &str = "Alterações não salvas";
@@ -73,6 +74,20 @@ pub const NOTIFY_NEEDS_YOU: &str = "PR entrou em Needs you";
 pub const NOTIFY_AGENTS: &str = "Agente pediu permissão ou terminou";
 
 pub const APPEARANCE_HINT: &str = "Aplica na hora, sem reiniciar.";
+
+pub const ABOUT_HINT: &str = "Versão instalada e atualizações do Argon.";
+pub const APP_NAME: &str = "Argon";
+pub const APP: &str = "Aplicativo";
+pub const VERSION: &str = "Versão";
+pub const LAST_CHECK: &str = "Última verificação";
+pub const STATUS: &str = "Status";
+pub const NEW_VERSION: &str = "Nova versão";
+pub const CHECK_UPDATES: &str = "Verificar atualizações";
+pub const WHATS_NEW: &str = "Ver novidades";
+pub const UPDATE: &str = "Atualizar";
+pub const UPDATE_CONFIRM_TITLE: &str = "Atualizar o Argon";
+pub const CONFIRM: &str = "Confirmar";
+pub const INSTALLED_APP_ONLY: &str = "Disponível só no app instalado";
 pub const THEME: &str = "Tema";
 pub const DENSITY: &str = "Densidade";
 pub const ONE_DARK: &str = "One Dark";
@@ -87,6 +102,19 @@ pub fn gh_login(host: &str) -> String {
 
 pub fn not_authenticated(host: &str) -> String {
     format!("gh não autenticado — rode `{}`", gh_login(host))
+}
+
+pub fn update_stops_agents(count: usize) -> String {
+    let running = if count == 1 {
+        "Há 1 agente em execução".to_string()
+    } else {
+        format!("Há {count} agentes em execução")
+    };
+    format!("{running}. Atualizar agora encerra as sessões.")
+}
+
+pub fn checked_ago(ago: &str) -> String {
+    format!("Verificado {ago}")
 }
 
 pub fn accounts_failed(error: &str) -> String {

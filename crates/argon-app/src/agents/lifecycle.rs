@@ -3,11 +3,17 @@ use std::time::{Duration, Instant};
 
 use argon_agents::AgentSessionHandle;
 use argon_store::{SessionStatus, Store};
-use gpui_kit::Context;
+use gpui_kit::{App, Context};
 
 use super::sessions::{AgentSessions, AgentsEvent, Closing, ResumeState};
 use super::sink::SessionStore;
 use crate::services::{Services, StoreHandle, flatten};
+
+enum CloseStart {
+    Done,
+    InProgress,
+    Work(Vec<(String, AgentSessionHandle)>, Vec<String>),
+}
 
 pub const APP_CLOSED_REASON: &str = "Argon foi encerrado durante a sessão";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -54,17 +60,60 @@ pub async fn shutdown_all(
 
 impl AgentSessions {
     pub fn begin_close(&mut self, services: &Services, cx: &mut Context<Self>) -> bool {
+        match self.start_close() {
+            CloseStart::Done => true,
+            CloseStart::InProgress => false,
+            CloseStart::Work(handles, launches) => {
+                self.shut_down(handles, launches, services, |cx| cx.quit(), cx);
+                false
+            }
+        }
+    }
+
+    pub fn shutdown_then(
+        &mut self,
+        services: &Services,
+        after: impl FnOnce(&mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        match self.start_close() {
+            CloseStart::Done => after(cx),
+            CloseStart::InProgress => {}
+            CloseStart::Work(handles, launches) => {
+                self.shut_down(handles, launches, services, after, cx);
+            }
+        }
+    }
+
+    pub fn reopen(&mut self) {
+        if self.closing() == Closing::Done {
+            self.set_closing(Closing::Open);
+        }
+    }
+
+    fn start_close(&mut self) -> CloseStart {
         match self.closing() {
-            Closing::Done => return true,
-            Closing::ShuttingDown => return false,
+            Closing::Done => return CloseStart::Done,
+            Closing::ShuttingDown => return CloseStart::InProgress,
             Closing::Open => {}
         }
         let handles = self.live_handles();
         let launches = self.pending_launches();
         if handles.is_empty() && launches.is_empty() {
             self.set_closing(Closing::Done);
-            return true;
+            return CloseStart::Done;
         }
+        CloseStart::Work(handles, launches)
+    }
+
+    fn shut_down(
+        &mut self,
+        handles: Vec<(String, AgentSessionHandle)>,
+        launches: Vec<String>,
+        services: &Services,
+        after: impl FnOnce(&mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
         tracing::info!(
             sessions = handles.len(),
             launches = launches.len(),
@@ -89,13 +138,11 @@ impl AgentSessions {
             }
             _ = this.update(cx, |this, cx| {
                 this.set_closing(Closing::Done);
-                cx.quit();
+                after(cx);
             });
         })
         .detach();
-        false
     }
-
     pub fn can_archive(&self, session_id: &str) -> bool {
         !matches!(self.resume_state(session_id), Some(ResumeState::Running))
             && !self.pending_launches().iter().any(|id| id == session_id)

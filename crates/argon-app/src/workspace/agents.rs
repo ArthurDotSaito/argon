@@ -79,6 +79,23 @@ impl Workspace {
         }
     }
 
+    pub fn shutdown_then(
+        &mut self,
+        after: impl FnOnce(&mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.save_now(cx);
+        let services = cx
+            .try_global::<AppServices>()
+            .map(|global| global.0.clone());
+        match (AgentSessions::global(cx), services) {
+            (Some(sessions), Some(services)) => sessions.update(cx, |sessions, cx| {
+                sessions.shutdown_then(&services, after, cx)
+            }),
+            _ => after(cx),
+        }
+    }
+
     pub fn reveal_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reveal_dock(DockPosition::Right, window, cx);
     }

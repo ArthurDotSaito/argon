@@ -14,12 +14,13 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Global, Subscription, Task
 
 use self::agent_events::{AgentTracker, SessionSnapshot, Signal, phase_of};
 use self::needs_you::{NeedsYouEntry, NeedsYouTracker};
-use self::toast::{ToastSpec, ToastTarget};
+use self::toast::{Channel, ToastSpec, ToastTarget};
 use crate::agents::AgentSessions;
 use crate::config_watch;
 use crate::inbox::InboxModel;
 use crate::services::SyncEvent;
 use crate::sync_status::SyncStatus;
+use crate::update::{self, UpdateEvent, UpdateModel};
 
 const RELOAD_SETTLE: Duration = Duration::from_secs(2);
 const FINDINGS_SETTLE: Duration = Duration::from_secs(1);
@@ -42,7 +43,8 @@ impl Global for NotifierHandle {}
 
 pub fn init(sync_status: &Entity<SyncStatus>, inbox: &Entity<InboxModel>, cx: &mut App) {
     let sessions = AgentSessions::global(cx);
-    let notifier = cx.new(|cx| Notifier::new(sync_status, inbox.clone(), sessions, cx));
+    let updates = update::entity(cx);
+    let notifier = cx.new(|cx| Notifier::new(sync_status, inbox.clone(), sessions, &updates, cx));
     cx.set_global(NotifierHandle {
         _notifier: notifier,
     });
@@ -53,6 +55,7 @@ impl Notifier {
         sync_status: &Entity<SyncStatus>,
         inbox: Entity<InboxModel>,
         sessions: Option<Entity<AgentSessions>>,
+        updates: &Entity<UpdateModel>,
         cx: &mut Context<Self>,
     ) -> Self {
         let (clicks, mut clicked) = unbounded();
@@ -67,12 +70,22 @@ impl Notifier {
                 }
             }
         });
-        let mut subscriptions =
-            vec![cx.subscribe(sync_status, |this, _, event: &SyncEvent, cx| {
+        let mut subscriptions = vec![
+            cx.subscribe(sync_status, |this, _, event: &SyncEvent, cx| {
                 if matches!(event, SyncEvent::Finished { .. }) {
                     this.schedule_needs_you_check(cx);
                 }
-            })];
+            }),
+            cx.subscribe(updates, |this, _, event: &UpdateEvent, cx| {
+                let UpdateEvent::Available(release) = event;
+                let spec = ToastSpec {
+                    channel: Channel::AppUpdate,
+                    body: update::toast_body(release),
+                    target: ToastTarget::AppUpdate,
+                };
+                this.dispatch(vec![spec], cx);
+            }),
+        ];
         if let Some(sessions) = sessions {
             subscriptions.push(cx.observe(&sessions, |this, sessions, cx| {
                 this.on_sessions_changed(&sessions, cx);

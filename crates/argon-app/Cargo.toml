@@ -29,6 +29,7 @@ gpui-kit = { workspace = true, features = [
 chrono.workspace = true
 futures.workspace = true
 open.workspace = true
+semver.workspace = true
 nucleo-matcher.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true

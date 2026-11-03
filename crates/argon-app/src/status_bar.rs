@@ -21,6 +21,7 @@ pub struct WorkspaceStatusBar {
     docks: Vec<(DockPosition, bool)>,
     needs_you: usize,
     agents: Activity,
+    update_label: Option<String>,
 }
 
 impl WorkspaceStatusBar {
@@ -29,13 +30,28 @@ impl WorkspaceStatusBar {
         docks: Vec<(DockPosition, bool)>,
         needs_you: usize,
         agents: Activity,
+        update_label: Option<String>,
     ) -> Self {
         Self {
             workspace,
             docks,
             needs_you,
             agents,
+            update_label,
         }
+    }
+
+    fn update_button(&self, label: String) -> Button {
+        let workspace = self.workspace.clone();
+        Button::new("status-update")
+            .icon(Icon::new(IconName::ArrowUp))
+            .label(label)
+            .xsmall()
+            .primary()
+            .tab_stop(false)
+            .on_click(move |_, window, cx| {
+                _ = workspace.update(cx, |workspace, cx| workspace.show_about(window, cx));
+            })
     }
 
     fn dock_toggle(&self, dock: DockPosition, open: bool) -> Button {
@@ -116,11 +132,16 @@ impl RenderOnce for WorkspaceStatusBar {
                 })
         });
 
+        let version = match self.update_label.clone() {
+            Some(label) => self.update_button(label).into_any_element(),
+            None => div().child(VERSION).into_any_element(),
+        };
+
         StatusBar::new()
             .h(px(STATUS_BAR_HEIGHT))
             .py_0()
             .left(toggles)
             .child(h_flex().gap_3().child(needs_you).children(agents))
-            .right(div().child(VERSION))
+            .right(version)
     }
 }

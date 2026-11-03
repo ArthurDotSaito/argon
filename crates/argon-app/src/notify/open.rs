@@ -29,6 +29,7 @@ pub(super) fn open_target(target: ToastTarget, cx: &mut App) {
                 ToastTarget::Pr(key) => {
                     workspace.open_item(CenterItem::Pr(key), false, window, cx);
                 }
+                ToastTarget::AppUpdate => workspace.show_about(window, cx),
                 ToastTarget::AgentReview(key) => {
                     workspace.open_item(CenterItem::Pr(key), false, window, cx);
                     workspace.reveal_agents(window, cx);
