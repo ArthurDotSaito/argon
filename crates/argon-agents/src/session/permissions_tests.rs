@@ -94,6 +94,18 @@ fn read_without_any_path_asks() {
 }
 
 #[test]
+fn search_without_any_path_asks() {
+    for input in [
+        json!({}),
+        json!({"pattern": "fn main"}),
+        json!({"query": "token"}),
+    ] {
+        let decision = decide(&request(Some("search"), &[], input), None, &cwd());
+        assert!(asks(&decision), "{decision:?}");
+    }
+}
+
+#[test]
 fn reads_outside_worktree_ask() {
     for locations in [
         vec![outside().to_string()],

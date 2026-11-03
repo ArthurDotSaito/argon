@@ -9,6 +9,7 @@ const READ_ONLY_KINDS: [&str; 2] = ["read", "search"];
 const ALLOW_ONCE: &str = "allow_once";
 const PATH_KEYS: [&str; 5] = ["path", "file_path", "filePath", "abs_path", "directory"];
 const PATTERN_KEYS: [&str; 3] = ["pattern", "glob", "include"];
+const REGEX_KEY: &str = "pattern";
 const GLOB_CHARS: [char; 4] = ['*', '?', '[', '{'];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +107,13 @@ fn literal_prefix(pattern: &str) -> &str {
     &pattern[..cut]
 }
 
+fn scoped_prefix(pattern: &str) -> String {
+    match literal_prefix(pattern) {
+        "" => ".".to_owned(),
+        prefix => prefix.to_owned(),
+    }
+}
+
 fn is_path_like(pattern: &str) -> bool {
     let path = Path::new(pattern);
     path.is_absolute()
@@ -131,9 +139,9 @@ fn touched_paths(tool_call: &Value) -> Vec<String> {
         paths.extend(
             PATTERN_KEYS
                 .iter()
-                .filter_map(|key| json_text(input, key))
-                .filter(|pattern| is_path_like(pattern))
-                .map(|pattern| literal_prefix(&pattern).to_owned()),
+                .filter_map(|key| json_text(input, key).map(|value| (*key, value)))
+                .filter(|(key, pattern)| *key != REGEX_KEY || is_path_like(pattern))
+                .map(|(_, pattern)| scoped_prefix(&pattern)),
         );
     }
     paths
@@ -144,10 +152,7 @@ fn is_local_read(kind: &str, tool_call: &Value, cwd: &Path) -> bool {
         return false;
     }
     let paths = touched_paths(tool_call);
-    if paths.is_empty() {
-        return kind == "search";
-    }
-    paths.iter().all(|path| is_inside(cwd, path))
+    !paths.is_empty() && paths.iter().all(|path| is_inside(cwd, path))
 }
 
 pub fn decide(request: &Value, known_kind: Option<&str>, cwd: &Path) -> PermissionDecision {

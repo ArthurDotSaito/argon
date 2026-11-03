@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::{DEFAULT_HOST, Paths, PullRequest};
+use argon_core::{DEFAULT_HOST, PullRequest};
 use argon_github::{Account, GithubClient, GithubError, Viewer, discover_accounts, token_for};
 use chrono::{DateTime, Local, Utc};
 use futures::StreamExt as _;
@@ -44,7 +44,6 @@ enum AccountOutcome {
 }
 
 pub(super) struct SyncWorker {
-    pub(super) paths: Paths,
     pub(super) shared: Arc<Shared>,
     pub(super) store: StoreHandle,
     pub(super) store_startup: StoreStartup,
@@ -334,9 +333,7 @@ impl SyncLoop {
             .cloned()
             .collect();
         if !fresh.is_empty() {
-            self.worker
-                .shared
-                .seed_tracked(admin_orgs(&fresh), &self.worker.paths);
+            tokio::spawn(self.worker.shared.seed_tracked(admin_orgs(&fresh)));
         }
     }
 

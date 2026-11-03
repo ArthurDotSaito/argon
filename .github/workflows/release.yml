@@ -12,6 +12,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -24,6 +26,7 @@ jobs:
             throw "Tag $env:GITHUB_REF_NAME does not match argon-app version $version"
           }
       - run: cargo install cargo-packager --locked --version 0.11.8
+      - run: cargo test --workspace
       - run: cargo build -p argon-app --release
       - run: cargo packager --release --formats nsis
       - uses: softprops/action-gh-release@v3.0.3

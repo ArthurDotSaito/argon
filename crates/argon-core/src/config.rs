@@ -20,6 +20,8 @@ pub enum ConfigError {
     Serialize(#[from] toml::ser::Error),
 }
 
+static SAVE_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub type Result<T> = std::result::Result<T, ConfigError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -199,7 +201,8 @@ impl Config {
         }
         let text = toml::to_string_pretty(self)?;
         let mut temp_name = path.file_name().unwrap_or_default().to_os_string();
-        temp_name.push(format!(".{}.tmp", std::process::id()));
+        let serial = SAVE_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        temp_name.push(format!(".{}.{serial}.tmp", std::process::id()));
         let temp_path = path.with_file_name(temp_name);
         let written =
             std::fs::write(&temp_path, text).and_then(|()| std::fs::rename(&temp_path, path));
