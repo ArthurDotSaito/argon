@@ -48,8 +48,8 @@ pub enum ThemeChoice {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Density {
-    Compact,
     #[default]
+    Compact,
     Comfortable,
 }
 
@@ -290,7 +290,7 @@ mod tests {
         assert!(config.review.include_previous_reviews);
         assert!(!config.review.include_ci_failures);
         assert_eq!(config.appearance.theme, ThemeChoice::OneDark);
-        assert_eq!(config.appearance.density, Density::Comfortable);
+        assert_eq!(config.appearance.density, Density::Compact);
         assert!(config.notifications.needs_you);
         assert!(config.notifications.agent_events);
     }
@@ -366,7 +366,7 @@ mod tests {
         let text = "[appearance]\ntheme = \"one-light\"\ndensity = \"xyz\"\n";
         let parsed: Config = toml::from_str(text).unwrap();
         assert_eq!(parsed.appearance.theme, ThemeChoice::OneLight);
-        assert_eq!(parsed.appearance.density, Density::Comfortable);
+        assert_eq!(parsed.appearance.density, Density::Compact);
     }
 
     #[test]
