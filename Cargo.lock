@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "argon-agents"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agent-client-protocol",
  "argon-core",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "argon-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon-agents",
  "argon-core",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "argon-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bitflags 2.13.2",
  "chrono",
@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "argon-github"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon-core",
  "chrono",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "argon-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon-core",
  "chrono",
