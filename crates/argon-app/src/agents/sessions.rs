@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use argon_agents::{AgentSessionHandle, WorktreeManager};
@@ -6,6 +7,7 @@ use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global};
 
 use super::detection::DetectionCache;
 use super::labels;
+use super::launches::PendingLaunch;
 use super::sink::SessionStore;
 
 pub struct ActiveSession {
@@ -43,6 +45,7 @@ pub struct AgentSessions {
     paths: Paths,
     store: SessionStore,
     worktrees: WorktreeManager,
+    launches: HashMap<String, PendingLaunch>,
 }
 
 struct AgentSessionsHandle(Entity<AgentSessions>);
@@ -62,6 +65,7 @@ impl AgentSessions {
             detection: DetectionCache::default(),
             store: SessionStore::new(paths.db_file()),
             worktrees: WorktreeManager::new(&paths),
+            launches: HashMap::new(),
             paths,
         });
         cx.set_global(AgentSessionsHandle(sessions.clone()));
@@ -101,7 +105,15 @@ impl AgentSessions {
         &mut self.detection
     }
 
-    pub fn add(&mut self, session: ActiveSession, cx: &mut Context<Self>) {
+    pub(super) fn launches(&self) -> &HashMap<String, PendingLaunch> {
+        &self.launches
+    }
+
+    pub(super) fn launches_mut(&mut self) -> &mut HashMap<String, PendingLaunch> {
+        &mut self.launches
+    }
+
+    pub(super) fn add(&mut self, session: ActiveSession, cx: &mut Context<Self>) {
         let event = AgentsEvent::SessionStarted {
             session_id: session.session_id.clone(),
             pr: session.pr.clone(),

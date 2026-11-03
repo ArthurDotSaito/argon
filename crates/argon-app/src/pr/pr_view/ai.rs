@@ -1,8 +1,10 @@
 use argon_core::PrState;
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, Window};
 
 use super::{MergeState, PrView};
-use crate::agents::{ReviewTarget, open_start_dialog};
+use crate::agents::{PR_CLOSED, ReviewTarget, open_start_dialog};
 
 impl PrView {
     pub fn can_review_with_ai(&self) -> bool {
@@ -11,12 +13,13 @@ impl PrView {
     }
 
     pub fn open_ai_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_review_with_ai() {
-            return;
-        }
         let Some(pr) = self.pr().cloned() else {
             return;
         };
+        if !self.can_review_with_ai() {
+            window.push_notification(Notification::warning(PR_CLOSED), cx);
+            return;
+        }
         let target = ReviewTarget {
             pr,
             detail: self.detail.as_deref().cloned(),

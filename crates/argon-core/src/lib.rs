@@ -25,8 +25,8 @@ pub use model::{
 };
 pub use paths::Paths;
 pub use prompt::{
-    PromptContext, PromptError, PromptTemplate, RenderedPrompt, ensure_default_templates,
-    load_templates, render_prompt,
+    InvalidTemplate, PromptContext, PromptError, PromptTemplate, RenderedPrompt, TemplateSet,
+    ensure_default_templates, load_templates, render_prompt, scan_templates,
 };
 pub use reason::{Reason, reason};
 pub use review::{

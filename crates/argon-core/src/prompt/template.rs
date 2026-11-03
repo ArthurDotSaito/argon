@@ -30,6 +30,18 @@ impl PromptTemplate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidTemplate {
+    pub id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TemplateSet {
+    pub templates: Vec<PromptTemplate>,
+    pub invalid: Vec<InvalidTemplate>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct Header {
     name: Option<String>,
@@ -78,7 +90,7 @@ pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, P
     })
 }
 
-fn load_entry(entry: std::io::Result<DirEntry>) -> Option<PromptTemplate> {
+fn load_entry(entry: std::io::Result<DirEntry>) -> Option<Result<PromptTemplate, InvalidTemplate>> {
     let entry = entry
         .inspect_err(|error| tracing::warn!(%error, "skipping unreadable prompt directory entry"))
         .ok()?;
@@ -91,39 +103,58 @@ fn load_entry(entry: std::io::Result<DirEntry>) -> Option<PromptTemplate> {
         return None;
     }
     let id = path.file_stem()?.to_string_lossy().into_owned();
-    let source = fs::read_to_string(&path)
-        .inspect_err(|error| {
+    let invalid = |error: String| InvalidTemplate {
+        id: id.clone(),
+        error,
+    };
+    let source = match fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) => {
             tracing::warn!(path = %path.display(), %error, "skipping unreadable prompt template");
-        })
-        .ok()?;
-    let template = parse_template(&id, &source)
-        .inspect_err(|error| {
+            return Some(Err(invalid(error.to_string())));
+        }
+    };
+    let template = match parse_template(&id, &source) {
+        Ok(template) => template,
+        Err(error) => {
             tracing::warn!(path = %path.display(), %error, "skipping invalid prompt template");
-        })
-        .ok()?;
+            return Some(Err(invalid(error.to_string())));
+        }
+    };
     if !template.uses_nonce() {
         tracing::warn!(
             path = %path.display(),
             "prompt template does not use the nonce variable, so no findings will be read"
         );
     }
-    Some(template)
+    Some(Ok(template))
 }
 
-pub fn load_templates(dir: &Path) -> Result<Vec<PromptTemplate>, PromptError> {
+pub fn scan_templates(dir: &Path) -> Result<TemplateSet, PromptError> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(TemplateSet::default()),
         Err(error) => return Err(io_error(dir)(error)),
     };
-    let mut templates: Vec<PromptTemplate> = entries.filter_map(load_entry).collect();
-    templates.sort_by(|a, b| {
+    let mut set = TemplateSet::default();
+    for loaded in entries.filter_map(load_entry) {
+        match loaded {
+            Ok(template) => set.templates.push(template),
+            Err(invalid) => set.invalid.push(invalid),
+        }
+    }
+    set.templates.sort_by(|a, b| {
         a.name
             .to_lowercase()
             .cmp(&b.name.to_lowercase())
             .then_with(|| a.id.cmp(&b.id))
     });
-    Ok(templates)
+    set.invalid.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(set)
+}
+
+pub fn load_templates(dir: &Path) -> Result<Vec<PromptTemplate>, PromptError> {
+    scan_templates(dir).map(|set| set.templates)
 }
 
 #[cfg(test)]

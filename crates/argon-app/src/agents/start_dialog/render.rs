@@ -9,8 +9,8 @@ use gpui_kit::{
     div,
 };
 
-use super::StartDialog;
 use super::launch::Status;
+use super::{Phase, StartDialog};
 use crate::agents::labels;
 
 fn section(title: &'static str, body: impl IntoElement, cx: &App) -> Div {
@@ -59,6 +59,13 @@ impl StartDialog {
                 .text_color(theme.muted_foreground)
                 .child(Icon::new(IconName::LoaderCircle).xsmall())
                 .child(text),
+            Status::Notice(text) => h_flex()
+                .gap_1p5()
+                .items_center()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(Icon::new(IconName::Info).xsmall())
+                .child(text),
             Status::Error(text) => h_flex()
                 .gap_1p5()
                 .items_center()
@@ -72,14 +79,20 @@ impl StartDialog {
             .gap_2()
             .items_center()
             .child(div().flex_1().min_w_0().children(status))
-            .child(
+            .child(if busy {
+                Button::new("ai-review-cancel-start")
+                    .label(labels::CANCEL_START)
+                    .small()
+                    .outline()
+                    .disabled(matches!(self.phase, Phase::Cancelling))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel_start(cx)))
+            } else {
                 Button::new("ai-review-cancel")
                     .label(labels::CANCEL)
                     .small()
                     .ghost()
-                    .disabled(busy)
-                    .on_click(|_, window, cx| window.close_dialog(cx)),
-            )
+                    .on_click(|_, window, cx| window.close_dialog(cx))
+            })
             .child(
                 Button::new("ai-review-start")
                     .icon(Icon::new(IconName::Play))
@@ -88,9 +101,7 @@ impl StartDialog {
                     .primary()
                     .loading(busy)
                     .disabled(!self.can_start())
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.start(window, cx)),
-                    ),
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start(cx))),
             )
     }
 }

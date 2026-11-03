@@ -1,5 +1,6 @@
 pub mod defaults;
 pub mod process;
+pub mod redact;
 mod registry;
 pub mod session;
 mod util;

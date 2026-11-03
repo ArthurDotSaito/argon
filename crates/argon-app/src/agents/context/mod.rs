@@ -2,6 +2,7 @@ mod gather;
 #[cfg(test)]
 mod tests;
 
+use argon_agents::redact::redact_text;
 use argon_core::{PromptContext, ReviewState};
 use argon_github::{Job, PrDetail, PrFile, RunStatus, TimelineItem, WorkflowRun};
 
@@ -29,6 +30,7 @@ pub fn prompt_context(
     gathered: &Gathered,
     ci_failures: Option<&str>,
     options: ContextOptions,
+    max_diff_chars: usize,
 ) -> PromptContext {
     let detail = &gathered.detail;
     let pr = &detail.pr;
@@ -41,7 +43,11 @@ pub fn prompt_context(
         base: pr.base.clone(),
         base_sha: detail.base_oid.clone(),
         head: pr.head.clone(),
-        diff: unified_diff(&gathered.files),
+        diff: if max_diff_chars == 0 {
+            String::new()
+        } else {
+            unified_diff(&gathered.files)
+        },
         files: gathered
             .files
             .iter()
@@ -84,12 +90,13 @@ pub fn unified_diff(files: &[PrFile]) -> String {
 }
 
 pub fn previous_reviews(detail: &PrDetail) -> String {
-    detail
+    let text = detail
         .timeline
         .iter()
         .filter_map(review_block)
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    redact_text(&text)
 }
 
 fn review_block(item: &TimelineItem) -> Option<String> {
@@ -182,5 +189,5 @@ pub fn ci_failures(jobs: &[FailedJob], first_log: Option<Result<String, String>>
         }
         None => {}
     }
-    text
+    redact_text(&text)
 }

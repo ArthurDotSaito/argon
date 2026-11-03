@@ -1,5 +1,4 @@
 use std::ops::Range;
-use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::clipboard::Clipboard;
@@ -15,23 +14,7 @@ use crate::agents::labels;
 
 const PROMPT_HEIGHT: f32 = 210.;
 const ROW_HEIGHT: f32 = 17.;
-const SESSION_PREFIX_LEN: usize = 12;
 const KEY_WIDTH: f32 = 52.;
-
-pub(super) fn predicted_worktree(
-    root: &Path,
-    host: &str,
-    repo: &str,
-    number: u64,
-    session: &str,
-) -> PathBuf {
-    let prefix: String = session.chars().take(SESSION_PREFIX_LEN).collect();
-    let mut path = root.join(host);
-    for part in repo.split('/') {
-        path.push(part);
-    }
-    path.join(format!("pr-{number}-{prefix}"))
-}
 
 fn quote(arg: &str) -> String {
     if arg.contains(char::is_whitespace) {
@@ -92,8 +75,13 @@ fn key_value(key: &'static str, value: impl Into<SharedString>, cx: &App) -> Div
 impl StartDialog {
     pub(super) fn prompt_preview(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
-        let count = labels::char_count(self.preview_chars, self.preview.len());
-        let body: AnyElement = if self.preview.is_empty() {
+        let lines = self
+            .preview
+            .as_ref()
+            .map_or(0, |preview| preview.lines.len());
+        let chars = self.preview.as_ref().map_or(0, |preview| preview.chars);
+        let count = labels::char_count(chars, lines);
+        let body: AnyElement = if lines == 0 {
             div()
                 .size_full()
                 .p_2()
@@ -107,7 +95,7 @@ impl StartDialog {
                 .child(
                     uniform_list(
                         "ai-prompt-preview",
-                        self.preview.len(),
+                        lines,
                         cx.processor(|this, range: Range<usize>, _, cx| {
                             this.preview_rows(range, cx)
                         }),
@@ -118,14 +106,14 @@ impl StartDialog {
                 .vertical_scrollbar(&self.preview_scroll)
                 .into_any_element()
         };
-        let diff_note = (!self.preview.is_empty()).then(|| {
+        let diff_note = self.preview.as_ref().filter(|_| lines > 0).map(|preview| {
             h_flex()
                 .gap_1p5()
                 .items_center()
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(Icon::new(IconName::FileDiff).xsmall())
-                .child(if self.diff_inline {
+                .child(if preview.diff_inline {
                     labels::DIFF_INLINE
                 } else {
                     labels::DIFF_IN_WORKTREE
@@ -152,7 +140,7 @@ impl StartDialog {
     fn preview_rows(&self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = cx.theme();
         range
-            .filter_map(|ix| self.preview.get(ix))
+            .filter_map(|ix| self.preview.as_ref()?.lines.get(ix))
             .map(|line| {
                 div()
                     .h(px(ROW_HEIGHT))
@@ -185,22 +173,18 @@ impl StartDialog {
             .collect::<Vec<_>>()
             .join(" ");
         let cwd = match (&self.session_id, Self::sessions(cx)) {
-            (Ok(id), Some(sessions)) => predicted_worktree(
-                &sessions.read(cx).paths().worktrees_dir(),
-                &self.pr.host,
-                &self.pr.repo,
-                self.pr.number,
-                id,
-            )
-            .display()
-            .to_string(),
+            (Ok(id), Some(sessions)) => sessions
+                .read(cx)
+                .worktrees()
+                .planned_path(&self.pr.host, &self.pr.repo, self.pr.number, id)
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| error.to_string()),
             _ => String::new(),
         };
         let model = match (&self.model, self.model_label()) {
-            (Some(id), Some(label)) if id.is_empty() => label,
             (Some(id), Some(label)) if &label != id => format!("{id} · {label}"),
             (Some(id), _) => id.clone(),
-            (None, _) => String::new(),
+            (None, _) => labels::no_models(spec.label),
         };
         let env = (!spec.env.is_empty()).then(|| {
             key_value(

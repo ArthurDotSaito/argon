@@ -66,6 +66,12 @@ fn load_templates_skips_invalid_files_and_sorts_by_name() {
 
     let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, ["alfa", "c", "Zeta"]);
+
+    let set = scan_templates(dir.path()).unwrap();
+    assert_eq!(set.templates.len(), 3);
+    let invalid: Vec<&str> = set.invalid.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(invalid, ["ruim"]);
+    assert!(set.invalid[0].error.contains("ruim"));
 }
 
 #[test]

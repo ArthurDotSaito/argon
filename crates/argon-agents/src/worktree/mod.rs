@@ -16,7 +16,7 @@ pub use error::{Result, WorktreeError};
 use invocation::{FETCH_TIMEOUT, Invocation, WORKTREE_TIMEOUT};
 use layout::{
     RepoRef, mirror_dir, mirror_from_gitfile, pr_ref, session_prefix, validate_host,
-    worktree_parent,
+    worktree_dir_name, worktree_parent,
 };
 
 type RepoLock = Arc<tokio::sync::Mutex<()>>;
@@ -70,6 +70,31 @@ impl WorktreeManager {
         add_worktree(&mirror, host, &target, &reference).await?;
         checkout::claim(&target, session).await?;
         Ok(target)
+    }
+
+    pub fn planned_path(
+        &self,
+        host: &str,
+        repo: &str,
+        number: u64,
+        session: &str,
+    ) -> Result<PathBuf> {
+        let host = validate_host(host)?;
+        let repo = RepoRef::parse(repo)?;
+        let prefix = session_prefix(session)?;
+        Ok(worktree_parent(&self.worktrees_dir, host, &repo)
+            .join(worktree_dir_name(number, &prefix, None)))
+    }
+
+    pub async fn discard(&self, path: &Path) -> Result<()> {
+        match self.remove(path).await {
+            Err(WorktreeError::InvalidWorktree(_)) => {
+                let partial = canonical_within(&self.worktrees_dir, path)?;
+                tokio::fs::remove_dir_all(&partial).await?;
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     pub async fn remove(&self, path: &Path) -> Result<()> {
@@ -180,5 +205,47 @@ async fn add_worktree(mirror: &Path, host: &str, target: &Path, reference: &str)
             attempt().await.map(drop)
         }
         other => other.map(drop),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manager() -> WorktreeManager {
+        WorktreeManager::new(&Paths {
+            config_dir: PathBuf::from("cfg"),
+            data_dir: PathBuf::from("data"),
+        })
+    }
+
+    #[test]
+    fn planned_path_matches_the_first_slot_name() {
+        let path = manager()
+            .planned_path(
+                "github.com",
+                "nuria-tech/nuria-auth",
+                34,
+                "0190a3b27c117e2f9a10",
+            )
+            .unwrap();
+        assert_eq!(
+            path,
+            Path::new("data/worktrees/github.com/nuria-tech/nuria-auth/pr-34-0190a3b27c11")
+        );
+    }
+
+    #[test]
+    fn planned_path_rejects_unsafe_input() {
+        assert!(
+            manager()
+                .planned_path("github.com", "../x", 1, "abc")
+                .is_err()
+        );
+        assert!(
+            manager()
+                .planned_path("github.com", "a/b", 1, "../x")
+                .is_err()
+        );
     }
 }

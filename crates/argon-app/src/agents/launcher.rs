@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 
 use argon_agents::{AgentSessionHandle, AgentSpec, SessionContext, WorktreeManager, start_session};
 use argon_core::{PrKey, RenderedPrompt};
 use futures::channel::mpsc::UnboundedSender;
+use tokio::sync::watch;
 
 use super::sink::SessionStore;
 
@@ -10,6 +12,12 @@ use super::sink::SessionStore;
 pub enum LaunchStage {
     PreparingWorktree,
     StartingAgent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchError {
+    Cancelled,
+    Failed(String),
 }
 
 pub struct LaunchRequest {
@@ -31,31 +39,80 @@ pub struct Launched {
     pub handle: AgentSessionHandle,
 }
 
+async fn cancelled(cancel: &mut watch::Receiver<bool>) {
+    if cancel.wait_for(|cancelled| *cancelled).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+async fn unless_cancelled<T>(
+    cancel: &mut watch::Receiver<bool>,
+    step: impl Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = cancelled(cancel) => None,
+        value = step => Some(value),
+    }
+}
+
+pub async fn discard_worktree(worktrees: &WorktreeManager, path: &Path) {
+    if let Err(error) = worktrees.discard(path).await {
+        tracing::warn!(%error, path = %path.display(), "failed to remove worktree after aborted launch");
+    }
+}
+
 pub async fn launch(
     request: LaunchRequest,
     progress: UnboundedSender<LaunchStage>,
-) -> Result<Launched, String> {
-    _ = progress.unbounded_send(LaunchStage::PreparingWorktree);
-    let worktree = request
-        .worktrees
-        .prepare(
+    mut cancel: watch::Receiver<bool>,
+) -> Result<Launched, LaunchError> {
+    let worktrees = request.worktrees.clone();
+    let planned = worktrees
+        .planned_path(
             &request.pr.host,
             &request.repo,
             request.number,
             &request.session_id,
         )
-        .await
-        .map_err(|error| error.to_string())?;
-    _ = progress.unbounded_send(LaunchStage::StartingAgent);
-    match start(&request, worktree.clone()).await {
-        Ok(handle) => Ok(Launched { worktree, handle }),
-        Err(error) => {
-            if let Err(cleanup) = request.worktrees.remove(&worktree).await {
-                tracing::warn!(error = %cleanup, path = %worktree.display(), "failed to remove worktree after launch error");
-            }
-            Err(error)
+        .map_err(|error| LaunchError::Failed(error.to_string()))?;
+    _ = progress.unbounded_send(LaunchStage::PreparingWorktree);
+    let prepare = worktrees.prepare(
+        &request.pr.host,
+        &request.repo,
+        request.number,
+        &request.session_id,
+    );
+    let worktree = match unless_cancelled(&mut cancel, prepare).await {
+        None => {
+            discard_worktree(&worktrees, &planned).await;
+            return Err(LaunchError::Cancelled);
         }
-    }
+        Some(Err(error)) => {
+            discard_worktree(&worktrees, &planned).await;
+            return Err(LaunchError::Failed(error.to_string()));
+        }
+        Some(Ok(path)) => path,
+    };
+    _ = progress.unbounded_send(LaunchStage::StartingAgent);
+    let started = unless_cancelled(&mut cancel, start(&request, worktree.clone())).await;
+    let outcome = match started {
+        None => Err(LaunchError::Cancelled),
+        Some(Err(error)) => Err(LaunchError::Failed(error)),
+        Some(Ok(handle)) if *cancel.borrow() => {
+            handle.shutdown().await;
+            Err(LaunchError::Cancelled)
+        }
+        Some(Ok(handle)) => match handle.prompt(request.prompt.text.clone()) {
+            Ok(()) => return Ok(Launched { worktree, handle }),
+            Err(error) => {
+                handle.shutdown().await;
+                Err(LaunchError::Failed(error.to_string()))
+            }
+        },
+    };
+    discard_worktree(&worktrees, &worktree).await;
+    outcome
 }
 
 async fn start(request: &LaunchRequest, cwd: PathBuf) -> Result<AgentSessionHandle, String> {
@@ -72,12 +129,8 @@ async fn start(request: &LaunchRequest, cwd: PathBuf) -> Result<AgentSessionHand
         cwd,
         model: request.model.clone(),
     };
-    let (_, handle) = start_session(&request.spec, ctx, writer)
+    start_session(&request.spec, ctx, writer)
         .await
-        .map_err(|error| error.to_string())?;
-    if let Err(error) = handle.prompt(request.prompt.text.clone()) {
-        handle.shutdown().await;
-        return Err(error.to_string());
-    }
-    Ok(handle)
+        .map(|(_, handle)| handle)
+        .map_err(|error| error.to_string())
 }

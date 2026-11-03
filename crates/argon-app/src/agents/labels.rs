@@ -9,7 +9,7 @@ pub const DETECTING: &str = "detectando…";
 pub const NOT_FOUND: &str = "não encontrado no PATH";
 pub const NOT_SUPPORTED: &str = "Ainda não suportado";
 pub const NO_MODELS: &str = "Escolha um agente";
-pub const AGENT_DEFAULT_MODEL: &str = "Padrão do agente (definido na sessão)";
+pub const NO_MODEL_LISTED: &str = "Nenhum modelo disponível";
 pub const NO_TEMPLATES: &str = "Nenhum template";
 pub const LOADING_TEMPLATES: &str = "carregando templates…";
 pub const INCLUDE_REVIEWS: &str = "Incluir reviews anteriores";
@@ -33,6 +33,11 @@ pub const STARTING_AGENT: &str = "iniciando o agente…";
 pub const PICK_AGENT: &str = "escolha um agente disponível";
 pub const START: &str = "Iniciar review";
 pub const CANCEL: &str = "Cancelar";
+pub const CANCEL_START: &str = "Cancelar início";
+pub const CANCELLING: &str = "cancelando o início…";
+pub const START_CANCELLED: &str = "Início cancelado — o worktree foi removido";
+pub const CONFIGURE: &str = "Configurar";
+pub const PR_CLOSED: &str = "Este PR está fechado";
 pub const RUNNING: &str = "rodando";
 pub const SERVICES_UNAVAILABLE: &str = "serviços em segundo plano indisponíveis";
 pub const CI_HEADING: &str = "Jobs com falha:";
@@ -90,4 +95,12 @@ pub fn ci_log_unavailable(job: &str, error: &str) -> String {
 
 pub fn session_line(agent: &str, model: &str, number: u64) -> String {
     format!("Sessão {agent} · {model} iniciada em #{number} — {RUNNING}")
+}
+
+pub fn no_models(agent: &str) -> String {
+    format!("Nenhum modelo disponível — configure um provider no {agent}")
+}
+
+pub fn invalid_template(id: &str, error: &str) -> String {
+    format!("Template inválido `{id}`: {error}")
 }

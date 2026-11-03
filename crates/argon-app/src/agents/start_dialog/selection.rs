@@ -1,10 +1,12 @@
 use argon_core::{AgentKind, PromptTemplate, render_prompt};
-use gpui_kit::{Context, SharedString, Window};
+use gpui_kit::{AppContext as _, Context, SharedString, Window};
 
 use super::choice::Choice;
-use super::{Load, StartDialog};
+use super::{Load, Preview, StartDialog};
 use crate::agents::context::{ContextOptions, diff_inline, prompt_context};
-use crate::agents::detection::{AgentOption, default_agent, default_template, model_choices};
+use crate::agents::detection::{
+    AgentOption, default_agent, default_model, default_template, model_choices,
+};
 use crate::agents::labels;
 
 impl StartDialog {
@@ -48,15 +50,10 @@ impl StartDialog {
         else {
             return;
         };
-        let models = model_choices(&option.spec);
-        let model = models
-            .iter()
-            .find(|model| model.id == option.spec.default_model)
-            .or_else(|| models.first())
-            .map(|model| model.id.clone());
-        let choices: Vec<Choice> = models
-            .iter()
-            .map(|model| Choice::new(model.id.clone(), model.label.clone()))
+        let model = default_model(&option.spec);
+        let choices: Vec<Choice> = model_choices(&option.spec)
+            .into_iter()
+            .map(|model| Choice::new(model.id, model.label))
             .collect();
         self.agent = Some(kind);
         self.model = model.clone();
@@ -145,39 +142,61 @@ impl StartDialog {
         }
     }
 
+    pub(super) fn is_rendering(&self) -> bool {
+        self.render_task.is_some()
+    }
+
     pub(super) fn rerender(&mut self, cx: &mut Context<Self>) {
+        self.render_epoch += 1;
+        let epoch = self.render_epoch;
         let (Some(gathered), Some(template)) = (self.context.ready(), self.current_template())
         else {
-            self.rendered = None;
-            self.preview.clear();
-            self.preview_chars = 0;
+            self.preview = None;
+            self.render_task = None;
             cx.notify();
             return;
         };
+        let gathered = gathered.clone();
+        let template = template.clone();
+        let ci = self.ci_text().map(str::to_owned);
         let options = ContextOptions {
             include_reviews: self.include_reviews,
             include_ci: self.include_ci,
         };
-        let ctx = prompt_context(gathered, self.ci_text(), options);
-        let inline = diff_inline(&ctx.diff, self.config.review.max_diff_chars);
-        let rendered = render_prompt(template, &ctx, self.config.review.max_diff_chars)
-            .map_err(|error| SharedString::from(labels::render_failed(&error.to_string())));
-        match &rendered {
-            Ok(prompt) => {
-                self.preview = prompt
-                    .text
-                    .lines()
-                    .map(|line| line.to_owned().into())
-                    .collect();
-                self.preview_chars = prompt.text.chars().count();
+        let max_diff_chars = self.config.review.max_diff_chars;
+        let job = cx.background_spawn(async move {
+            let ctx = prompt_context(&gathered, ci.as_deref(), options, max_diff_chars);
+            let inline = diff_inline(&ctx.diff, max_diff_chars);
+            let rendered = render_prompt(&template, &ctx, max_diff_chars)
+                .map_err(|error| SharedString::from(labels::render_failed(&error.to_string())));
+            let (lines, chars) = match &rendered {
+                Ok(prompt) => (
+                    prompt
+                        .text
+                        .lines()
+                        .map(|line| SharedString::from(line.to_owned()))
+                        .collect(),
+                    prompt.text.chars().count(),
+                ),
+                Err(_) => (Vec::new(), 0),
+            };
+            Preview {
+                rendered,
+                lines,
+                chars,
+                diff_inline: inline,
             }
-            Err(_) => {
-                self.preview.clear();
-                self.preview_chars = 0;
-            }
-        }
-        self.diff_inline = inline;
-        self.rendered = Some(rendered);
+        });
+        self.render_task = Some(cx.spawn(async move |this, cx| {
+            let preview = job.await;
+            _ = this.update(cx, |this, cx| {
+                if this.render_epoch == epoch {
+                    this.preview = Some(preview);
+                    this.render_task = None;
+                    cx.notify();
+                }
+            });
+        }));
         cx.notify();
     }
 }

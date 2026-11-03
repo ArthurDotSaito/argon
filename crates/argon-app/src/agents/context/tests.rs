@@ -202,7 +202,8 @@ fn prompt_context_respects_options() {
         include_reviews: true,
         include_ci: true,
     };
-    let ctx = prompt_context(&gathered, Some("ci"), on);
+    let ctx = prompt_context(&gathered, Some("ci"), on, 1_000);
+    assert!(ctx.diff.starts_with("diff --git a/src/a.rs"));
     assert_eq!(ctx.files, ["src/a.rs"]);
     assert_eq!(ctx.file_stats, [("src/a.rs".to_owned(), 1, 0)]);
     assert_eq!(ctx.pr_body, "Descrição");
@@ -213,7 +214,8 @@ fn prompt_context_respects_options() {
         include_reviews: false,
         include_ci: false,
     };
-    let ctx = prompt_context(&gathered, Some("ci"), off);
+    let ctx = prompt_context(&gathered, Some("ci"), off, 0);
+    assert!(ctx.diff.is_empty());
     assert!(ctx.previous_reviews.is_empty());
     assert!(ctx.ci_failures.is_empty());
 }
@@ -224,4 +226,27 @@ fn diff_is_inline_only_within_a_positive_limit() {
     assert!(!diff_inline("", 0));
     assert!(diff_inline("abc", 3));
     assert!(!diff_inline("abcd", 3));
+}
+
+#[test]
+fn context_redacts_secrets_from_reviews_and_ci_logs() {
+    let detail = detail(vec![review(
+        "lia",
+        ReviewState::Commented,
+        "use o token ghp_abcdefghijklmnopqrstuvwx e password=hunter22",
+        Vec::new(),
+    )]);
+    let reviews = previous_reviews(&detail);
+    assert!(!reviews.contains("ghp_abcdef"), "{reviews}");
+    assert!(!reviews.contains("hunter22"), "{reviews}");
+    let jobs = [FailedJob {
+        id: 1,
+        name: "CI / test".into(),
+    }];
+    let log = "curl -H Authorization: Bearer abc123secret\n-----BEGIN PRIVATE KEY-----\nMIIE\n\
+               -----END PRIVATE KEY-----\nAKIAABCDEFGHIJKLMNOP";
+    let text = ci_failures(&jobs, Some(Ok(log.into())));
+    for secret in ["abc123secret", "MIIE", "AKIAABCD"] {
+        assert!(!text.contains(secret), "{secret} in {text}");
+    }
 }

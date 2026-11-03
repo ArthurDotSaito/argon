@@ -1,5 +1,6 @@
 mod detect;
 mod login;
+mod models;
 mod probe;
 mod spec;
 mod version;

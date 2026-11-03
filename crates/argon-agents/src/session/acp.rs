@@ -102,9 +102,22 @@ fn forward_writer_errors(writer: &SessionWriter, shared: &Arc<Shared>) {
 struct Aborter {
     killer: TreeKiller,
     abort: Option<oneshot::Sender<()>>,
+    armed: bool,
+}
+
+impl Drop for Aborter {
+    fn drop(&mut self) {
+        if self.armed {
+            self.abort();
+        }
+    }
 }
 
 impl Aborter {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
     fn abort(&mut self) {
         if let Err(error) = self.killer.kill() {
             tracing::debug!(%error, "failed to terminate agent process tree");
@@ -145,6 +158,7 @@ pub(super) async fn launch(
     let mut aborter = Aborter {
         killer: child.killer(),
         abort: Some(abort_tx),
+        armed: true,
     };
 
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
@@ -234,6 +248,7 @@ pub(super) async fn launch(
             return Err(SessionError::Store(error));
         }
     };
+    aborter.disarm();
     forward_writer_errors(&writer, &shared);
     let status = if load.is_some() {
         SessionStatus::Completed

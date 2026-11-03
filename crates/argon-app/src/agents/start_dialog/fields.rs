@@ -3,13 +3,11 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
-use gpui_kit::{App, Context, Div, ParentElement as _, SharedString, Styled as _, Window, div, px};
+use gpui_kit::{App, Context, Div, ParentElement as _, SharedString, Styled as _, div, px};
 
-use super::{Load, StartDialog};
-use crate::actions::OpenSettings;
+use super::{Load, StartDialog, open_settings};
 use crate::agents::labels;
 
 const FIELD_LABEL_WIDTH: f32 = 72.;
@@ -51,21 +49,19 @@ fn locked_switch(id: &'static str, label: &'static str, hint: &'static str, cx: 
         .child(note(hint, cx.theme().muted_foreground))
 }
 
-fn open_settings(window: &mut Window, cx: &mut App) {
-    window.close_dialog(cx);
-    window.defer(cx, |window, cx| {
-        window.dispatch_action(Box::new(OpenSettings), cx)
-    });
-}
-
 impl StartDialog {
     pub(super) fn selects(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
-        let has_agent = self.selected_option().is_some();
+        let option = self.selected_option();
+        let has_models = option.is_some_and(|option| !option.spec.models.is_empty());
+        let model_placeholder = match option {
+            Some(_) => labels::NO_MODEL_LISTED,
+            None => labels::NO_MODELS,
+        };
         let model = Select::new(&self.model_select)
             .small()
-            .placeholder(labels::NO_MODELS)
-            .disabled(!has_agent || self.is_launching());
+            .placeholder(model_placeholder)
+            .disabled(!has_models || self.is_launching());
         let template_placeholder = match &self.templates {
             Load::Loading => labels::LOADING_TEMPLATES,
             Load::Ready(_) | Load::Failed(_) => labels::NO_TEMPLATES,
@@ -79,12 +75,19 @@ impl StartDialog {
             .label(labels::EDIT_IN_SETTINGS)
             .xsmall()
             .ghost()
+            .disabled(self.is_launching())
             .on_click(|_, window, cx| open_settings(window, cx));
         let mut notes: Vec<Div> = Vec::new();
         if let Load::Failed(error) = &self.templates {
             notes.push(note(error.clone(), theme.danger));
         }
-        match &self.rendered {
+        notes.extend(self.invalid_templates.iter().map(|invalid| {
+            note(
+                labels::invalid_template(&invalid.id, &invalid.error),
+                theme.warning,
+            )
+        }));
+        match self.preview.as_ref().map(|preview| &preview.rendered) {
             Some(Ok(prompt)) => notes.extend(
                 prompt
                     .warnings

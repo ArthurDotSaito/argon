@@ -3,8 +3,6 @@ use std::time::{Duration, Instant};
 use argon_agents::{AgentSpec, Detection, ModelInfo, Support};
 use argon_core::{AgentKind, PromptTemplate};
 
-use super::labels;
-
 pub const DETECTION_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,24 +68,15 @@ pub fn default_agent(options: &[AgentOption], last: Option<AgentKind>) -> Option
 }
 
 pub fn model_choices(spec: &AgentSpec) -> Vec<ModelInfo> {
-    let mut models = spec.models.clone();
-    if !spec.default_model.is_empty() && !models.iter().any(|model| model.id == spec.default_model)
-    {
-        models.insert(
-            0,
-            ModelInfo {
-                id: spec.default_model.clone(),
-                label: spec.default_model.clone(),
-            },
-        );
-    }
-    if models.is_empty() {
-        models.push(ModelInfo {
-            id: String::new(),
-            label: labels::AGENT_DEFAULT_MODEL.to_owned(),
-        });
-    }
-    models
+    spec.models.clone()
+}
+
+pub fn default_model(spec: &AgentSpec) -> Option<String> {
+    spec.models
+        .iter()
+        .find(|model| model.id == spec.default_model)
+        .or_else(|| spec.models.first())
+        .map(|model| model.id.clone())
 }
 
 pub fn default_template(templates: &[PromptTemplate], configured: &str) -> Option<String> {
@@ -226,24 +215,18 @@ mod tests {
     }
 
     #[test]
-    fn model_choices_keep_configured_default() {
+    fn default_model_prefers_configured_when_listed() {
         let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
-        assert_eq!(model_choices(&spec), spec.models);
+        spec.default_model = "sonnet".into();
+        assert_eq!(default_model(&spec).as_deref(), Some("sonnet"));
         spec.default_model = "opus[1m]".into();
-        let models = model_choices(&spec);
-        assert_eq!(models[0].id, "opus[1m]");
-        assert_eq!(models.len(), spec.models.len() + 1);
-    }
-
-    #[test]
-    fn agents_without_known_models_offer_the_agent_default() {
-        let mut spec = agent_spec(AgentKind::OpenCode, &Config::default());
+        assert_eq!(
+            default_model(&spec),
+            spec.models.first().map(|m| m.id.clone())
+        );
         spec.models.clear();
-        spec.default_model.clear();
-        let models = model_choices(&spec);
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "");
-        assert_eq!(models[0].label, labels::AGENT_DEFAULT_MODEL);
+        assert_eq!(default_model(&spec), None);
+        assert!(model_choices(&spec).is_empty());
     }
 
     #[test]
