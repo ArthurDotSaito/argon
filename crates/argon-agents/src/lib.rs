@@ -7,7 +7,9 @@ mod util;
 mod worktree;
 
 pub use defaults::{ModelSelection, Transport};
-pub use registry::{AgentSpec, Detection, ModelInfo, Support, agent_spec, detect_all, support_for};
+pub use registry::{
+    AgentSpec, Detection, ModelInfo, Support, agent_spec, detect_all, support_for, warm_up_agents,
+};
 pub use session::{
     AgentEvent, AgentSessionHandle, PendingPermission, PermissionOption, SavedFinding,
     SessionContext, SessionError, SessionHandle, SessionOptions, SessionWriter, Snapshot,

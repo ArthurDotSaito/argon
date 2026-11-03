@@ -181,6 +181,7 @@ impl StartDialog {
             tasks: Vec::new(),
             _subscriptions: subscriptions,
         };
+        super::warmup::now(cx);
         this.load_agents(window, cx);
         this.load_templates(window, cx);
         this.load_context(target, cx);
