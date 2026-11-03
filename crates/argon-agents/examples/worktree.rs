@@ -1,8 +1,9 @@
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
 use std::time::Instant;
 
 use argon_agents::WorktreeManager;
 use argon_core::Paths;
+use tokio::process::Command;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_HOST: &str = "github.com";
@@ -18,7 +19,8 @@ async fn main() -> ExitCode {
         .with_target(false)
         .init();
     match run().await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
         Err(message) => {
             eprintln!("{message}");
             ExitCode::FAILURE
@@ -26,7 +28,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run() -> Result<(), String> {
+async fn run() -> Result<bool, String> {
     let mut args = std::env::args().skip(1);
     let (Some(repo), Some(number)) = (args.next(), args.next()) else {
         return Err("usage: worktree <owner/repo> <pr-number>".to_string());
@@ -48,12 +50,32 @@ async fn run() -> Result<(), String> {
         .head_oid(&path)
         .await
         .map_err(|error| error.to_string())?;
-    println!("head_oid: {head}");
+    let expected = expected_head(&repo, number).await?;
+    let matches = head == expected;
+    println!(
+        "head_oid: {head} (gh headRefOid: {expected}) {}",
+        if matches { "OK" } else { "FALHA" }
+    );
 
     manager
         .remove(&path)
         .await
         .map_err(|error| error.to_string())?;
-    println!("removed, worktree dir exists: {}", path.exists());
-    Ok(())
+    let cleaned = !path.exists();
+    println!("removed, worktree dir gone: {cleaned}");
+    Ok(matches && cleaned)
+}
+
+async fn expected_head(repo: &str, number: u64) -> Result<String, String> {
+    let output = Command::new("gh")
+        .args(["pr", "view", &number.to_string(), "-R", repo])
+        .args(["--json", "headRefOid", "--jq", ".headRefOid"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }

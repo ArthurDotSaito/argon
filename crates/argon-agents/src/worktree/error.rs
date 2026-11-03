@@ -17,6 +17,8 @@ pub enum WorktreeError {
     InvalidRepo(String),
     #[error("not a managed worktree: {}", .0.display())]
     InvalidWorktree(PathBuf),
+    #[error("path is outside the managed directories: {}", .0.display())]
+    OutsideRoot(PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, WorktreeError>;

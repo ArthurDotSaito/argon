@@ -10,8 +10,16 @@ argon-core = { path = "../argon-core" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "sync"] }
 tracing.workspace = true
+dunce.workspace = true
 agent-client-protocol.workspace = true
 which.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util"] }

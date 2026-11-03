@@ -46,3 +46,5 @@ minijinja = "2"
 getrandom = "0.4"
 agent-client-protocol = { version = "5", features = ["process"] }
 which = "8"
+dunce = "1"
+windows-sys = "0.61"
