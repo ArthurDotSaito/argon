@@ -1,5 +1,5 @@
-use std::fs::{self, DirEntry, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::fs::{self, DirEntry};
+use std::io::ErrorKind;
 use std::path::Path;
 
 use minijinja::Environment;
@@ -8,20 +8,8 @@ use serde::Deserialize;
 use super::PromptError;
 
 const HEADER_FENCE: &str = "+++";
-const TEMPLATE_EXTENSION: &str = "md";
+pub(super) const TEMPLATE_EXTENSION: &str = "md";
 const NONCE_VARIABLE: &str = "nonce";
-
-pub(super) const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
-    (
-        "review-padrao",
-        include_str!("../../templates/review-padrao.md"),
-    ),
-    ("seguranca", include_str!("../../templates/seguranca.md")),
-    (
-        "performance",
-        include_str!("../../templates/performance.md"),
-    ),
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptTemplate {
@@ -48,7 +36,7 @@ struct Header {
     description: Option<String>,
 }
 
-fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> PromptError {
+pub(super) fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> PromptError {
     let path = path.to_path_buf();
     move |source| PromptError::Io { path, source }
 }
@@ -88,21 +76,6 @@ pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, P
         description: header.description,
         body: body.trim_start_matches(['\r', '\n']).to_owned(),
     })
-}
-
-pub fn ensure_default_templates(dir: &Path) -> Result<(), PromptError> {
-    fs::create_dir_all(dir).map_err(io_error(dir))?;
-    for (id, content) in DEFAULT_TEMPLATES {
-        let path = dir.join(format!("{id}.{TEMPLATE_EXTENSION}"));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => file
-                .write_all(content.as_bytes())
-                .map_err(io_error(&path))?,
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(io_error(&path)(error)),
-        }
-    }
-    Ok(())
 }
 
 fn load_entry(entry: std::io::Result<DirEntry>) -> Option<PromptTemplate> {
@@ -154,160 +127,4 @@ pub fn load_templates(dir: &Path) -> Result<Vec<PromptTemplate>, PromptError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("argon-prompt-{name}-{}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn parses_header_with_name_and_description() {
-        let source =
-            "+++\nname = \"Review padrão\"\ndescription = \"Geral\"\n+++\nCorpo {{repo}}\n";
-
-        let template = parse_template("review-padrao", source).unwrap();
-
-        assert_eq!(template.id, "review-padrao");
-        assert_eq!(template.name, "Review padrão");
-        assert_eq!(template.description.as_deref(), Some("Geral"));
-        assert_eq!(template.body, "Corpo {{repo}}\n");
-    }
-
-    #[test]
-    fn parses_header_with_crlf_line_endings() {
-        let source = "+++\r\nname = \"Segurança\"\r\n+++\r\n\r\nCorpo\r\n";
-
-        let template = parse_template("seguranca", source).unwrap();
-
-        assert_eq!(template.name, "Segurança");
-        assert_eq!(template.body, "Corpo\r\n");
-    }
-
-    #[test]
-    fn missing_header_uses_id_as_name() {
-        let template = parse_template("meu-prompt", "Só corpo\n").unwrap();
-
-        assert_eq!(template.name, "meu-prompt");
-        assert_eq!(template.description, None);
-        assert_eq!(template.body, "Só corpo\n");
-    }
-
-    #[test]
-    fn header_without_name_uses_id_as_name() {
-        let template =
-            parse_template("meu-prompt", "+++\ndescription = \"x\"\n+++\nCorpo").unwrap();
-
-        assert_eq!(template.name, "meu-prompt");
-    }
-
-    #[test]
-    fn invalid_toml_header_is_an_error() {
-        let error = parse_template("quebrado", "+++\nname = \n+++\nCorpo").unwrap_err();
-
-        assert!(matches!(error, PromptError::InvalidHeader { ref id, .. } if id == "quebrado"));
-    }
-
-    #[test]
-    fn unclosed_header_is_an_error() {
-        let error = parse_template("aberto", "+++\nname = \"x\"\nCorpo").unwrap_err();
-
-        assert!(matches!(error, PromptError::InvalidHeader { .. }));
-    }
-
-    #[test]
-    fn ensure_default_templates_writes_the_embedded_templates() {
-        let dir = TempDir::new("ensure-writes");
-        let prompts = dir.path().join("prompts");
-
-        ensure_default_templates(&prompts).unwrap();
-
-        let templates = load_templates(&prompts).unwrap();
-        let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["performance", "review-padrao", "seguranca"]);
-        assert!(
-            templates
-                .iter()
-                .all(|t| !t.name.is_empty() && !t.body.is_empty())
-        );
-    }
-
-    #[test]
-    fn ensure_default_templates_does_not_overwrite_user_edits() {
-        let dir = TempDir::new("ensure-keeps");
-        let edited = dir.path().join("seguranca.md");
-        fs::write(&edited, "+++\nname = \"Meu\"\n+++\neditado").unwrap();
-
-        ensure_default_templates(dir.path()).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(&edited).unwrap(),
-            "+++\nname = \"Meu\"\n+++\neditado"
-        );
-        assert!(dir.path().join("review-padrao.md").is_file());
-        assert!(dir.path().join("performance.md").is_file());
-    }
-
-    #[test]
-    fn load_templates_skips_invalid_files_and_sorts_by_name() {
-        let dir = TempDir::new("load-skips");
-        fs::write(dir.path().join("b.md"), "+++\nname = \"Zeta\"\n+++\nz").unwrap();
-        fs::write(dir.path().join("a.md"), "+++\nname = \"alfa\"\n+++\na").unwrap();
-        fs::write(dir.path().join("c.md"), "sem cabeçalho").unwrap();
-        fs::write(dir.path().join("ruim.md"), "+++\nname = \n+++\nx").unwrap();
-        fs::write(dir.path().join("notas.txt"), "ignorado").unwrap();
-
-        let templates = load_templates(dir.path()).unwrap();
-
-        let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["alfa", "c", "Zeta"]);
-    }
-
-    #[test]
-    fn uses_nonce_detects_the_variable_in_the_body() {
-        let with = parse_template("a", "Bloco {{ nonce }} fim").unwrap();
-        let inside_logic = parse_template("b", "{% if repo %}{{nonce}}{% endif %}").unwrap();
-        let without = parse_template("c", "Sem variável, só texto nonce").unwrap();
-        let broken = parse_template("d", "{{nonce").unwrap();
-
-        assert!(with.uses_nonce());
-        assert!(inside_logic.uses_nonce());
-        assert!(!without.uses_nonce());
-        assert!(!broken.uses_nonce());
-    }
-
-    #[test]
-    fn embedded_templates_use_the_nonce() {
-        for (id, source) in DEFAULT_TEMPLATES {
-            assert!(parse_template(id, source).unwrap().uses_nonce(), "{id}");
-        }
-    }
-
-    #[test]
-    fn load_templates_returns_empty_when_directory_is_missing() {
-        let dir = TempDir::new("load-missing");
-
-        let templates = load_templates(&dir.path().join("nao-existe")).unwrap();
-
-        assert!(templates.is_empty());
-    }
-}
+mod tests;

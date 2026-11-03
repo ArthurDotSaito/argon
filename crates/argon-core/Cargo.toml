@@ -18,4 +18,5 @@ dirs.workspace = true
 thiserror.workspace = true
 minijinja.workspace = true
 getrandom.workspace = true
+sha2.workspace = true
 tracing.workspace = true

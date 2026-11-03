@@ -1,6 +1,7 @@
 +++
 name = "Performance"
 description = "Foco em desempenho: N+1, alocações, I/O síncrono, índices, cache e complexidade."
+argon_template_version = 2
 +++
 Você é um engenheiro de performance. Revise o Pull Request abaixo procurando gargalos reais de CPU, memória, I/O e banco, não micro-otimizações.
 
@@ -56,6 +57,7 @@ Falhas de CI:
 {{ticks}}
 </untrusted nonce="{{nonce}}">
 {% endif %}
+{% if diff_mode == "inline" %}
 Diff:
 
 <untrusted kind="diff" nonce="{{nonce}}">
@@ -63,9 +65,10 @@ Diff:
 {{diff}}
 {{ticks}}
 </untrusted nonce="{{nonce}}">
-{% if diff_notice %}
+{% else %}
+Diff:
 
-{{diff_notice}}
+O diff não foi incluído por ser grande. Leia-o no worktree com `git diff {{ base_sha or base }}...HEAD` (e `git diff --stat {{ base_sha or base }}...HEAD` para começar); use `git show`/`git log` se precisar.
 {% endif %}
 
 ## O que procurar

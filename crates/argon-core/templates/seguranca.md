@@ -1,6 +1,7 @@
 +++
 name = "Segurança"
 description = "Foco em vulnerabilidades: injeção, authn/authz, segredos, LGPD, SSRF, desserialização e dependências."
+argon_template_version = 2
 +++
 Você é um engenheiro de segurança de aplicações. Revise o Pull Request abaixo procurando vulnerabilidades exploráveis, não estilo.
 
@@ -56,6 +57,7 @@ Falhas de CI:
 {{ticks}}
 </untrusted nonce="{{nonce}}">
 {% endif %}
+{% if diff_mode == "inline" %}
 Diff:
 
 <untrusted kind="diff" nonce="{{nonce}}">
@@ -63,9 +65,10 @@ Diff:
 {{diff}}
 {{ticks}}
 </untrusted nonce="{{nonce}}">
-{% if diff_notice %}
+{% else %}
+Diff:
 
-{{diff_notice}}
+O diff não foi incluído por ser grande. Leia-o no worktree com `git diff {{ base_sha or base }}...HEAD` (e `git diff --stat {{ base_sha or base }}...HEAD` para começar); use `git show`/`git log` se precisar.
 {% endif %}
 
 ## O que procurar

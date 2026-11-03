@@ -1,10 +1,14 @@
+mod defaults;
 mod render;
 mod template;
+#[cfg(test)]
+mod test_support;
 
 use std::path::PathBuf;
 
+pub use defaults::ensure_default_templates;
 pub use render::{PromptContext, RenderedPrompt, render_prompt};
-pub use template::{PromptTemplate, ensure_default_templates, load_templates};
+pub use template::{PromptTemplate, load_templates};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PromptError {

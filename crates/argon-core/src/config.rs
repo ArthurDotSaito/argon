@@ -99,7 +99,7 @@ impl Default for ReviewCfg {
     fn default() -> Self {
         Self {
             default_template: "review-padrao".into(),
-            max_diff_chars: 200_000,
+            max_diff_chars: 0,
             use_worktree: true,
             include_previous_reviews: true,
             include_ci_failures: false,
@@ -285,7 +285,7 @@ mod tests {
         assert!(!config.orgs.initialized);
         assert!(config.agents.is_empty());
         assert_eq!(config.review.default_template, "review-padrao");
-        assert_eq!(config.review.max_diff_chars, 200_000);
+        assert_eq!(config.review.max_diff_chars, 0);
         assert!(config.review.use_worktree);
         assert!(config.review.include_previous_reviews);
         assert!(!config.review.include_ci_failures);
