@@ -1,9 +1,11 @@
 mod config;
 mod diff;
+mod findings;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
 mod model;
 mod paths;
+mod prompt;
 mod reason;
 mod review;
 mod time;
@@ -14,11 +16,16 @@ pub use config::{
     ReviewCfg, SyncCfg, ThemeChoice,
 };
 pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patch, split_rows};
+pub use findings::{Finding, FindingsError, FindingsParse, Severity, parse_findings};
 pub use model::{
     ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrKey, PrState,
     PullRequest, ReviewDecision, ReviewState, Side,
 };
 pub use paths::Paths;
+pub use prompt::{
+    PromptContext, PromptError, PromptTemplate, ensure_default_templates, load_templates,
+    render_prompt,
+};
 pub use reason::{Reason, reason};
 pub use review::{
     DraftComment, DraftReview, DraftSource, DraftThreadInput, ReviewError, ReviewEvent,
