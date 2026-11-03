@@ -63,6 +63,8 @@ pub enum AgentEvent {
         id: String,
         status: Option<ToolStatus>,
         output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
     Plan(Vec<String>),
     PermissionRequest {
@@ -157,6 +159,7 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
                     id: json_text(update, "toolCallId").unwrap_or_default(),
                     status: None,
                     output: Some(output),
+                    title: None,
                 });
             }
             events
@@ -164,13 +167,15 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
         Some("tool_call_update") => {
             let status = tool_status(update);
             let output = tool_output(update);
-            if status.is_none() && output.is_none() {
+            let title = json_text(update, "title").filter(|title| !title.is_empty());
+            if status.is_none() && output.is_none() && title.is_none() {
                 return Vec::new();
             }
             vec![AgentEvent::ToolCallUpdate {
                 id: json_text(update, "toolCallId").unwrap_or_default(),
                 status,
                 output,
+                title,
             }]
         }
         Some("plan") => {

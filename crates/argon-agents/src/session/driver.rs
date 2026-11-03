@@ -227,6 +227,10 @@ impl Shared {
         self.lock().in_turn
     }
 
+    pub fn status(&self) -> SessionStatus {
+        self.lock().status
+    }
+
     pub fn on_update(&self, update: &Value) {
         let mut state = self.lock();
         for event in map_update(update) {

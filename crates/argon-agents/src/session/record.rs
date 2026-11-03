@@ -63,10 +63,12 @@ pub(super) fn for_store(event: &AgentEvent) -> AgentEvent {
             id,
             status,
             output: Some(output),
+            title,
         } if output.len() > STORED_OUTPUT_LIMIT => AgentEvent::ToolCallUpdate {
             id: id.clone(),
             status: *status,
             output: Some(truncate(output, STORED_OUTPUT_LIMIT)),
+            title: title.clone(),
         },
         other => other.clone(),
     }
@@ -185,6 +187,7 @@ mod tests {
             id: "t".into(),
             status: None,
             output: Some(output.clone()),
+            title: None,
         };
         let mut recorder = Recorder::default();
         let recorded = recorder.record(&event);

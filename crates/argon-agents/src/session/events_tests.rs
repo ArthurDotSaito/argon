@@ -38,6 +38,13 @@ fn claude_turn_maps_tool_call_and_message() {
         id: "toolu_0136rZNGDx3zjhtz8z4vJR4Q".into(),
         status: Some(ToolStatus::Completed),
         output: Some("(PowerShell completed with no output)".into()),
+        title: None,
+    }));
+    assert!(events.contains(&AgentEvent::ToolCallUpdate {
+        id: "toolu_0136rZNGDx3zjhtz8z4vJR4Q".into(),
+        status: None,
+        output: None,
+        title: Some("Get-ChildItem -Force | Select-Object Mode, Length, Name".into()),
     }));
     assert_eq!(
         message_text(&events),

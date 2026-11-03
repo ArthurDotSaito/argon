@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use argon_core::PrKey;
+use argon_store::SessionStatus;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -196,6 +197,10 @@ impl AgentSessionHandle {
             .events_since(self.shared.id(), seq)
             .await
             .map_err(SessionError::Store)
+    }
+
+    pub fn status(&self) -> SessionStatus {
+        self.shared.status()
     }
 
     pub fn is_finished(&self) -> bool {
