@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use argon_core::{AgentCfg, AgentKind, Config};
 
@@ -53,8 +53,8 @@ pub fn agent_spec(kind: AgentKind, cfg: &Config) -> AgentSpec {
         kind,
         label: defaults.label,
         transport: defaults.transport,
-        command: command_for(defaults, overrides),
-        args: args_for(defaults, overrides),
+        command: command_for(kind, defaults, overrides),
+        args: args_for(kind, defaults, overrides),
         env: env_for(defaults, overrides),
         models: defaults
             .models
@@ -73,7 +73,7 @@ pub fn agent_spec(kind: AgentKind, cfg: &Config) -> AgentSpec {
     }
 }
 
-pub(super) fn login_hint(defaults: &AgentDefaults) -> String {
+pub(crate) fn login_hint(defaults: &AgentDefaults) -> String {
     format!(
         "Execute `{}` no terminal para entrar.",
         defaults.login_command
@@ -81,24 +81,45 @@ pub(super) fn login_hint(defaults: &AgentDefaults) -> String {
 }
 
 pub(super) fn is_command_overridden(kind: AgentKind, cfg: &Config) -> bool {
-    cfg.agents
-        .get(&kind)
-        .is_some_and(|agent| agent.command.is_some())
+    command_override(kind, cfg.agents.get(&kind)).is_some()
 }
 
 fn requires_login(kind: AgentKind) -> bool {
     matches!(kind, AgentKind::Codex | AgentKind::CommandCode)
 }
 
-fn command_for(defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> PathBuf {
-    overrides
-        .and_then(|agent| agent.command.clone())
-        .unwrap_or_else(|| PathBuf::from(defaults.command))
+fn is_system_cmd(command: &Path) -> bool {
+    command
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("cmd"))
 }
 
-fn args_for(defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> Vec<String> {
+fn command_override(kind: AgentKind, overrides: Option<&AgentCfg>) -> Option<PathBuf> {
+    let command = overrides.and_then(|agent| agent.command.clone())?;
+    if kind == AgentKind::CommandCode && is_system_cmd(&command) {
+        tracing::warn!(
+            command = %command.display(),
+            "ignoring Command Code override that points to cmd.exe"
+        );
+        return None;
+    }
+    Some(command)
+}
+
+fn command_for(kind: AgentKind, defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> PathBuf {
+    command_override(kind, overrides).unwrap_or_else(|| PathBuf::from(defaults.command))
+}
+
+fn args_for(
+    kind: AgentKind,
+    defaults: &AgentDefaults,
+    overrides: Option<&AgentCfg>,
+) -> Vec<String> {
     match overrides {
-        Some(agent) if agent.command.is_some() || !agent.args.is_empty() => agent.args.clone(),
+        Some(agent) if command_override(kind, overrides).is_some() || !agent.args.is_empty() => {
+            agent.args.clone()
+        }
         _ => defaults.args.iter().map(ToString::to_string).collect(),
     }
 }
@@ -247,6 +268,35 @@ mod tests {
                 defaults.kind
             );
         }
+    }
+
+    #[test]
+    fn command_code_override_to_cmd_is_ignored() {
+        for command in ["cmd", "cmd.exe", r"C:\Windows\System32\CMD.EXE"] {
+            let cfg = config_with(
+                AgentKind::CommandCode,
+                AgentCfg {
+                    command: Some(PathBuf::from(command)),
+                    args: vec!["acp".into()],
+                    ..AgentCfg::default()
+                },
+            );
+            let spec = agent_spec(AgentKind::CommandCode, &cfg);
+            assert_eq!(spec.command, Path::new("command-code"), "{command}");
+            assert_eq!(spec.args, ["acp"]);
+            assert!(!is_command_overridden(AgentKind::CommandCode, &cfg));
+        }
+        let cfg = config_with(
+            AgentKind::OpenCode,
+            AgentCfg {
+                command: Some(PathBuf::from("cmd")),
+                ..AgentCfg::default()
+            },
+        );
+        assert_eq!(
+            agent_spec(AgentKind::OpenCode, &cfg).command,
+            Path::new("cmd")
+        );
     }
 
     #[test]

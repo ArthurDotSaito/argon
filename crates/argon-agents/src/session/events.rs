@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::registry::ModelInfo;
+use crate::util::json_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +34,20 @@ pub struct PermissionOption {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedFinding {
+    pub id: i64,
+    pub finding: Finding,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingPermission {
+    pub request_id: String,
+    pub title: String,
+    pub kind: String,
+    pub options: Vec<PermissionOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum AgentEvent {
     UserMessage(String),
@@ -60,23 +75,33 @@ pub enum AgentEvent {
         stop_reason: String,
     },
     Findings {
-        findings: Vec<Finding>,
+        findings: Vec<SavedFinding>,
         skipped: Vec<String>,
     },
     ModelsAvailable(Vec<ModelInfo>),
     Error(String),
+    Resync {
+        last_seq: u64,
+    },
 }
 
-fn text(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
+impl AgentEvent {
+    pub fn permission(pending: &PendingPermission) -> AgentEvent {
+        AgentEvent::PermissionRequest {
+            request_id: pending.request_id.clone(),
+            title: pending.title.clone(),
+            kind: pending.kind.clone(),
+            options: pending.options.clone(),
+        }
+    }
 }
 
 fn content_text(content: &Value) -> Option<String> {
     match content.get("type").and_then(Value::as_str) {
-        Some("text") => text(content, "text"),
+        Some("text") => json_text(content, "text"),
         Some("content") => content.get("content").and_then(content_text),
-        Some("diff") => text(content, "path").map(|path| format!("diff: {path}")),
-        Some("terminal") => text(content, "terminalId").map(|id| format!("terminal: {id}")),
+        Some("diff") => json_text(content, "path").map(|path| format!("diff: {path}")),
+        Some("terminal") => json_text(content, "terminalId").map(|id| format!("terminal: {id}")),
         _ => None,
     }
 }
@@ -122,14 +147,14 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
         Some("agent_thought_chunk") => chunk(update, AgentEvent::ThoughtChunk),
         Some("tool_call") => {
             let mut events = vec![AgentEvent::ToolCall {
-                id: text(update, "toolCallId").unwrap_or_default(),
-                title: text(update, "title").unwrap_or_default(),
-                kind: text(update, "kind").unwrap_or_else(|| "other".to_owned()),
+                id: json_text(update, "toolCallId").unwrap_or_default(),
+                title: json_text(update, "title").unwrap_or_default(),
+                kind: json_text(update, "kind").unwrap_or_else(|| "other".to_owned()),
                 status: tool_status(update).unwrap_or(ToolStatus::Pending),
             }];
             if let Some(output) = tool_output(update) {
                 events.push(AgentEvent::ToolCallUpdate {
-                    id: text(update, "toolCallId").unwrap_or_default(),
+                    id: json_text(update, "toolCallId").unwrap_or_default(),
                     status: None,
                     output: Some(output),
                 });
@@ -143,7 +168,7 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
                 return Vec::new();
             }
             vec![AgentEvent::ToolCallUpdate {
-                id: text(update, "toolCallId").unwrap_or_default(),
+                id: json_text(update, "toolCallId").unwrap_or_default(),
                 status,
                 output,
             }]
@@ -155,7 +180,7 @@ pub fn map_update(update: &Value) -> Vec<AgentEvent> {
                 .map(|entries| {
                     entries
                         .iter()
-                        .filter_map(|entry| text(entry, "content"))
+                        .filter_map(|entry| json_text(entry, "content"))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -170,8 +195,8 @@ fn select_values(options: &Value, out: &mut Vec<ModelInfo>) {
         return;
     };
     for item in items {
-        if let Some(id) = text(item, "value") {
-            let label = text(item, "name").unwrap_or_else(|| id.clone());
+        if let Some(id) = json_text(item, "value") {
+            let label = json_text(item, "name").unwrap_or_else(|| id.clone());
             out.push(ModelInfo { id, label });
         }
         if let Some(nested) = item.get("options") {
@@ -185,7 +210,7 @@ pub fn config_option<'a>(session: &'a Value, config_id: &str) -> Option<&'a Valu
         .get("configOptions")?
         .as_array()?
         .iter()
-        .find(|option| text(option, "id").as_deref() == Some(config_id))
+        .find(|option| json_text(option, "id").as_deref() == Some(config_id))
 }
 
 pub fn config_values(option: &Value) -> Vec<ModelInfo> {
@@ -197,7 +222,7 @@ pub fn config_values(option: &Value) -> Vec<ModelInfo> {
 }
 
 pub fn current_value(option: &Value) -> Option<String> {
-    text(option, "currentValue")
+    json_text(option, "currentValue")
 }
 
 #[cfg(test)]

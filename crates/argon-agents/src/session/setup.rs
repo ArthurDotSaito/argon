@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
@@ -15,14 +14,13 @@ use tokio::time::Instant;
 
 use super::driver::Shared;
 use super::events::{AgentEvent, config_option, config_values, current_value};
+use super::failure::{STDERR_LINES, classify, turn_failure};
 use super::turn::stop_reason_name;
-use super::{Command, Result, SessionContext, SessionError};
+use super::{Command, Result, SessionContext, SessionError, SessionOptions};
 use crate::defaults::{ModelSelection, agent_defaults};
 use crate::registry::{AgentSpec, ModelInfo};
 
-const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MODE_CONFIG_ID: &str = "mode";
-
 type Turn = BoxFuture<'static, agent_client_protocol::Result<PromptResponse>>;
 
 pub(super) struct Ready {
@@ -32,29 +30,16 @@ pub(super) struct Ready {
     pub warnings: Vec<String>,
 }
 
-fn acp(error: agent_client_protocol::Error) -> SessionError {
-    SessionError::Acp(error.to_string())
-}
-
-async fn call(cx: &ConnectionTo<Agent>, method: &str, params: Value) -> Result<Value> {
-    cx.send_request(UntypedMessage::new(method, params).map_err(acp)?)
+async fn call(
+    cx: &ConnectionTo<Agent>,
+    method: &str,
+    params: Value,
+) -> std::result::Result<Value, String> {
+    let message = UntypedMessage::new(method, params).map_err(|error| error.to_string())?;
+    cx.send_request(message)
         .block_task()
         .await
-        .map_err(acp)
-}
-
-async fn set_option(
-    cx: &ConnectionTo<Agent>,
-    acp_id: &str,
-    config_id: &str,
-    value: &str,
-) -> Result<Value> {
-    call(
-        cx,
-        "session/set_config_option",
-        json!({ "sessionId": acp_id, "configId": config_id, "value": value }),
-    )
-    .await
+        .map_err(|error| error.to_string())
 }
 
 fn model_config_id(spec: &AgentSpec) -> Result<&'static str> {
@@ -72,25 +57,23 @@ async fn change_model(
     model: &str,
 ) -> Result<()> {
     let config_id = model_config_id(spec)?;
-    let Some(option) = config_option(session, config_id) else {
-        return Err(SessionError::SetModel {
-            model: model.to_owned(),
-            reason: "o agente não expõe seleção de modelo".to_owned(),
-        });
+    let failed = |reason: String| SessionError::SetModel {
+        model: model.to_owned(),
+        reason,
     };
+    let option = config_option(session, config_id)
+        .ok_or_else(|| failed("o agente não expõe seleção de modelo".to_owned()))?;
     let models = config_values(option);
     if !models.is_empty() && !models.iter().any(|known| known.id == model) {
         return Err(SessionError::ModelUnavailable {
             model: model.to_owned(),
         });
     }
-    set_option(cx, acp_id, config_id, model)
+    let params = json!({ "sessionId": acp_id, "configId": config_id, "value": model });
+    call(cx, "session/set_config_option", params)
         .await
         .map(|_| ())
-        .map_err(|error| SessionError::SetModel {
-            model: model.to_owned(),
-            reason: error.to_string(),
-        })
+        .map_err(failed)
 }
 
 struct Opened {
@@ -112,7 +95,7 @@ async fn open(
         )
         .block_task()
         .await
-        .map_err(acp)?;
+        .map_err(|error| classify(spec, error.to_string()))?;
     let params = json!({ "cwd": ctx.cwd, "mcpServers": [] });
     let (session, acp_session_id) = match load {
         Some(id) => {
@@ -121,10 +104,15 @@ async fn open(
             }
             let mut params = params;
             params["sessionId"] = json!(id);
-            (call(cx, "session/load", params).await?, id.to_owned())
+            let session = call(cx, "session/load", params)
+                .await
+                .map_err(|error| classify(spec, error))?;
+            (session, id.to_owned())
         }
         None => {
-            let session = call(cx, "session/new", params).await?;
+            let session = call(cx, "session/new", params)
+                .await
+                .map_err(|error| classify(spec, error))?;
             let id = session
                 .get("sessionId")
                 .and_then(Value::as_str)
@@ -138,11 +126,14 @@ async fn open(
     if let Some(mode) = agent_defaults(spec.kind).permission_mode
         && let Some(option) = config_option(&session, MODE_CONFIG_ID)
         && current_value(option).as_deref() != Some(mode)
-        && let Err(error) = set_option(cx, &acp_session_id, MODE_CONFIG_ID, mode).await
     {
-        warnings.push(format!(
-            "não consegui ativar o modo `{mode}` do agente: {error}"
-        ));
+        let params =
+            json!({ "sessionId": acp_session_id, "configId": MODE_CONFIG_ID, "value": mode });
+        if let Err(error) = call(cx, "session/set_config_option", params).await {
+            warnings.push(format!(
+                "não consegui ativar o modo `{mode}` do agente: {error}"
+            ));
+        }
     }
 
     let config_id = model_config_id(spec)?;
@@ -189,15 +180,59 @@ fn start_turn(cx: &ConnectionTo<Agent>, acp_id: &str, text: String) -> Turn {
     Box::pin(async move { cx.send_request(request).block_task().await })
 }
 
-pub(super) async fn run_connection(
+struct ModelChange {
     cx: ConnectionTo<Agent>,
     shared: Arc<Shared>,
     spec: AgentSpec,
-    ctx: SessionContext,
-    load: Option<String>,
-    mut commands: mpsc::UnboundedReceiver<Command>,
-    ready: oneshot::Sender<Result<Ready>>,
+    session: Arc<Value>,
+    acp_id: String,
+    timeout: std::time::Duration,
+}
+
+impl ModelChange {
+    fn spawn(self, model: String, reply: oneshot::Sender<Result<()>>) {
+        tokio::spawn(async move {
+            let change = change_model(&self.cx, &self.acp_id, &self.session, &self.spec, &model);
+            let result = match tokio::time::timeout(self.timeout, change).await {
+                Ok(result) => result,
+                Err(_) => Err(SessionError::SetModel {
+                    model: model.clone(),
+                    reason: format!("sem resposta em {}s", self.timeout.as_secs()),
+                }),
+            };
+            match &result {
+                Ok(()) => self.shared.set_model(&model),
+                Err(error) => self.shared.emit(AgentEvent::Error(error.to_string())),
+            }
+            self.shared.release();
+            let _ = reply.send(result);
+        });
+    }
+}
+
+pub(super) struct Connection {
+    pub shared: Arc<Shared>,
+    pub spec: AgentSpec,
+    pub ctx: SessionContext,
+    pub load: Option<String>,
+    pub options: SessionOptions,
+    pub commands: mpsc::UnboundedReceiver<Command>,
+    pub ready: oneshot::Sender<Result<Ready>>,
+}
+
+pub(super) async fn run_connection(
+    cx: ConnectionTo<Agent>,
+    connection: Connection,
 ) -> agent_client_protocol::Result<bool> {
+    let Connection {
+        shared,
+        spec,
+        ctx,
+        load,
+        options,
+        mut commands,
+        ready,
+    } = connection;
     let Opened {
         ready: opened,
         session,
@@ -209,23 +244,28 @@ pub(super) async fn run_connection(
         }
     };
     let acp_id = opened.acp_session_id.clone();
+    let session = Arc::new(session);
     if ready.send(Ok(opened)).is_err() {
         return Ok(false);
     }
+    let mut awaiting = shared.awaiting();
     let mut turn: Option<Turn> = None;
-    let mut deadline: Option<Instant> = None;
+    let mut remaining = options.turn_timeout;
+    let mut running_since: Option<Instant> = None;
     loop {
+        let deadline = running_since.map(|since| since + remaining);
         tokio::select! {
             command = commands.recv() => match command {
                 None | Some(Command::Shutdown) => return Ok(true),
                 Some(Command::Prompt(text)) => {
                     if turn.is_some() {
                         shared.emit(AgentEvent::Error("já existe um turno em andamento".to_owned()));
-                    } else {
-                        shared.begin_turn(&text);
-                        turn = Some(start_turn(&cx, &acp_id, text));
-                        deadline = Some(Instant::now() + TURN_TIMEOUT);
+                        continue;
                     }
+                    shared.begin_turn(&text);
+                    turn = Some(start_turn(&cx, &acp_id, text));
+                    remaining = options.turn_timeout;
+                    running_since = (!*awaiting.borrow()).then(Instant::now);
                 }
                 Some(Command::Cancel) => {
                     if let Err(error) = cx.send_notification(CancelNotification::new(SessionId::new(acp_id.clone()))) {
@@ -233,28 +273,37 @@ pub(super) async fn run_connection(
                     }
                     shared.cancel_pending();
                 }
-                Some(Command::RespondPermission { request_id, option_id, reply }) => {
-                    let _ = reply.send(shared.respond(&request_id, &option_id));
+                Some(Command::SetModel { model, reply }) => ModelChange {
+                    cx: cx.clone(),
+                    shared: Arc::clone(&shared),
+                    spec: spec.clone(),
+                    session: Arc::clone(&session),
+                    acp_id: acp_id.clone(),
+                    timeout: options.set_model_timeout,
                 }
-                Some(Command::SetModel { model, reply }) => {
-                    let result = change_model(&cx, &acp_id, &session, &spec, &model).await;
-                    match &result {
-                        Ok(()) => shared.store().set_model(shared.id(), &model),
-                        Err(error) => shared.emit(AgentEvent::Error(error.to_string())),
-                    }
-                    let _ = reply.send(result);
-                }
+                .spawn(model, reply),
             },
+            changed = awaiting.changed(), if turn.is_some() => {
+                if changed.is_ok() {
+                    if *awaiting.borrow_and_update() {
+                        if let Some(since) = running_since.take() {
+                            remaining = remaining.saturating_sub(since.elapsed());
+                        }
+                    } else if running_since.is_none() {
+                        running_since = Some(Instant::now());
+                    }
+                }
+            }
             result = next_turn(&mut turn) => {
                 turn = None;
-                deadline = None;
+                running_since = None;
                 match result {
-                    Ok(response) => shared.end_turn(&stop_reason_name(&response.stop_reason)),
-                    Err(error) => shared.fail(format!("o agente falhou no turno: {error}")),
+                    Ok(response) => shared.end_turn(&stop_reason_name(&response.stop_reason)).await,
+                    Err(error) => shared.fail(turn_failure(&spec, &shared.stderr_tail(STDERR_LINES), &error.to_string())),
                 }
             }
             () = sleep_until(deadline) => {
-                shared.fail(format!("o turno passou de {} minutos e foi encerrado", TURN_TIMEOUT.as_secs() / 60));
+                shared.fail(format!("o turno passou de {} minutos e foi encerrado", options.turn_timeout.as_secs() / 60));
                 return Ok(true);
             }
         }

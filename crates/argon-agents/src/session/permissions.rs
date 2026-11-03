@@ -3,11 +3,13 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::Value;
 
 use super::events::PermissionOption;
+use crate::util::json_text;
 
-const READ_ONLY_LOCAL_KINDS: [&str; 2] = ["read", "search"];
-const READ_ONLY_REMOTE_KINDS: [&str; 1] = ["fetch"];
+const READ_ONLY_KINDS: [&str; 2] = ["read", "search"];
 const ALLOW_ONCE: &str = "allow_once";
-const PATH_KEYS: [&str; 4] = ["path", "file_path", "filePath", "abs_path"];
+const PATH_KEYS: [&str; 5] = ["path", "file_path", "filePath", "abs_path", "directory"];
+const PATTERN_KEYS: [&str; 3] = ["pattern", "glob", "include"];
+const GLOB_CHARS: [char; 4] = ['*', '?', '[', '{'];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionPrompt {
@@ -22,10 +24,6 @@ pub enum PermissionDecision {
     Ask(PermissionPrompt),
 }
 
-fn text(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
-}
-
 pub fn options(request: &Value) -> Vec<PermissionOption> {
     request
         .get("options")
@@ -35,9 +33,9 @@ pub fn options(request: &Value) -> Vec<PermissionOption> {
                 .iter()
                 .filter_map(|option| {
                     Some(PermissionOption {
-                        id: text(option, "optionId")?,
-                        label: text(option, "name").unwrap_or_default(),
-                        kind: text(option, "kind").unwrap_or_default(),
+                        id: json_text(option, "optionId")?,
+                        label: json_text(option, "name").unwrap_or_default(),
+                        kind: json_text(option, "kind").unwrap_or_default(),
                     })
                 })
                 .collect()
@@ -59,9 +57,31 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+fn canonical(path: &Path) -> PathBuf {
+    let normalized = normalize(path);
+    let mut existing = normalized.as_path();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(resolved) = dunce::canonicalize(existing) {
+            let mut full = resolved;
+            for part in rest.iter().rev() {
+                full.push(part);
+            }
+            return full;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return normalized,
+        }
+    }
+}
+
 fn comparable(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
-    let text = text.strip_prefix("//?/").unwrap_or(&text).to_owned();
+    let text = text.trim_end_matches('/').to_owned();
     if cfg!(windows) {
         text.to_lowercase()
     } else {
@@ -71,15 +91,28 @@ fn comparable(path: &Path) -> String {
 
 pub fn is_inside(cwd: &Path, candidate: &str) -> bool {
     let candidate = Path::new(candidate);
-    let resolved = if candidate.is_absolute() || candidate.has_root() {
-        normalize(candidate)
+    let joined = if candidate.is_absolute() || candidate.has_root() {
+        candidate.to_path_buf()
     } else {
-        normalize(&cwd.join(candidate))
+        cwd.join(candidate)
     };
-    let root = comparable(&normalize(cwd));
-    let target = comparable(&resolved);
-    let root = root.trim_end_matches('/');
+    let root = comparable(&canonical(cwd));
+    let target = comparable(&canonical(&joined));
     target == root || target.starts_with(&format!("{root}/"))
+}
+
+fn literal_prefix(pattern: &str) -> &str {
+    let cut = pattern.find(GLOB_CHARS).unwrap_or(pattern.len());
+    &pattern[..cut]
+}
+
+fn is_path_like(pattern: &str) -> bool {
+    let path = Path::new(pattern);
+    path.is_absolute()
+        || path.has_root()
+        || path
+            .components()
+            .any(|component| component == Component::ParentDir)
 }
 
 fn touched_paths(tool_call: &Value) -> Vec<String> {
@@ -89,19 +122,37 @@ fn touched_paths(tool_call: &Value) -> Vec<String> {
         .map(|locations| {
             locations
                 .iter()
-                .filter_map(|location| text(location, "path"))
+                .filter_map(|location| json_text(location, "path"))
                 .collect()
         })
         .unwrap_or_default();
     if let Some(input) = tool_call.get("rawInput") {
-        paths.extend(PATH_KEYS.iter().filter_map(|key| text(input, key)));
+        paths.extend(PATH_KEYS.iter().filter_map(|key| json_text(input, key)));
+        paths.extend(
+            PATTERN_KEYS
+                .iter()
+                .filter_map(|key| json_text(input, key))
+                .filter(|pattern| is_path_like(pattern))
+                .map(|pattern| literal_prefix(&pattern).to_owned()),
+        );
     }
     paths
 }
 
+fn is_local_read(kind: &str, tool_call: &Value, cwd: &Path) -> bool {
+    if !READ_ONLY_KINDS.contains(&kind) {
+        return false;
+    }
+    let paths = touched_paths(tool_call);
+    if paths.is_empty() {
+        return kind == "search";
+    }
+    paths.iter().all(|path| is_inside(cwd, path))
+}
+
 pub fn decide(request: &Value, known_kind: Option<&str>, cwd: &Path) -> PermissionDecision {
     let tool_call = request.get("toolCall").cloned().unwrap_or(Value::Null);
-    let kind = text(&tool_call, "kind")
+    let kind = json_text(&tool_call, "kind")
         .or_else(|| known_kind.map(str::to_owned))
         .unwrap_or_else(|| "other".to_owned());
     let options = options(request);
@@ -109,19 +160,12 @@ pub fn decide(request: &Value, known_kind: Option<&str>, cwd: &Path) -> Permissi
         .iter()
         .find(|option| option.kind == ALLOW_ONCE)
         .map(|option| option.id.clone());
-    let read_only = if READ_ONLY_REMOTE_KINDS.contains(&kind.as_str()) {
-        true
-    } else if READ_ONLY_LOCAL_KINDS.contains(&kind.as_str()) {
-        touched_paths(&tool_call)
-            .iter()
-            .all(|path| is_inside(cwd, path))
-    } else {
-        false
-    };
     match allow_once {
-        Some(option_id) if read_only => PermissionDecision::Allow { option_id },
+        Some(option_id) if is_local_read(&kind, &tool_call, cwd) => {
+            PermissionDecision::Allow { option_id }
+        }
         _ => PermissionDecision::Ask(PermissionPrompt {
-            title: text(&tool_call, "title").unwrap_or_else(|| kind.clone()),
+            title: json_text(&tool_call, "title").unwrap_or_else(|| kind.clone()),
             kind,
             options,
         }),

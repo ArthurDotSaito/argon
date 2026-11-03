@@ -4,6 +4,8 @@ mod job;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::process::Output;
+#[cfg(windows)]
+use std::sync::Arc;
 
 use tokio::process::{Child, Command};
 
@@ -13,7 +15,21 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub struct KillOnDropChild {
     child: Child,
     #[cfg(windows)]
-    job: job::Job,
+    job: Arc<job::Job>,
+}
+
+#[derive(Clone)]
+pub struct TreeKiller {
+    #[cfg(windows)]
+    job: Arc<job::Job>,
+}
+
+impl TreeKiller {
+    pub fn kill(&self) -> io::Result<()> {
+        #[cfg(windows)]
+        self.job.terminate()?;
+        Ok(())
+    }
 }
 
 pub fn spawn_in_job(command: &mut Command) -> io::Result<KillOnDropChild> {
@@ -27,7 +43,10 @@ pub fn spawn_in_job(command: &mut Command) -> io::Result<KillOnDropChild> {
             let _ = child.start_kill();
             return Err(error);
         }
-        Ok(KillOnDropChild { child, job })
+        Ok(KillOnDropChild {
+            child,
+            job: Arc::new(job),
+        })
     }
     #[cfg(not(windows))]
     {
@@ -49,6 +68,13 @@ impl KillOnDropChild {
         #[cfg(windows)]
         self.job.terminate()?;
         self.child.start_kill()
+    }
+
+    pub fn killer(&self) -> TreeKiller {
+        TreeKiller {
+            #[cfg(windows)]
+            job: Arc::clone(&self.job),
+        }
     }
 }
 

@@ -1,21 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use argon_agents::{
-    AgentEvent, AgentSessionHandle, SessionContext, StoreSink, Support, WorktreeManager,
-    agent_spec, new_session_id, start_session, support_for,
+    AgentEvent, AgentSessionHandle, AgentSpec, SessionContext, SessionOptions, SessionWriter,
+    Support, WorktreeManager, agent_spec, new_session_id, start_session_with, support_for,
 };
-use argon_core::{
-    AgentKind, Config, Paths, PrId, PromptContext, RenderedPrompt, ReviewCfg,
-    ensure_default_templates, load_templates, render_prompt,
-};
-use argon_github::{GithubClient, PrDetail, PrFile, discover_accounts, token_for};
+use argon_core::{AgentKind, Config, Paths, PrKey};
+use argon_github::{GithubClient, discover_accounts, token_for};
 use argon_store::Store;
 use futures::StreamExt;
-use tokio::process::Command;
 use tracing_subscriber::EnvFilter;
+
+mod prompt;
+
+use prompt::{node_id, render};
 
 const HOST: &str = "github.com";
 const TEMPLATE_ID: &str = "review-padrao";
@@ -30,23 +29,32 @@ struct Args {
     number: u64,
     model: Option<String>,
     cancel_after: Option<Duration>,
+    startup_timeout: Option<Duration>,
+    command: Option<Vec<String>>,
 }
 
 fn usage() -> String {
-    "usage: run_session <claude|codex|opencode|command-code> <owner/repo#n> [model] [--cancel-after secs]"
+    "usage: run_session <claude|codex|opencode|command-code> <owner/repo#n> [model] \
+     [--cancel-after secs] [--startup-timeout secs] [--command program args...]"
         .to_owned()
+}
+
+fn seconds(value: Option<String>) -> Result<Duration, BoxError> {
+    Ok(Duration::from_secs(value.ok_or_else(usage)?.parse()?))
 }
 
 fn parse_args() -> Result<Args, BoxError> {
     let mut positional = Vec::new();
     let mut cancel_after = None;
+    let mut startup_timeout = None;
+    let mut command = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--cancel-after" {
-            let secs: u64 = args.next().ok_or_else(usage)?.parse()?;
-            cancel_after = Some(Duration::from_secs(secs));
-        } else {
-            positional.push(arg);
+        match arg.as_str() {
+            "--cancel-after" => cancel_after = Some(seconds(args.next())?),
+            "--startup-timeout" => startup_timeout = Some(seconds(args.next())?),
+            "--command" => command = Some(args.by_ref().collect()),
+            _ => positional.push(arg),
         }
     }
     let kind = match positional.first().map(String::as_str) {
@@ -64,71 +72,9 @@ fn parse_args() -> Result<Args, BoxError> {
         number: number.parse()?,
         model: positional.get(2).cloned(),
         cancel_after,
+        startup_timeout,
+        command,
     })
-}
-
-async fn node_id(repo: &str, number: u64) -> Result<PrId, BoxError> {
-    let output = Command::new("gh")
-        .args([
-            "api",
-            &format!("repos/{repo}/pulls/{number}"),
-            "--jq",
-            ".node_id",
-        ])
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .to_owned()
-            .into());
-    }
-    Ok(PrId(String::from_utf8(output.stdout)?.trim().to_owned()))
-}
-
-fn unified_diff(files: &[PrFile]) -> String {
-    files
-        .iter()
-        .filter_map(|file| {
-            let patch = file.patch.as_ref()?;
-            let old = file.previous_path.as_deref().unwrap_or(&file.path);
-            Some(format!(
-                "diff --git a/{old} b/{path}\n--- a/{old}\n+++ b/{path}\n{patch}\n",
-                path = file.path
-            ))
-        })
-        .collect()
-}
-
-fn render(
-    detail: &PrDetail,
-    files: &[PrFile],
-    templates_dir: &Path,
-) -> Result<RenderedPrompt, BoxError> {
-    ensure_default_templates(templates_dir)?;
-    let template = load_templates(templates_dir)?
-        .into_iter()
-        .find(|template| template.id == TEMPLATE_ID)
-        .ok_or("template review-padrao not found")?;
-    let ctx = PromptContext {
-        pr_title: detail.pr.title.clone(),
-        pr_number: detail.pr.number,
-        pr_url: detail.pr.url.clone(),
-        pr_body: detail.body.clone(),
-        repo: detail.pr.repo.clone(),
-        base: detail.pr.base.clone(),
-        base_sha: None,
-        head: detail.pr.head.clone(),
-        diff: unified_diff(files),
-        files: files.iter().map(|file| file.path.clone()).collect(),
-        previous_reviews: String::new(),
-        ci_failures: String::new(),
-    };
-    Ok(render_prompt(
-        &template,
-        &ctx,
-        ReviewCfg::default().max_diff_chars,
-    )?)
 }
 
 fn preview(text: &str) -> String {
@@ -157,7 +103,10 @@ fn print_event(started: Instant, event: &AgentEvent) {
             for finding in findings {
                 println!(
                     "          [{:?}] {}:{} {}",
-                    finding.severity, finding.file, finding.line, finding.title
+                    finding.finding.severity,
+                    finding.finding.file,
+                    finding.finding.line,
+                    finding.finding.title
                 );
             }
             for reason in skipped {
@@ -171,7 +120,7 @@ fn print_event(started: Instant, event: &AgentEvent) {
     }
 }
 
-async fn deny(handle: &AgentSessionHandle, event: &AgentEvent) {
+fn deny(handle: &AgentSessionHandle, event: &AgentEvent) {
     let AgentEvent::PermissionRequest {
         request_id,
         options,
@@ -189,7 +138,7 @@ async fn deny(handle: &AgentSessionHandle, event: &AgentEvent) {
                 .find(|option| option.kind.starts_with("reject"))
         });
     let result = match reject {
-        Some(option) => handle.respond_permission(request_id, &option.id).await,
+        Some(option) => handle.respond_permission(request_id, &option.id),
         None => handle.cancel(),
     };
     println!("          denied {request_id}: {result:?}");
@@ -201,7 +150,15 @@ async fn drive(
     cancel_after: Option<Duration>,
 ) -> Result<(), BoxError> {
     let started = Instant::now();
-    let mut events = Box::pin(handle.events());
+    let (snapshot, events) = handle.subscribe();
+    println!(
+        "snapshot: status={:?} model={} models={} last_seq={}",
+        snapshot.status,
+        snapshot.model,
+        snapshot.models.len(),
+        snapshot.last_seq
+    );
+    let mut events = Box::pin(events);
     handle.prompt(prompt)?;
     if let Some(delay) = cancel_after {
         let canceller = handle.clone();
@@ -214,9 +171,9 @@ async fn drive(
     let mut ended = false;
     loop {
         let next = tokio::time::timeout(RUN_TIMEOUT, events.next()).await?;
-        let Some(event) = next else { break };
+        let Some((_, event)) = next else { break };
         print_event(started, &event);
-        deny(handle, &event).await;
+        deny(handle, &event);
         match &event {
             AgentEvent::TurnEnded { stop_reason } => {
                 ended = true;
@@ -232,18 +189,57 @@ async fn drive(
     Ok(())
 }
 
-fn summarize(store: &Mutex<Store>, id: &str) -> Result<(), BoxError> {
-    let store = store.lock().map_err(|_| "store poisoned")?;
+fn summarize(paths: &Paths, id: &str, transactions: u64) -> Result<(), BoxError> {
+    let store = Store::open(&paths.db_file())?;
     let session = store.session(id)?.ok_or("session not persisted")?;
     let events: Vec<AgentEvent> = store.events(id)?;
     let findings = store.findings(id)?;
     println!(
-        "persisted: status={:?} model={} acp_session={:?} events={} findings={}",
+        "persisted: status={:?} model={} acp_session={:?} events={} findings={} turn_transactions={transactions}",
         session.status,
         session.model,
         session.acp_session_id,
         events.len(),
         findings.len()
+    );
+    Ok(())
+}
+
+fn options(args: &Args) -> SessionOptions {
+    let mut options = SessionOptions::default();
+    if let Some(timeout) = args.startup_timeout {
+        options.startup_timeout = timeout;
+    }
+    options
+}
+
+async fn startup_probe(
+    args: &Args,
+    mut spec: AgentSpec,
+    paths: &Paths,
+    command: &[String],
+) -> Result<(), BoxError> {
+    let (program, rest) = command.split_first().ok_or_else(usage)?;
+    spec.command = PathBuf::from(program);
+    spec.args = rest.to_vec();
+    let cwd = paths.data_dir.join("startup-probe");
+    std::fs::create_dir_all(&cwd)?;
+    let writer = SessionWriter::open(&paths.db_file())?;
+    let ctx = SessionContext {
+        id: new_session_id()?,
+        pr: PrKey::new(HOST, "startup-probe"),
+        template_id: TEMPLATE_ID.to_owned(),
+        nonce: String::new(),
+        allowed_files: Vec::new(),
+        cwd,
+        model: String::new(),
+    };
+    let started = Instant::now();
+    let result = start_session_with(&spec, ctx, writer, options(args)).await;
+    println!(
+        "startup result after {:.1?}: {:?}",
+        started.elapsed(),
+        result.as_ref().map(|(session, _)| session.id.clone())
     );
     Ok(())
 }
@@ -257,6 +253,9 @@ async fn run() -> Result<(), BoxError> {
     std::fs::create_dir_all(&paths.data_dir)?;
     let config = Config::load(&paths.config_file()).unwrap_or_default();
     let spec = agent_spec(args.kind, &config);
+    if let Some(command) = &args.command {
+        return startup_probe(&args, spec, &paths, command).await;
+    }
 
     let accounts = discover_accounts()?;
     let account = accounts
@@ -277,8 +276,7 @@ async fn run() -> Result<(), BoxError> {
     let manager = WorktreeManager::new(&paths);
     let worktree: PathBuf = manager.prepare(HOST, &args.repo, args.number, &id).await?;
     println!("worktree: {}", worktree.display());
-    let store = Arc::new(Mutex::new(Store::open(&paths.db_file())?));
-    let sink: Arc<dyn StoreSink> = store.clone();
+    let writer = SessionWriter::open(&paths.db_file())?;
     let ctx = SessionContext {
         id: id.clone(),
         pr: detail.pr.key(),
@@ -292,13 +290,16 @@ async fn run() -> Result<(), BoxError> {
             .unwrap_or_else(|| spec.default_model.clone()),
     };
 
-    let outcome = match start_session(&spec, ctx, sink).await {
+    let outcome = match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {
         Ok((session, handle)) => {
             println!("session: {} (acp {})", session.id, session.acp_session_id);
+            let before = writer.transactions();
             let driven = drive(&handle, rendered.text, args.cancel_after).await;
+            writer.flush().await;
+            let transactions = writer.transactions() - before;
             handle.shutdown().await;
             println!("shutdown: finished={}", handle.is_finished());
-            driven.and_then(|()| summarize(&store, &id))
+            driven.and_then(|()| summarize(&paths, &id, transactions))
         }
         Err(error) => Err(error.into()),
     };
@@ -306,7 +307,6 @@ async fn run() -> Result<(), BoxError> {
     println!("worktree removed: {}", !worktree.exists());
     outcome
 }
-
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()

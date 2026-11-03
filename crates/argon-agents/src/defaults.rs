@@ -297,7 +297,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: COMMAND_CODE_MODELS,
         default_model: "",
-        permission_mode: Some("default"),
+        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "command-code 1.88.2",

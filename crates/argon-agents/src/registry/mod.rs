@@ -9,6 +9,7 @@ use futures::future::join_all;
 
 use crate::defaults::AGENT_DEFAULTS;
 
+pub(crate) use spec::login_hint;
 pub use spec::{AgentSpec, ModelInfo, Support, agent_spec, support_for};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

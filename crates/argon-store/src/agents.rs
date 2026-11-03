@@ -1,11 +1,9 @@
 use std::path::PathBuf;
 
-use argon_core::{AgentKind, Finding, PrKey, Severity, Side};
+use argon_core::{AgentKind, Finding, PrKey};
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::types::Type;
 use rusqlite::{OptionalExtension, Row, params};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use crate::Store;
 use crate::error::Result;
@@ -105,7 +103,7 @@ pub struct StoredFinding {
     pub state: FindingState,
 }
 
-fn invalid(index: usize, kind: &str, value: &str) -> rusqlite::Error {
+pub(crate) fn invalid(index: usize, kind: &str, value: &str) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         index,
         Type::Text,
@@ -146,27 +144,6 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
             .map_err(|_| invalid(10, "allowed_files", &allowed))?,
         created_at: millis(11, row.get(11)?)?,
         updated_at: millis(12, row.get(12)?)?,
-    })
-}
-
-fn finding_from_row(row: &Row<'_>) -> rusqlite::Result<StoredFinding> {
-    let severity: String = row.get(2)?;
-    let side: String = row.get(5)?;
-    let state: String = row.get(9)?;
-    Ok(StoredFinding {
-        id: row.get(0)?,
-        session_id: row.get(1)?,
-        finding: Finding {
-            severity: Severity::parse(&severity)
-                .ok_or_else(|| invalid(2, "severity", &severity))?,
-            file: row.get(3)?,
-            line: row.get(4)?,
-            side: Side::from_graphql(&side).ok_or_else(|| invalid(5, "side", &side))?,
-            title: row.get(6)?,
-            body: row.get(7)?,
-            suggestion: row.get(8)?,
-        },
-        state: FindingState::parse(&state).ok_or_else(|| invalid(9, "state", &state))?,
     })
 }
 
@@ -236,89 +213,8 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
-
-    pub fn append_event<E: Serialize>(&mut self, id: &str, event: &E) -> Result<i64> {
-        let data = serde_json::to_string(event)?;
-        let tx = self.conn.transaction()?;
-        let seq: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_events WHERE session_id = ?1",
-            params![id],
-            |row| row.get(0),
-        )?;
-        tx.execute(
-            "INSERT INTO agent_events (session_id, seq, data) VALUES (?1, ?2, ?3)",
-            params![id, seq, data],
-        )?;
-        tx.execute(
-            "UPDATE agent_sessions SET updated_at = ?1 WHERE id = ?2",
-            params![Utc::now().timestamp_millis(), id],
-        )?;
-        tx.commit()?;
-        Ok(seq)
-    }
-
-    pub fn events<E: DeserializeOwned>(&self, id: &str) -> Result<Vec<E>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT data FROM agent_events WHERE session_id = ?1 ORDER BY seq")?;
-        let rows = stmt
-            .query_map(params![id], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let events = rows
-            .iter()
-            .map(|data| serde_json::from_str(data))
-            .collect::<std::result::Result<Vec<E>, _>>()?;
-        Ok(events)
-    }
-
-    pub fn save_findings(&mut self, id: &str, findings: &[Finding]) -> Result<Vec<i64>> {
-        let tx = self.conn.transaction()?;
-        let mut ids = Vec::with_capacity(findings.len());
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO findings
-                    (session_id, severity, path, line, side, title, body, suggestion, state)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            )?;
-            for finding in findings {
-                stmt.execute(params![
-                    id,
-                    finding.severity.as_str(),
-                    finding.file,
-                    finding.line,
-                    finding.side.as_graphql(),
-                    finding.title,
-                    finding.body,
-                    finding.suggestion,
-                    FindingState::New.as_str(),
-                ])?;
-                ids.push(tx.last_insert_rowid());
-            }
-        }
-        tx.commit()?;
-        Ok(ids)
-    }
-
-    pub fn findings(&self, session_id: &str) -> Result<Vec<StoredFinding>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id, severity, path, line, side, title, body, suggestion, state
-             FROM findings WHERE session_id = ?1 ORDER BY id",
-        )?;
-        let rows = stmt
-            .query_map(params![session_id], finding_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    pub fn set_finding_state(&mut self, finding_id: i64, state: FindingState) -> Result<()> {
-        self.conn.execute(
-            "UPDATE findings SET state = ?1 WHERE id = ?2",
-            params![state.as_str(), finding_id],
-        )?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 #[path = "agents_tests.rs"]
-mod tests;
+pub(crate) mod tests;

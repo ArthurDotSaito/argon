@@ -1,162 +1,218 @@
-use argon_core::Finding;
-use argon_store::NewAgentSession;
+use argon_core::{AgentKind, PrKey};
+use argon_store::{NewAgentSession, Store};
+use futures::StreamExt;
 use serde_json::json;
 
 use super::*;
+use crate::session::events::PermissionOption;
+use crate::session::{SessionError, event_stream};
 
 const NONCE: &str = "00112233445566778899aabbccddeeff";
 
-#[derive(Default)]
-struct Recording {
-    events: Mutex<Vec<AgentEvent>>,
-    statuses: Mutex<Vec<SessionStatus>>,
-    findings: Mutex<Vec<Finding>>,
+fn writer() -> SessionWriter {
+    SessionWriter::from_store(Store::open_in_memory().unwrap()).unwrap()
 }
 
-impl StoreSink for Recording {
-    fn create_session(&self, _session: &NewAgentSession) {}
-
-    fn set_status(&self, _id: &str, status: SessionStatus) {
-        self.statuses.lock().unwrap().push(status);
-    }
-
-    fn set_model(&self, _id: &str, _model: &str) {}
-
-    fn append_event(&self, _id: &str, event: &AgentEvent) {
-        self.events.lock().unwrap().push(event.clone());
-    }
-
-    fn save_findings(&self, _id: &str, findings: &[Finding]) {
-        self.findings.lock().unwrap().extend_from_slice(findings);
-    }
-}
-
-fn shared(sink: &Arc<Recording>) -> (Shared, broadcast::Receiver<AgentEvent>) {
-    let (events, receiver) = broadcast::channel(64);
-    let sink: Arc<dyn StoreSink> = sink.clone();
+async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
+    let writer = writer();
+    writer
+        .create_session(NewAgentSession {
+            id: "s1".into(),
+            pr: PrKey::new("github.com", "PR_1"),
+            agent: AgentKind::ClaudeCode,
+            model: "sonnet".into(),
+            template: "review-padrao".into(),
+            worktree_path: None,
+            acp_session_id: Some("acp".into()),
+            nonce: NONCE.into(),
+            allowed_files: vec!["src/lib.rs".into()],
+        })
+        .await
+        .unwrap();
+    let (events, _) = broadcast::channel(capacity);
     let shared = Shared::new(
-        "s1".into(),
-        PathBuf::from("repo"),
-        NONCE.into(),
-        vec!["src/lib.rs".into()],
-        sink,
+        SharedConfig {
+            id: "s1".into(),
+            cwd: PathBuf::from("repo"),
+            nonce: NONCE.into(),
+            allowed_files: vec!["src/lib.rs".into()],
+            writer: writer.clone(),
+            stderr: Arc::default(),
+        },
         events,
     );
-    (shared, receiver)
+    (shared, writer)
 }
 
 fn chunk(text: &str) -> Value {
     json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}})
 }
 
-#[test]
-fn updates_before_activation_are_dropped() {
-    let sink = Arc::new(Recording::default());
-    let (shared, mut receiver) = shared(&sink);
+fn findings_message(title: &str) -> String {
+    format!(
+        "Resumo.\n```argon-findings-{NONCE}\n[{{\"severity\":\"medium\",\"file\":\"src/lib.rs\",\"line\":4,\"title\":\"{title}\",\"body\":\"b\"}}]\n```"
+    )
+}
+
+fn models() -> Vec<ModelInfo> {
+    vec![ModelInfo {
+        id: "sonnet".into(),
+        label: "Sonnet".into(),
+    }]
+}
+
+#[tokio::test]
+async fn updates_before_activation_are_dropped() {
+    let (shared, writer) = shared_with(64).await;
+    let (_, mut receiver) = shared.subscribe();
     shared.on_update(&chunk("replayed"));
-    assert!(sink.events.lock().unwrap().is_empty());
     assert!(receiver.try_recv().is_err());
-    shared.activate(SessionStatus::Completed);
+    shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
     shared.on_update(&chunk("live"));
-    assert_eq!(
-        *sink.events.lock().unwrap(),
-        [AgentEvent::MessageChunk("live".into())]
-    );
+    shared.close();
     assert_eq!(
         receiver.try_recv().unwrap(),
-        AgentEvent::MessageChunk("live".into())
+        (1, AgentEvent::MessageChunk("live".into()))
+    );
+    assert_eq!(
+        writer.events_since("s1", 0).await.unwrap(),
+        [(1, AgentEvent::MessageChunk("live".into()))]
     );
 }
 
-#[test]
-fn turn_persists_events_findings_and_status() {
-    let sink = Arc::new(Recording::default());
-    let (shared, _receiver) = shared(&sink);
-    shared.activate(SessionStatus::Completed);
+#[tokio::test]
+async fn turn_coalesces_chunks_and_saves_findings_with_ids() {
+    let (shared, writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
+    assert!(shared.try_acquire());
     shared.begin_turn("revise");
-    assert!(shared.in_turn());
-    let block = format!(
-        "Resumo.\n```argon-findings-{NONCE}\n[{{\"severity\":\"medium\",\"file\":\"src/lib.rs\",\"line\":4,\"title\":\"t\",\"body\":\"b\"}}]\n```"
-    );
-    let (first, second) = block.split_at(20);
-    shared.on_update(&chunk(first));
+    let message = findings_message("t");
+    for piece in message.as_bytes().chunks(9) {
+        shared.on_update(&chunk(std::str::from_utf8(piece).unwrap()));
+    }
     shared.on_update(&json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}}));
-    shared.on_update(&chunk(second));
-    shared.end_turn("end_turn");
+    shared.end_turn("end_turn").await;
     assert!(!shared.in_turn());
+    assert!(shared.try_acquire());
 
-    let findings = sink.findings.lock().unwrap().clone();
-    assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0].line, 4);
-    let events = sink.events.lock().unwrap().clone();
-    assert_eq!(events[0], AgentEvent::UserMessage("revise".into()));
-    assert!(
-        matches!(&events[events.len() - 2], AgentEvent::TurnEnded { stop_reason } if stop_reason == "end_turn")
-    );
-    assert!(
-        matches!(&events[events.len() - 1], AgentEvent::Findings { findings, .. } if findings.len() == 1)
-    );
+    let stored = writer.events_since("s1", 0).await.unwrap();
+    let kinds: Vec<_> = stored
+        .iter()
+        .map(|(seq, event)| (*seq, serde_json::to_value(event).unwrap()["type"].clone()))
+        .collect();
     assert_eq!(
-        *sink.statuses.lock().unwrap(),
+        kinds,
         [
-            SessionStatus::Completed,
-            SessionStatus::Running,
-            SessionStatus::Completed
+            (1, json!("user_message")),
+            (2, json!("message_chunk")),
+            (3, json!("thought_chunk")),
+            (4, json!("turn_ended")),
+            (5, json!("findings")),
         ]
     );
+    assert_eq!(stored[1].1, AgentEvent::MessageChunk(message));
+    let AgentEvent::Findings { findings, .. } = &stored[4].1 else {
+        panic!("expected findings");
+    };
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].id > 0);
+    assert_eq!(shared.subscribe().0.status, SessionStatus::Completed);
 }
 
-#[test]
-fn second_turn_starts_with_empty_buffer() {
-    let sink = Arc::new(Recording::default());
-    let (shared, _receiver) = shared(&sink);
-    shared.activate(SessionStatus::Completed);
-    shared.begin_turn("um");
-    shared.on_update(&chunk(&format!(
-        "```argon-findings-{NONCE}\n[{{broken\n```"
-    )));
-    shared.end_turn("end_turn");
-    shared.begin_turn("dois");
-    shared.on_update(&chunk("Sem achados."));
-    shared.end_turn("end_turn");
-    let events = sink.events.lock().unwrap().clone();
-    assert!(events.iter().any(
-        |event| matches!(event, AgentEvent::Error(text) if text.starts_with("Não consegui ler"))
-    ));
+#[tokio::test]
+async fn identical_finding_keeps_its_id_on_second_turn() {
+    let (shared, writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        shared.begin_turn("revise");
+        shared.on_update(&chunk(&findings_message("mesmo")));
+        shared.end_turn("end_turn").await;
+        let events = writer.events_since("s1", 0).await.unwrap();
+        let Some((_, AgentEvent::Findings { findings, .. })) = events.last() else {
+            panic!("expected findings");
+        };
+        ids.push(findings[0].id);
+    }
+    assert_eq!(ids[0], ids[1]);
+}
+
+#[tokio::test]
+async fn late_subscriber_gets_consistent_snapshot() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 10, "sonnet".into(), models());
+    shared.begin_turn("x");
+    shared.on_update(&chunk("parcial "));
+    let (snapshot, stream) = {
+        let (snapshot, receiver) = shared.subscribe();
+        (snapshot, event_stream(receiver, 11))
+    };
+    assert_eq!(snapshot.last_seq, 11);
     assert_eq!(
-        events.last(),
-        Some(&AgentEvent::Findings {
-            findings: Vec::new(),
-            skipped: Vec::new()
-        })
+        snapshot.open_record,
+        Some((12, AgentEvent::MessageChunk("parcial ".into())))
     );
-    assert!(sink.findings.lock().unwrap().is_empty());
+    assert_eq!(snapshot.model, "sonnet");
+    assert_eq!(snapshot.models, models());
+    assert_eq!(snapshot.status, SessionStatus::Running);
+    assert!(snapshot.pending_permissions.is_empty());
+    shared.on_update(&chunk("final"));
+    let mut stream = Box::pin(stream);
+    assert_eq!(
+        stream.next().await.unwrap(),
+        (12, AgentEvent::MessageChunk("final".into()))
+    );
 }
 
-#[test]
-fn failure_marks_session_failed() {
-    let sink = Arc::new(Recording::default());
-    let (shared, _receiver) = shared(&sink);
-    shared.activate(SessionStatus::Completed);
+#[tokio::test]
+async fn lagging_subscriber_receives_resync() {
+    let (shared, _writer) = shared_with(2).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (snapshot, receiver) = shared.subscribe();
+    let mut stream = Box::pin(event_stream(receiver, snapshot.last_seq));
+    for index in 0..6 {
+        shared.emit(AgentEvent::Error(format!("e{index}")));
+    }
+    assert_eq!(
+        stream.next().await.unwrap(),
+        (0, AgentEvent::Resync { last_seq: 0 })
+    );
+    assert_eq!(stream.next().await.unwrap().0, 5);
+}
+
+#[tokio::test]
+async fn failure_marks_session_failed_and_releases() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    assert!(shared.try_acquire());
+    assert!(!shared.try_acquire());
     shared.begin_turn("x");
     shared.fail("caiu".into());
     assert!(!shared.in_turn());
-    assert_eq!(
-        sink.statuses.lock().unwrap().last(),
-        Some(&SessionStatus::Failed)
-    );
-    assert_eq!(
-        sink.events.lock().unwrap().last(),
-        Some(&AgentEvent::Error("caiu".into()))
-    );
+    assert_eq!(shared.subscribe().0.status, SessionStatus::Failed);
+    assert!(shared.try_acquire());
 }
 
-#[test]
-fn unknown_permission_is_an_error() {
-    let sink = Arc::new(Recording::default());
-    let (shared, _receiver) = shared(&sink);
+#[tokio::test]
+async fn permission_answers_are_validated() {
+    let (shared, _writer) = shared_with(64).await;
     assert!(matches!(
         shared.respond("perm-9", "allow"),
         Err(SessionError::UnknownPermission(id)) if id == "perm-9"
+    ));
+    let permission = PendingPermission {
+        request_id: "perm-1".into(),
+        title: "Edit".into(),
+        kind: "edit".into(),
+        options: vec![PermissionOption {
+            id: "reject".into(),
+            label: "Reject".into(),
+            kind: "reject_once".into(),
+        }],
+    };
+    assert!(validate_option(&permission, "reject").is_ok());
+    assert!(matches!(
+        validate_option(&permission, "allow-always"),
+        Err(SessionError::InvalidPermissionOption { .. })
     ));
 }

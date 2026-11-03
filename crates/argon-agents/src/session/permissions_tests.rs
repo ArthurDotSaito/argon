@@ -39,6 +39,18 @@ fn allowed(decision: &PermissionDecision) -> bool {
     matches!(decision, PermissionDecision::Allow { option_id } if option_id == "allow-once")
 }
 
+fn asks(decision: &PermissionDecision) -> bool {
+    matches!(decision, PermissionDecision::Ask(_))
+}
+
+fn outside() -> &'static str {
+    if cfg!(windows) {
+        r"C:\Users\me\.ssh\id_rsa"
+    } else {
+        "/home/me/.ssh/id_rsa"
+    }
+}
+
 #[test]
 fn read_and_search_inside_worktree_are_auto_allowed() {
     for kind in ["read", "search"] {
@@ -55,47 +67,73 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
         &cwd(),
     );
     assert!(allowed(&relative));
-    let no_locations = decide(
-        &request(Some("search"), &[], json!({"pattern": "x"})),
+    let search_in_cwd = decide(
+        &request(
+            Some("search"),
+            &[],
+            json!({"pattern": "fn main", "glob": "src/**/*.rs"}),
+        ),
         None,
         &cwd(),
     );
-    assert!(allowed(&no_locations));
+    assert!(allowed(&search_in_cwd));
 }
 
 #[test]
-fn fetch_is_auto_allowed() {
-    let decision = decide(
-        &request(Some("fetch"), &[], json!({"url": "https://example.com"})),
-        None,
-        &cwd(),
-    );
-    assert!(allowed(&decision));
+fn fetch_always_asks() {
+    for input in [json!({"url": "https://example.com"}), json!({})] {
+        let decision = decide(&request(Some("fetch"), &[], input), None, &cwd());
+        assert!(asks(&decision), "{decision:?}");
+    }
+}
+
+#[test]
+fn read_without_any_path_asks() {
+    let decision = decide(&request(Some("read"), &[], json!({})), None, &cwd());
+    assert!(asks(&decision));
 }
 
 #[test]
 fn reads_outside_worktree_ask() {
-    let outside = if cfg!(windows) {
-        r"C:\Users\me\.ssh\id_rsa"
-    } else {
-        "/home/me/.ssh/id_rsa"
-    };
     for locations in [
-        vec![outside.to_string()],
+        vec![outside().to_string()],
         vec!["../other/secret.txt".to_string()],
+        vec![inside("src/a.rs"), outside().to_string()],
     ] {
         let decision = decide(&request(Some("read"), &locations, json!({})), None, &cwd());
-        assert!(
-            matches!(decision, PermissionDecision::Ask(_)),
-            "{locations:?}"
-        );
+        assert!(asks(&decision), "{locations:?}");
     }
     let via_input = decide(
-        &request(Some("read"), &[], json!({"file_path": outside})),
+        &request(Some("read"), &[], json!({"file_path": outside()})),
         None,
         &cwd(),
     );
-    assert!(matches!(via_input, PermissionDecision::Ask(_)));
+    assert!(asks(&via_input));
+}
+
+#[test]
+fn search_patterns_escaping_the_worktree_ask() {
+    let absolute_glob = if cfg!(windows) {
+        r"C:\Users\**\*.pem"
+    } else {
+        "/home/**/*.pem"
+    };
+    for input in [
+        json!({"pattern": "../**/*.env"}),
+        json!({"glob": absolute_glob}),
+        json!({"pattern": "secret", "include": "../../**"}),
+        json!({"path": outside()}),
+    ] {
+        let decision = decide(&request(Some("search"), &[], input.clone()), None, &cwd());
+        assert!(asks(&decision), "{input}");
+    }
+    let inside_glob = format!("{}/**/*.rs", cwd().display());
+    let decision = decide(
+        &request(Some("search"), &[], json!({"glob": inside_glob})),
+        None,
+        &cwd(),
+    );
+    assert!(allowed(&decision));
 }
 
 #[test]
@@ -133,26 +171,39 @@ fn edit_execute_and_unknown_kinds_ask_with_all_options() {
 fn kind_from_earlier_tool_call_is_used_when_request_omits_it() {
     let req = request(None, &[inside("src/a.rs")], json!({}));
     assert!(allowed(&decide(&req, Some("read"), &cwd())));
-    assert!(matches!(
-        decide(&req, Some("edit"), &cwd()),
-        PermissionDecision::Ask(_)
-    ));
+    assert!(asks(&decide(&req, Some("edit"), &cwd())));
 }
 
 #[test]
 fn read_without_allow_once_option_asks() {
     let mut req = request(Some("read"), &[inside("a.rs")], json!({}));
     req["options"] = json!([{"optionId": "always", "name": "Always", "kind": "allow_always"}]);
-    assert!(matches!(
-        decide(&req, None, &cwd()),
-        PermissionDecision::Ask(_)
-    ));
+    assert!(asks(&decide(&req, None, &cwd())));
 }
 
 #[test]
 fn inside_handles_prefix_collisions_and_dots() {
     let root = cwd();
     assert!(is_inside(&root, &inside("a/../b.rs")));
+    assert!(!is_inside(&root, &inside("a/../../b.rs")));
     assert!(!is_inside(&root, &format!("{}-evil/x", root.display())));
     assert!(is_inside(&root, &root.to_string_lossy()));
+}
+
+#[test]
+fn inside_canonicalizes_real_directories() {
+    let base = std::env::temp_dir().join(format!("argon-perm-{}", std::process::id()));
+    let repo = base.join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::create_dir_all(base.join("other")).unwrap();
+    std::fs::write(repo.join("src").join("a.rs"), "").unwrap();
+    let via_dots = format!("{}/src/../src/a.rs", repo.display());
+    let escape = format!("{}/src/../../other", repo.display());
+    let result = (
+        is_inside(&repo, &via_dots),
+        is_inside(&repo, &escape),
+        is_inside(&repo, "src/new_file.rs"),
+    );
+    std::fs::remove_dir_all(&base).unwrap();
+    assert_eq!(result, (true, false, true));
 }

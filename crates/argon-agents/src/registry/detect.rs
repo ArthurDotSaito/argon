@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use argon_core::{AgentKind, Config};
@@ -9,29 +9,16 @@ use super::spec::{agent_spec, is_command_overridden, login_hint, support_for};
 use super::version::parse_version;
 use super::{AgentSpec, Detection, Support};
 use crate::defaults::{AgentDefaults, agent_defaults};
+use crate::util::{Resolved, resolve_command as resolve};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const UNKNOWN_VERSION: &str = "unknown";
-
-enum Resolved {
-    Path(PathBuf),
-    Missing,
-    Failed(String),
-}
 
 pub(super) async fn detect_agent(kind: AgentKind, cfg: &Config) -> (AgentSpec, Support, Detection) {
     let mut spec = agent_spec(kind, cfg);
     let overridden = is_command_overridden(kind, cfg);
     let detection = detect(&mut spec, overridden).await;
     (spec, support_for(kind), detection)
-}
-
-fn resolve(name: &Path) -> Resolved {
-    match which::which(name) {
-        Ok(path) => Resolved::Path(path),
-        Err(which::Error::CannotFindBinaryPath) => Resolved::Missing,
-        Err(error) => Resolved::Failed(error.to_string()),
-    }
 }
 
 async fn detect(spec: &mut AgentSpec, overridden: bool) -> Detection {
