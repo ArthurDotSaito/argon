@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use argon_agents::{AgentSpec, Detection, ModelInfo, Support};
@@ -90,6 +91,7 @@ pub fn default_template(templates: &[PromptTemplate], configured: &str) -> Optio
 #[derive(Default)]
 pub struct DetectionCache {
     entry: Option<(Instant, Vec<AgentOption>)>,
+    reported: HashMap<AgentKind, Vec<ModelInfo>>,
 }
 
 impl DetectionCache {
@@ -100,8 +102,25 @@ impl DetectionCache {
             .map(|(_, options)| options.as_slice())
     }
 
-    pub fn store(&mut self, at: Instant, options: Vec<AgentOption>) {
+    pub fn store(&mut self, at: Instant, mut options: Vec<AgentOption>) {
+        for option in &mut options {
+            if let Some(models) = self.reported.get(&option.spec.kind) {
+                option.spec.models = models.clone();
+            }
+        }
         self.entry = Some((at, options));
+    }
+
+    pub fn report_models(&mut self, kind: AgentKind, models: &[ModelInfo]) {
+        if models.is_empty() {
+            return;
+        }
+        if let Some((_, options)) = self.entry.as_mut() {
+            for option in options.iter_mut().filter(|option| option.spec.kind == kind) {
+                option.spec.models = models.to_vec();
+            }
+        }
+        self.reported.insert(kind, models.to_vec());
     }
 }
 
@@ -247,6 +266,23 @@ mod tests {
             Some("review-padrao")
         );
         assert_eq!(default_template(&[], "seguranca"), None);
+    }
+
+    #[test]
+    fn reported_models_survive_new_detections() {
+        let mut cache = DetectionCache::default();
+        let at = Instant::now();
+        let live = [ModelInfo {
+            id: "claude-opus-5-5".into(),
+            label: "Opus 5.5".into(),
+        }];
+        cache.store(at, vec![option(AgentKind::ClaudeCode, ready())]);
+        cache.report_models(AgentKind::ClaudeCode, &live);
+        cache.report_models(AgentKind::ClaudeCode, &[]);
+        let models = |cache: &DetectionCache| cache.fresh(at).unwrap()[0].spec.models.clone();
+        assert_eq!(models(&cache), live);
+        cache.store(at, vec![option(AgentKind::ClaudeCode, ready())]);
+        assert_eq!(models(&cache), live);
     }
 
     #[test]

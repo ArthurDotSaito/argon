@@ -12,4 +12,5 @@ mod review_tab;
 mod status_badge;
 mod threads;
 
+pub use drafts::DraftsBus;
 pub use review_tab::{ReviewScope, ReviewTab, ReviewTabEvent};

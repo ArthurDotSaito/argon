@@ -115,6 +115,10 @@ impl ReviewTab {
             diff.set_files(files, cx);
         });
         self.sync_blocks(cx);
+        if let Some((path, line, side)) = self.pending_reveal.take().filter(|_| all) {
+            self.diff
+                .update(cx, |diff, cx| diff.reveal(&path, line, side, cx));
+        }
         cx.notify();
     }
 

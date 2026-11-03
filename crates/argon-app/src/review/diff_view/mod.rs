@@ -2,6 +2,7 @@ mod blocks;
 mod convert;
 mod header;
 mod render;
+mod selection;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

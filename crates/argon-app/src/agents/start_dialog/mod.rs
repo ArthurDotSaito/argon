@@ -1,5 +1,4 @@
 mod cards;
-mod choice;
 mod fields;
 mod launch;
 mod loaders;
@@ -19,12 +18,12 @@ use gpui_kit::{
     UniformListScrollHandle, Window, px,
 };
 
-use self::choice::Choice;
 use super::context::Gathered;
 use super::detection::AgentOption;
 use super::launcher::LaunchStage;
 use super::sessions::AgentSessions;
 use crate::actions::OpenSettings;
+use crate::agents::choice::Choice;
 use crate::services::{AppServices, Services};
 
 const DIALOG_WIDTH: f32 = 980.;

@@ -1,11 +1,10 @@
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, v_flex};
 use gpui_kit::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
+    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Window, div,
 };
 
-use crate::agents::AgentSessions;
 use crate::inbox;
 
 pub struct CenterPlaceholder {
@@ -106,38 +105,14 @@ impl DockSlot {
 pub struct DockPlaceholder {
     slot: DockSlot,
     focus_handle: FocusHandle,
-    sessions: Option<Entity<AgentSessions>>,
-    _observation: Option<Subscription>,
 }
 
 impl DockPlaceholder {
     pub fn new(slot: DockSlot, cx: &mut Context<Self>) -> Self {
-        let sessions = (slot == DockSlot::Agents)
-            .then(|| AgentSessions::global(cx))
-            .flatten();
-        let observation = sessions
-            .as_ref()
-            .map(|sessions| cx.observe(sessions, |_, _, cx| cx.notify()));
         Self {
             slot,
             focus_handle: cx.focus_handle(),
-            sessions,
-            _observation: observation,
         }
-    }
-
-    fn lines(&self, cx: &App) -> Vec<SharedString> {
-        self.sessions
-            .as_ref()
-            .map(|sessions| {
-                sessions
-                    .read(cx)
-                    .sessions()
-                    .iter()
-                    .map(|session| session.summary().into())
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 }
 
@@ -175,20 +150,12 @@ impl Panel for DockPlaceholder {
 
 impl Render for DockPlaceholder {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let lines = self.lines(cx);
-        let theme = cx.theme();
-        let body = v_flex()
+        v_flex()
             .track_focus(&self.focus_handle)
             .size_full()
             .p_3()
-            .gap_1();
-        if lines.is_empty() {
-            return body
-                .text_color(theme.muted_foreground)
-                .child(self.slot.hint());
-        }
-        body.text_sm()
-            .text_color(theme.foreground)
-            .children(lines.into_iter().map(|line| div().child(line)))
+            .gap_1()
+            .text_color(cx.theme().muted_foreground)
+            .child(self.slot.hint())
     }
 }

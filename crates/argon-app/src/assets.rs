@@ -5,12 +5,16 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
+        AtSign,
+        Brain,
         Check,
         CheckCheck,
+        Circle,
         CircleDashed,
         CircleDot,
         Clock,
         CornerDownLeft,
+        Crosshair,
         FileCode,
         FileDiff,
         GitBranch,
@@ -19,8 +23,11 @@ gpui_kit::assets::icon_assets!(
         GitPullRequest,
         GitPullRequestClosed,
         GitPullRequestDraft,
+        Hand,
+        ListChecks,
         Lock,
         MessageSquare,
+        MessageSquarePlus,
         MessageSquareReply,
         Minus,
         Pencil,
@@ -29,9 +36,11 @@ gpui_kit::assets::icon_assets!(
         ShieldAlert,
         Sparkles,
         Tag,
+        Terminal,
         Trash,
         UserPlus,
         Users,
+        Wrench,
         X
     ]
 );

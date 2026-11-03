@@ -7,6 +7,7 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Window, px};
 
 use super::Workspace;
 use crate::actions::{ToggleBottomDock, ToggleLeftDock, ToggleRightDock};
+use crate::agents::AgentPanel;
 use crate::bottom::{self, JobLogEvent, JobLogModel, LogPanel};
 use crate::center::{CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel};
 use crate::inbox::{InboxModel, ViewsPanel};
@@ -198,6 +199,7 @@ pub(super) fn dock_panel(
 ) -> Arc<dyn BasePanelView> {
     match (slot, JobLogModel::global(cx)) {
         (DockSlot::Views, _) => panel_handle(cx.new(|cx| ViewsPanel::new(inbox.clone(), cx))),
+        (DockSlot::Agents, _) => panel_handle(cx.new(|cx| AgentPanel::new(window, cx))),
         (DockSlot::Log, Some(model)) => panel_handle(cx.new(|cx| LogPanel::new(model, window, cx))),
         (slot, _) => panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx))),
     }

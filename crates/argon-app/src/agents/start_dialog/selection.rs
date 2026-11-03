@@ -1,8 +1,8 @@
 use argon_core::{AgentKind, PromptTemplate, render_prompt};
 use gpui_kit::{AppContext as _, Context, SharedString, Window};
 
-use super::choice::Choice;
 use super::{Load, Preview, StartDialog};
+use crate::agents::choice::Choice;
 use crate::agents::context::{ContextOptions, diff_inline, prompt_context};
 use crate::agents::detection::{
     AgentOption, default_agent, default_model, default_template, model_choices,

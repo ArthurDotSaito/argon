@@ -38,7 +38,6 @@ pub const CANCELLING: &str = "cancelando o início…";
 pub const START_CANCELLED: &str = "Início cancelado — o worktree foi removido";
 pub const CONFIGURE: &str = "Configurar";
 pub const PR_CLOSED: &str = "Este PR está fechado";
-pub const RUNNING: &str = "rodando";
 pub const SERVICES_UNAVAILABLE: &str = "serviços em segundo plano indisponíveis";
 pub const CI_HEADING: &str = "Jobs com falha:";
 pub const NO_CI_LOG: &str = "(log vazio)";
@@ -91,10 +90,6 @@ pub fn ci_log_heading(job: &str, lines: usize) -> String {
 
 pub fn ci_log_unavailable(job: &str, error: &str) -> String {
     format!("Log de {job} indisponível: {error}")
-}
-
-pub fn session_line(agent: &str, model: &str, number: u64) -> String {
-    format!("Sessão {agent} · {model} iniciada em #{number} — {RUNNING}")
 }
 
 pub fn no_models(agent: &str) -> String {

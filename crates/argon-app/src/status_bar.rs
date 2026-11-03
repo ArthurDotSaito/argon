@@ -8,6 +8,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
 };
 
+use crate::agents::{Activity, activity_label};
 use crate::inbox::{InboxView, needs_you_status};
 use crate::workspace::{DockPosition, Workspace};
 
@@ -19,6 +20,7 @@ pub struct WorkspaceStatusBar {
     workspace: WeakEntity<Workspace>,
     docks: Vec<(DockPosition, bool)>,
     needs_you: usize,
+    agents: Activity,
 }
 
 impl WorkspaceStatusBar {
@@ -26,11 +28,13 @@ impl WorkspaceStatusBar {
         workspace: WeakEntity<Workspace>,
         docks: Vec<(DockPosition, bool)>,
         needs_you: usize,
+        agents: Activity,
     ) -> Self {
         Self {
             workspace,
             docks,
             needs_you,
+            agents,
         }
     }
 
@@ -89,11 +93,34 @@ impl RenderOnce for WorkspaceStatusBar {
                 });
             });
 
+        let active = self.agents.running + self.agents.awaiting > 0;
+        let agents_workspace = self.workspace.clone();
+        let agents = active.then(|| {
+            let color = if self.agents.awaiting > 0 {
+                cx.theme().warning
+            } else {
+                cx.theme().muted_foreground
+            };
+            div()
+                .id("status-agents")
+                .cursor_pointer()
+                .text_color(color)
+                .hover(|style| style.text_color(cx.theme().foreground))
+                .child(status_item(
+                    IconName::Bot,
+                    activity_label(self.agents.running, self.agents.awaiting).into(),
+                ))
+                .on_click(move |_, window, cx| {
+                    _ = agents_workspace
+                        .update(cx, |workspace, cx| workspace.reveal_agents(window, cx));
+                })
+        });
+
         StatusBar::new()
             .h(px(STATUS_BAR_HEIGHT))
             .py_0()
             .left(toggles)
-            .child(needs_you)
+            .child(h_flex().gap_3().child(needs_you).children(agents))
             .right(div().child(VERSION))
     }
 }

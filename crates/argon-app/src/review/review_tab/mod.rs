@@ -10,8 +10,8 @@ use std::rc::Rc;
 use argon_core::Side;
 use argon_github::PrDetail;
 use gpui_kit::{
-    AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, WeakEntity,
-    Window,
+    App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task,
+    WeakEntity, Window,
 };
 
 use super::diff_view::{BlockSource, DiffView, DiffViewEvent};
@@ -21,7 +21,7 @@ use super::finish_popover::FinishReview;
 use super::labels;
 use super::threads::{ThreadUi, ThreadUiEvent, file_threads};
 use crate::services::{AppServices, Services};
-use editor::OpenEditor;
+use editor::{EditorTarget, OpenEditor};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ReviewScope {
@@ -57,6 +57,7 @@ pub struct ReviewTab {
     error: Option<SharedString>,
     epoch: u64,
     focus_pending: bool,
+    pending_reveal: Option<(String, u32, Side)>,
     tree: Entity<FileTree>,
     diff: Entity<DiffView>,
     thread_ui: Entity<ThreadUi>,
@@ -141,6 +142,7 @@ impl ReviewTab {
             error: None,
             epoch: 0,
             focus_pending: false,
+            pending_reveal: None,
             tree,
             diff,
             thread_ui,
@@ -238,8 +240,22 @@ impl ReviewTab {
     }
 
     pub fn reveal(&mut self, path: &str, line: u32, side: Side, cx: &mut Context<Self>) {
-        self.diff
-            .update(cx, |diff, cx| diff.reveal(path, line, side, cx));
+        if self.scope == ReviewScope::All && matches!(self.files, Files::Ready) {
+            self.diff
+                .update(cx, |diff, cx| diff.reveal(path, line, side, cx));
+        } else {
+            self.pending_reveal = Some((path.to_string(), line, side));
+        }
+    }
+
+    pub fn selected_line(&self, cx: &App) -> Option<(String, u32)> {
+        if let Some(line) = self.diff.read(cx).selected_line(cx) {
+            return Some(line);
+        }
+        match self.editor.as_ref().map(|open| &open.target) {
+            Some(EditorTarget::Line { path, anchor, .. }) => Some((path.clone(), anchor.0)),
+            _ => None,
+        }
     }
 
     fn diff_paths(&self, cx: &Context<Self>) -> Vec<String> {

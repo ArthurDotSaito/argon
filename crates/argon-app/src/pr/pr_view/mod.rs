@@ -196,14 +196,14 @@ impl PrView {
         self.set_tab(PrTab::Review, cx);
     }
 
-    #[expect(
-        dead_code,
-        reason = "called by review navigation from drafts and agent findings (Tasks 16 and 23)"
-    )]
     pub fn reveal(&mut self, path: &str, line: u32, side: Side, cx: &mut Context<Self>) {
         self.set_review_scope(ReviewScope::All, cx);
         self.review
             .update(cx, |review, cx| review.reveal(path, line, side, cx));
+    }
+
+    pub fn selected_line(&self, cx: &App) -> Option<(String, u32)> {
+        self.review.read(cx).selected_line(cx)
     }
 
     pub fn start_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {

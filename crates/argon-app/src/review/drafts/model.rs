@@ -3,8 +3,9 @@ use std::time::Duration;
 use argon_core::{DraftComment, DraftReview, PrKey, ReviewEvent, build_submission};
 use argon_store::Store;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{AnyWindowHandle, Context, EventEmitter, SharedString, Task};
+use gpui_kit::{AnyWindowHandle, Context, EventEmitter, SharedString, Subscription, Task};
 
+use super::bus::{DraftsBus, DraftsChanged};
 use super::store_ops::{SentReview, clear_sent, empty_review, load, store_job};
 use super::summary::{head_moved, review_error, suspect_drafts};
 use crate::review::labels;
@@ -26,24 +27,32 @@ pub enum DraftsEvent {
 }
 
 pub struct DraftsModel {
-    services: Option<Services>,
-    key: Option<PrKey>,
+    pub(super) services: Option<Services>,
+    pub(super) key: Option<PrKey>,
     number: u64,
     head: Option<String>,
     diff_head: Option<String>,
-    drafts: Vec<DraftComment>,
+    pub(super) drafts: Vec<DraftComment>,
     review: DraftReview,
     submit: SubmitState,
     suspects: Vec<i64>,
     epoch: u64,
     load_task: Option<Task<()>>,
+    pub(super) reload_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
+    _bus: Subscription,
 }
 
 impl EventEmitter<DraftsEvent> for DraftsModel {}
 
 impl DraftsModel {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let bus = DraftsBus::global(cx);
+        let bus = cx.subscribe(&bus, |this, _, event: &DraftsChanged, cx| {
+            if this.key.as_ref() == Some(&event.pr) {
+                this.reload_drafts(cx);
+            }
+        });
         Self {
             services: cx
                 .try_global::<AppServices>()
@@ -58,7 +67,9 @@ impl DraftsModel {
             suspects: Vec::new(),
             epoch: 0,
             load_task: None,
+            reload_task: None,
             save_task: None,
+            _bus: bus,
         }
     }
 
