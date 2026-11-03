@@ -1,0 +1,264 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use argon_core::{AgentCfg, AgentKind, Config};
+
+use crate::defaults::{AgentDefaults, ModelSelection, Transport, agent_defaults};
+
+const ANTIGRAVITY_REASON: &str =
+    "Ainda não suportado — o modo headless exige liberar ferramentas sem confirmação";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelInfo {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSpec {
+    pub kind: AgentKind,
+    pub label: &'static str,
+    pub transport: Transport,
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub models: Vec<ModelInfo>,
+    pub default_model: String,
+    pub model_selection: ModelSelection,
+    pub supports_load: bool,
+    pub requires_login_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Support {
+    Supported,
+    NotYet { reason: String },
+}
+
+pub fn support_for(kind: AgentKind) -> Support {
+    match kind {
+        AgentKind::Antigravity => Support::NotYet {
+            reason: ANTIGRAVITY_REASON.to_string(),
+        },
+        AgentKind::ClaudeCode | AgentKind::Codex | AgentKind::OpenCode | AgentKind::CommandCode => {
+            Support::Supported
+        }
+    }
+}
+
+pub fn agent_spec(kind: AgentKind, cfg: &Config) -> AgentSpec {
+    let defaults = agent_defaults(kind);
+    let overrides = cfg.agents.get(&kind);
+    AgentSpec {
+        kind,
+        label: defaults.label,
+        transport: defaults.transport,
+        command: command_for(defaults, overrides),
+        args: args_for(defaults, overrides),
+        env: env_for(defaults, overrides),
+        models: defaults
+            .models
+            .iter()
+            .map(|model| ModelInfo {
+                id: model.id.to_string(),
+                label: model.label.to_string(),
+            })
+            .collect(),
+        default_model: overrides
+            .and_then(|agent| agent.default_model.clone())
+            .unwrap_or_else(|| defaults.default_model.to_string()),
+        model_selection: defaults.model_selection,
+        supports_load: defaults.load_session,
+        requires_login_hint: requires_login(kind).then(|| login_hint(defaults)),
+    }
+}
+
+pub(super) fn login_hint(defaults: &AgentDefaults) -> String {
+    format!(
+        "Execute `{}` no terminal para entrar.",
+        defaults.login_command
+    )
+}
+
+pub(super) fn is_command_overridden(kind: AgentKind, cfg: &Config) -> bool {
+    cfg.agents
+        .get(&kind)
+        .is_some_and(|agent| agent.command.is_some())
+}
+
+fn requires_login(kind: AgentKind) -> bool {
+    matches!(kind, AgentKind::Codex | AgentKind::CommandCode)
+}
+
+fn command_for(defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> PathBuf {
+    overrides
+        .and_then(|agent| agent.command.clone())
+        .unwrap_or_else(|| PathBuf::from(defaults.command))
+}
+
+fn args_for(defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> Vec<String> {
+    match overrides {
+        Some(agent) if agent.command.is_some() || !agent.args.is_empty() => agent.args.clone(),
+        _ => defaults.args.iter().map(ToString::to_string).collect(),
+    }
+}
+
+fn env_for(defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> = defaults
+        .env
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    if let Some(agent) = overrides {
+        env.extend(agent.env.clone());
+    }
+    env
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::defaults::AGENT_DEFAULTS;
+
+    fn config_with(kind: AgentKind, agent: AgentCfg) -> Config {
+        Config {
+            agents: BTreeMap::from([(kind, agent)]),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn config_overrides_defaults() {
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                command: Some(PathBuf::from("claude-agent-acp")),
+                args: vec!["--verbose".into()],
+                env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
+                default_model: Some("opus".into()),
+            },
+        );
+        let spec = agent_spec(AgentKind::ClaudeCode, &cfg);
+        assert_eq!(spec.command, Path::new("claude-agent-acp"));
+        assert_eq!(spec.args, ["--verbose"]);
+        assert_eq!(spec.env["ANTHROPIC_LOG"], "debug");
+        assert_eq!(spec.default_model, "opus");
+        assert_eq!(spec.transport, Transport::Acp);
+    }
+
+    #[test]
+    fn empty_config_keeps_defaults() {
+        let spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
+        let defaults = agent_defaults(AgentKind::ClaudeCode);
+        assert_eq!(spec.command, Path::new(defaults.command));
+        assert_eq!(spec.args, defaults.args);
+        assert_eq!(spec.default_model, defaults.default_model);
+        assert_eq!(spec.models.len(), defaults.models.len());
+        assert!(
+            spec.models
+                .iter()
+                .any(|model| model.id == spec.default_model)
+        );
+        assert!(spec.supports_load);
+    }
+
+    #[test]
+    fn default_agent_cfg_changes_nothing() {
+        let cfg = config_with(AgentKind::Codex, AgentCfg::default());
+        assert_eq!(
+            agent_spec(AgentKind::Codex, &cfg),
+            agent_spec(AgentKind::Codex, &Config::default())
+        );
+    }
+
+    #[test]
+    fn args_only_override_keeps_default_command() {
+        let cfg = config_with(
+            AgentKind::OpenCode,
+            AgentCfg {
+                args: vec!["acp".into(), "--port=0".into()],
+                ..AgentCfg::default()
+            },
+        );
+        let spec = agent_spec(AgentKind::OpenCode, &cfg);
+        assert_eq!(spec.command, Path::new("opencode"));
+        assert_eq!(spec.args, ["acp", "--port=0"]);
+    }
+
+    #[test]
+    fn command_override_drops_default_args() {
+        let cfg = config_with(
+            AgentKind::Codex,
+            AgentCfg {
+                command: Some(PathBuf::from("codex-acp")),
+                ..AgentCfg::default()
+            },
+        );
+        let spec = agent_spec(AgentKind::Codex, &cfg);
+        assert_eq!(spec.command, Path::new("codex-acp"));
+        assert!(spec.args.is_empty());
+        assert!(is_command_overridden(AgentKind::Codex, &cfg));
+        assert!(!is_command_overridden(AgentKind::Codex, &Config::default()));
+    }
+
+    #[test]
+    fn config_only_affects_its_own_agent() {
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                default_model: Some("opus".into()),
+                ..AgentCfg::default()
+            },
+        );
+        assert_eq!(
+            agent_spec(AgentKind::OpenCode, &cfg),
+            agent_spec(AgentKind::OpenCode, &Config::default())
+        );
+    }
+
+    #[test]
+    fn antigravity_is_never_supported() {
+        assert!(matches!(
+            support_for(AgentKind::Antigravity),
+            Support::NotYet { .. }
+        ));
+        for kind in [
+            AgentKind::ClaudeCode,
+            AgentKind::Codex,
+            AgentKind::OpenCode,
+            AgentKind::CommandCode,
+        ] {
+            assert_eq!(support_for(kind), Support::Supported);
+        }
+    }
+
+    #[test]
+    fn command_code_never_resolves_to_cmd() {
+        let spec = agent_spec(AgentKind::CommandCode, &Config::default());
+        assert_eq!(spec.command, Path::new("command-code"));
+        for defaults in &AGENT_DEFAULTS {
+            let spec = agent_spec(defaults.kind, &Config::default());
+            assert_ne!(
+                spec.command.file_stem().and_then(|stem| stem.to_str()),
+                Some("cmd"),
+                "{:?}",
+                defaults.kind
+            );
+        }
+    }
+
+    #[test]
+    fn login_hint_only_for_agents_that_require_it() {
+        let hint = |kind| agent_spec(kind, &Config::default()).requires_login_hint;
+        assert!(hint(AgentKind::Codex).unwrap().contains("codex login"));
+        assert!(
+            hint(AgentKind::CommandCode)
+                .unwrap()
+                .contains("command-code login")
+        );
+        assert!(hint(AgentKind::OpenCode).is_none());
+        assert!(hint(AgentKind::ClaudeCode).is_none());
+    }
+}
