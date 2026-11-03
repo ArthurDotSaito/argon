@@ -10,6 +10,7 @@ pub const GROUP_YOUR_PRS: &str = "Seus PRs";
 pub const GROUP_REVIEWED: &str = "Revisados";
 pub const GROUP_ORGS: &str = "Orgs";
 pub const GROUP_ACCOUNTS: &str = "Contas";
+pub const OPEN_SETTINGS: &str = "Configurações";
 pub const ADMIN_BADGE: &str = "admin";
 pub const NO_ACCOUNTS: &str = "Nenhuma conta conectada";
 pub const NO_ORGS: &str = "Nenhuma org rastreada";

@@ -1,4 +1,5 @@
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
@@ -11,6 +12,7 @@ use gpui_kit::{
 use super::items::{AccountEntry, OrgEntry};
 use super::model::InboxModel;
 use super::{InboxView, labels};
+use crate::actions::OpenSettings;
 use crate::theme::density;
 use crate::ui::avatar;
 
@@ -126,10 +128,24 @@ impl ViewsPanel {
     fn accounts(&self, cx: &App) -> Div {
         let theme = cx.theme();
         let accounts = self.model.read(cx).accounts();
-        let footer = group(labels::GROUP_ACCOUNTS, cx)
+        let header = h_flex()
+            .items_center()
+            .justify_between()
+            .child(group_title(labels::GROUP_ACCOUNTS, cx))
+            .child(
+                Button::new("open-settings")
+                    .icon(Icon::new(IconName::Settings))
+                    .xsmall()
+                    .ghost()
+                    .tooltip(labels::OPEN_SETTINGS)
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
+            );
+        let footer = v_flex()
+            .gap_0p5()
             .pt_2()
             .border_t_1()
-            .border_color(theme.border);
+            .border_color(theme.border)
+            .child(header);
         if accounts.is_empty() {
             return footer.child(hint(labels::NO_ACCOUNTS, cx));
         }
@@ -167,15 +183,17 @@ fn nav_item(id: (&'static str, usize), selected: bool, cx: &App) -> Stateful<Div
 }
 
 fn group(title: &'static str, cx: &App) -> Div {
-    v_flex().gap_0p5().child(
-        div()
-            .px_2()
-            .pb_0p5()
-            .text_size(px(11.))
-            .font_semibold()
-            .text_color(cx.theme().muted_foreground)
-            .child(SharedString::from(title.to_uppercase())),
-    )
+    v_flex().gap_0p5().child(group_title(title, cx))
+}
+
+fn group_title(title: &'static str, cx: &App) -> Div {
+    div()
+        .px_2()
+        .pb_0p5()
+        .text_size(px(11.))
+        .font_semibold()
+        .text_color(cx.theme().muted_foreground)
+        .child(SharedString::from(title.to_uppercase()))
 }
 
 fn hint(text: &'static str, cx: &App) -> Div {
