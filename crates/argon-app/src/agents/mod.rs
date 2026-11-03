@@ -26,6 +26,9 @@ mod thread_model;
 mod thread_view;
 mod transcript;
 
+pub(crate) use choice::Choice;
+pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};
+pub(crate) use detection::{AgentOption, CardState, card_state};
 pub use labels::{BUTTON_TOOLTIP, CLOSED_TOOLTIP, PR_CLOSED};
 pub use panel::AgentPanel;
 pub use panel_labels::status_bar as activity_label;

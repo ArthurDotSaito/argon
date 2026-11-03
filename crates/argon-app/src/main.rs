@@ -16,6 +16,7 @@ mod placeholders;
 mod pr;
 mod review;
 mod services;
+mod settings;
 mod status_bar;
 mod sync_status;
 mod theme;

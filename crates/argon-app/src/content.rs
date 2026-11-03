@@ -4,10 +4,8 @@ use gpui_kit::{AppContext as _, Entity};
 
 use crate::center::{CenterContent, CenterContentFactory, CenterItem};
 use crate::inbox::{InboxModel, InboxPane};
-use crate::placeholders::CenterPlaceholder;
 use crate::pr::PrView;
-
-const SETTINGS_HINT: &str = "Preferências do Argon.";
+use crate::settings::{self, SettingsView};
 
 pub fn content_factory(inbox: Entity<InboxModel>) -> CenterContentFactory {
     Rc::new(move |item, window, cx| match item {
@@ -17,11 +15,11 @@ pub fn content_factory(inbox: Entity<InboxModel>) -> CenterContentFactory {
         }
         CenterItem::Pr(key) => {
             let view = cx.new(|cx| PrView::new(key.clone(), inbox.clone(), window, cx));
+            settings::note_pr_opened(key.clone(), &view, cx);
             CenterContent::new(view, cx)
         }
         CenterItem::Settings => {
-            let title = item.title(cx);
-            let view = cx.new(|cx| CenterPlaceholder::new(title, SETTINGS_HINT, cx));
+            let view = cx.new(|cx| SettingsView::new(window, cx));
             CenterContent::new(view, cx)
         }
     })

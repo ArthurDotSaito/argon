@@ -1,71 +1,11 @@
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
-use gpui_kit::component::{ActiveTheme as _, StyledExt as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
     App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Window, div,
+    ParentElement as _, Render, Styled as _, Window,
 };
 
 use crate::inbox;
-
-pub struct CenterPlaceholder {
-    title: SharedString,
-    description: SharedString,
-    focus_handle: FocusHandle,
-}
-
-impl CenterPlaceholder {
-    pub fn new(
-        title: impl Into<SharedString>,
-        description: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        Self {
-            title: title.into(),
-            description: description.into(),
-            focus_handle: cx.focus_handle(),
-        }
-    }
-}
-
-impl Focusable for CenterPlaceholder {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for CenterPlaceholder {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        placeholder_body(
-            &self.focus_handle,
-            self.title.clone(),
-            self.description.clone(),
-            cx,
-        )
-    }
-}
-
-fn placeholder_body(
-    focus_handle: &FocusHandle,
-    title: SharedString,
-    description: SharedString,
-    cx: &App,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    v_flex()
-        .track_focus(focus_handle)
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_1()
-        .child(
-            div()
-                .text_lg()
-                .font_semibold()
-                .text_color(theme.foreground)
-                .child(title),
-        )
-        .child(div().text_color(theme.muted_foreground).child(description))
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockSlot {
