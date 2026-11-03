@@ -2,12 +2,14 @@ use std::fs::{self, DirEntry, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 
+use minijinja::Environment;
 use serde::Deserialize;
 
 use super::PromptError;
 
 const HEADER_FENCE: &str = "+++";
 const TEMPLATE_EXTENSION: &str = "md";
+const NONCE_VARIABLE: &str = "nonce";
 
 pub(super) const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
     (
@@ -27,6 +29,17 @@ pub struct PromptTemplate {
     pub name: String,
     pub description: Option<String>,
     pub body: String,
+}
+
+impl PromptTemplate {
+    pub fn uses_nonce(&self) -> bool {
+        let env = Environment::new();
+        env.template_from_str(&self.body).is_ok_and(|compiled| {
+            compiled
+                .undeclared_variables(false)
+                .contains(NONCE_VARIABLE)
+        })
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -110,11 +123,18 @@ fn load_entry(entry: std::io::Result<DirEntry>) -> Option<PromptTemplate> {
             tracing::warn!(path = %path.display(), %error, "skipping unreadable prompt template");
         })
         .ok()?;
-    parse_template(&id, &source)
+    let template = parse_template(&id, &source)
         .inspect_err(|error| {
             tracing::warn!(path = %path.display(), %error, "skipping invalid prompt template");
         })
-        .ok()
+        .ok()?;
+    if !template.uses_nonce() {
+        tracing::warn!(
+            path = %path.display(),
+            "prompt template does not use the nonce variable, so no findings will be read"
+        );
+    }
+    Some(template)
 }
 
 pub fn load_templates(dir: &Path) -> Result<Vec<PromptTemplate>, PromptError> {
@@ -260,6 +280,26 @@ mod tests {
 
         let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["alfa", "c", "Zeta"]);
+    }
+
+    #[test]
+    fn uses_nonce_detects_the_variable_in_the_body() {
+        let with = parse_template("a", "Bloco {{ nonce }} fim").unwrap();
+        let inside_logic = parse_template("b", "{% if repo %}{{nonce}}{% endif %}").unwrap();
+        let without = parse_template("c", "Sem variável, só texto nonce").unwrap();
+        let broken = parse_template("d", "{{nonce").unwrap();
+
+        assert!(with.uses_nonce());
+        assert!(inside_logic.uses_nonce());
+        assert!(!without.uses_nonce());
+        assert!(!broken.uses_nonce());
+    }
+
+    #[test]
+    fn embedded_templates_use_the_nonce() {
+        for (id, source) in DEFAULT_TEMPLATES {
+            assert!(parse_template(id, source).unwrap().uses_nonce(), "{id}");
+        }
     }
 
     #[test]

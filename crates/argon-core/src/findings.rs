@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::Deserialize;
 
 use crate::model::Side;
@@ -150,22 +152,37 @@ pub fn parse_findings(message: &str, nonce: &str) -> Result<FindingsParse, Findi
     Ok(parsed)
 }
 
+fn normalize_path(path: &str) -> String {
+    let mut normalized = path.trim().replace('\\', "/");
+    while let Some(rest) = normalized.strip_prefix("./") {
+        normalized = rest.to_owned();
+    }
+    normalized
+}
+
 pub fn filter_findings(parse: FindingsParse, allowed_files: &[String]) -> FindingsParse {
     let FindingsParse {
         findings,
         mut skipped,
     } = parse;
+    let allowed: HashSet<String> = allowed_files
+        .iter()
+        .map(|file| normalize_path(file))
+        .collect();
     let findings = findings
         .into_iter()
-        .filter(|finding| {
-            let allowed = allowed_files.contains(&finding.file);
-            if !allowed {
+        .filter_map(|mut finding| {
+            let file = normalize_path(&finding.file);
+            if allowed.contains(&file) {
+                finding.file = file;
+                Some(finding)
+            } else {
                 skipped.push(format!(
                     "finding `{}`: file `{}` is not part of the PR",
                     finding.title, finding.file
                 ));
+                None
             }
-            allowed
         })
         .collect();
     FindingsParse { findings, skipped }
@@ -401,6 +418,34 @@ mod tests {
         assert_eq!(filtered.findings[0].file, "src/x.ts");
         assert_eq!(filtered.skipped.len(), 1);
         assert!(filtered.skipped[0].contains("outro.rs"));
+    }
+
+    #[test]
+    fn filter_normalizes_dot_slash_and_backslashes_before_comparing() {
+        let items = [
+            r#"{"severity":"low","file":"./src/x.ts","line":1,"title":"A","body":""}"#,
+            r#"{"severity":"low","file":"src\\dir\\y.ts","line":2,"title":"B","body":""}"#,
+            r#"{"severity":"low","file":"src/z.ts","line":3,"title":"C","body":""}"#,
+        ];
+        let message = block(&format!("[{}]", items.join(",")));
+        let parsed = parse_findings(&message, NONCE).unwrap();
+        let allowed = ["src/x.ts".to_owned(), ".\\src/dir/y.ts".to_owned()];
+
+        let filtered = filter_findings(parsed, &allowed);
+
+        let files: Vec<&str> = filtered.findings.iter().map(|f| f.file.as_str()).collect();
+        assert_eq!(files, ["src/x.ts", "src/dir/y.ts"]);
+        assert_eq!(filtered.skipped.len(), 1);
+    }
+
+    #[test]
+    fn filter_does_not_let_parent_directory_segments_through() {
+        let item = r#"{"severity":"low","file":"../src/x.ts","line":1,"title":"A","body":""}"#;
+        let parsed = parse_findings(&block(&format!("[{item}]")), NONCE).unwrap();
+
+        let filtered = filter_findings(parsed, &["src/x.ts".to_owned()]);
+
+        assert!(filtered.findings.is_empty());
     }
 
     #[test]
