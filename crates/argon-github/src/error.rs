@@ -10,6 +10,8 @@ pub enum GithubError {
     AuthMissing { host: String },
     #[error("rate limited until {reset_at}")]
     RateLimited { reset_at: DateTime<Utc> },
+    #[error("release tag is not a valid version: {0}")]
+    InvalidReleaseTag(String),
     #[error("decode error: {0}")]
     Decode(String),
     #[error("io error: {0}")]

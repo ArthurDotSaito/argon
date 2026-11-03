@@ -12,6 +12,7 @@ mod files_wire;
 mod inbox;
 mod job_log;
 mod mutations;
+mod releases;
 mod rest;
 mod review;
 #[cfg(test)]
@@ -31,4 +32,5 @@ pub use files::{FileStatus, PrFile};
 pub use inbox::OrgFetch;
 pub use job_log::JobLog;
 pub use mutations::MergeMethod;
+pub use releases::{Release, ReleaseAsset};
 pub use viewed::ViewedState;
