@@ -109,6 +109,7 @@ impl SyncStatus {
         self.login = login;
         match event {
             SyncEvent::Started => self.state = SyncState::Syncing,
+            SyncEvent::Partial => {}
             SyncEvent::Finished { at, count } => {
                 self.last_ok = Some(LastSync {
                     at: *at,

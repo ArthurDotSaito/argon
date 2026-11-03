@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use argon_core::PullRequest;
 use chrono::Utc;
 use rusqlite::params;
@@ -7,9 +9,8 @@ use crate::error::Result;
 use crate::local::LocalState;
 
 impl Store {
-    pub fn replace_prs(&mut self, host: &str, prs: &[PullRequest]) -> Result<()> {
+    pub fn upsert_prs(&mut self, host: &str, prs: &[PullRequest]) -> Result<()> {
         let synced_at = Utc::now().timestamp_millis();
-        let kept_ids = serde_json::to_string(&prs.iter().map(|pr| &pr.id.0).collect::<Vec<_>>())?;
         let tx = self.conn.transaction()?;
         {
             let mut upsert = tx.prepare(
@@ -36,12 +37,16 @@ impl Store {
                 ])?;
             }
         }
-        tx.execute(
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn prune_prs(&mut self, host: &str, kept: &HashSet<String>) -> Result<()> {
+        self.conn.execute(
             "DELETE FROM pull_requests
              WHERE host = ?1 AND id NOT IN (SELECT value FROM json_each(?2))",
-            params![host, kept_ids],
+            params![host, serde_json::to_string(kept)?],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
@@ -73,8 +78,10 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use argon_core::fixtures::{days_ago, pr_on};
-    use argon_core::{DEFAULT_HOST, PrKey};
+    use argon_core::{DEFAULT_HOST, PrKey, PullRequest};
 
     use crate::Store;
 
@@ -89,6 +96,25 @@ mod tests {
             .collect()
     }
 
+    fn keys(store: &Store) -> Vec<PrKey> {
+        store
+            .list_prs()
+            .unwrap()
+            .into_iter()
+            .map(|(p, _)| p.key())
+            .collect()
+    }
+
+    fn kept(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    fn sync(store: &mut Store, host: &str, prs: &[PullRequest]) {
+        store.upsert_prs(host, prs).unwrap();
+        let ids = prs.iter().map(|pr| pr.id.0.clone()).collect();
+        store.prune_prs(host, &ids).unwrap();
+    }
+
     #[test]
     fn upsert_and_list_orders_by_updated_at_desc() {
         let mut store = Store::open_in_memory().unwrap();
@@ -96,25 +122,25 @@ mod tests {
         let newest = pr_on(DEFAULT_HOST, "newest", days_ago(1));
         let mid = pr_on(DEFAULT_HOST, "mid", days_ago(3));
         store
-            .replace_prs(DEFAULT_HOST, &[old, newest.clone(), mid])
+            .upsert_prs(DEFAULT_HOST, &[old, newest.clone(), mid])
             .unwrap();
         assert_eq!(ids(&store), ["newest", "mid", "old"]);
 
         let mut updated = newest;
         updated.title = "Renamed".into();
         store
-            .replace_prs(DEFAULT_HOST, std::slice::from_ref(&updated))
+            .upsert_prs(DEFAULT_HOST, std::slice::from_ref(&updated))
             .unwrap();
         let listed = store.list_prs().unwrap();
-        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.len(), 3);
         assert_eq!(listed[0].0, updated);
     }
 
     #[test]
-    fn replace_prs_removes_prs_that_left_the_window() {
+    fn upsert_never_deletes_rows_missing_from_the_batch() {
         let mut store = Store::open_in_memory().unwrap();
         store
-            .replace_prs(
+            .upsert_prs(
                 DEFAULT_HOST,
                 &[
                     pr_on(DEFAULT_HOST, "a", days_ago(2)),
@@ -122,50 +148,93 @@ mod tests {
                 ],
             )
             .unwrap();
+        store.upsert_prs(DEFAULT_HOST, &[]).unwrap();
         store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "b", days_ago(1))])
+            .upsert_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "c", days_ago(3))])
             .unwrap();
+        assert_eq!(ids(&store), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn prune_deletes_only_rows_of_that_host_outside_the_kept_set() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .upsert_prs(
+                DEFAULT_HOST,
+                &[
+                    pr_on(DEFAULT_HOST, "a", days_ago(3)),
+                    pr_on(DEFAULT_HOST, "b", days_ago(2)),
+                    pr_on(DEFAULT_HOST, "c", days_ago(1)),
+                ],
+            )
+            .unwrap();
+        store
+            .upsert_prs(GHE, &[pr_on(GHE, "a", days_ago(4))])
+            .unwrap();
+        store.prune_prs(DEFAULT_HOST, &kept(&["b", "z"])).unwrap();
+        assert_eq!(
+            keys(&store),
+            [PrKey::new(DEFAULT_HOST, "b"), PrKey::new(GHE, "a")]
+        );
+    }
+
+    #[test]
+    fn prune_with_empty_set_clears_only_that_host() {
+        let mut store = Store::open_in_memory().unwrap();
+        sync(
+            &mut store,
+            DEFAULT_HOST,
+            &[pr_on(DEFAULT_HOST, "a", days_ago(2))],
+        );
+        sync(&mut store, GHE, &[pr_on(GHE, "b", days_ago(1))]);
+        store.prune_prs(DEFAULT_HOST, &HashSet::new()).unwrap();
         assert_eq!(ids(&store), ["b"]);
     }
 
     #[test]
-    fn replace_prs_with_empty_slice_clears_only_that_host() {
+    fn sync_removes_prs_that_left_the_window() {
         let mut store = Store::open_in_memory().unwrap();
-        store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(2))])
-            .unwrap();
-        store
-            .replace_prs(GHE, &[pr_on(GHE, "b", days_ago(1))])
-            .unwrap();
-        store.replace_prs(DEFAULT_HOST, &[]).unwrap();
+        sync(
+            &mut store,
+            DEFAULT_HOST,
+            &[
+                pr_on(DEFAULT_HOST, "a", days_ago(2)),
+                pr_on(DEFAULT_HOST, "b", days_ago(1)),
+            ],
+        );
+        sync(
+            &mut store,
+            DEFAULT_HOST,
+            &[pr_on(DEFAULT_HOST, "b", days_ago(1))],
+        );
         assert_eq!(ids(&store), ["b"]);
     }
 
     #[test]
-    fn replace_prs_does_not_affect_other_hosts() {
+    fn sync_does_not_affect_other_hosts() {
         let mut store = Store::open_in_memory().unwrap();
-        store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(2))])
-            .unwrap();
-        store
-            .replace_prs(GHE, &[pr_on(GHE, "b", days_ago(1))])
-            .unwrap();
-        store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "c", days_ago(3))])
-            .unwrap();
+        sync(
+            &mut store,
+            DEFAULT_HOST,
+            &[pr_on(DEFAULT_HOST, "a", days_ago(2))],
+        );
+        sync(&mut store, GHE, &[pr_on(GHE, "b", days_ago(1))]);
+        sync(
+            &mut store,
+            DEFAULT_HOST,
+            &[pr_on(DEFAULT_HOST, "c", days_ago(3))],
+        );
         assert_eq!(ids(&store), ["b", "c"]);
     }
 
     #[test]
-    fn replace_prs_keeps_local_state_of_removed_prs() {
+    fn prune_keeps_local_state_of_removed_prs() {
         let mut store = Store::open_in_memory().unwrap();
         let first = pr_on(DEFAULT_HOST, "a", days_ago(2));
-        store
-            .replace_prs(DEFAULT_HOST, std::slice::from_ref(&first))
-            .unwrap();
+        sync(&mut store, DEFAULT_HOST, std::slice::from_ref(&first));
         store.mark_seen(&first.key(), first.updated_at).unwrap();
-        store.replace_prs(DEFAULT_HOST, &[]).unwrap();
-        store.replace_prs(DEFAULT_HOST, &[first]).unwrap();
+        store.prune_prs(DEFAULT_HOST, &HashSet::new()).unwrap();
+        sync(&mut store, DEFAULT_HOST, &[first]);
         assert!(!store.list_prs().unwrap()[0].1.unread);
     }
 
@@ -174,12 +243,8 @@ mod tests {
         let mut store = Store::open_in_memory().unwrap();
         let on_github = pr_on(DEFAULT_HOST, "same", days_ago(2));
         let on_ghe = pr_on(GHE, "same", days_ago(1));
-        store
-            .replace_prs(DEFAULT_HOST, std::slice::from_ref(&on_github))
-            .unwrap();
-        store
-            .replace_prs(GHE, std::slice::from_ref(&on_ghe))
-            .unwrap();
+        sync(&mut store, DEFAULT_HOST, std::slice::from_ref(&on_github));
+        sync(&mut store, GHE, std::slice::from_ref(&on_ghe));
         store
             .mark_seen(&on_github.key(), on_github.updated_at)
             .unwrap();
@@ -199,7 +264,7 @@ mod tests {
             ]
         );
 
-        store.replace_prs(GHE, &[]).unwrap();
+        store.prune_prs(GHE, &HashSet::new()).unwrap();
         assert_eq!(ids(&store), ["same"]);
         assert_eq!(store.list_prs().unwrap()[0].0, on_github);
     }

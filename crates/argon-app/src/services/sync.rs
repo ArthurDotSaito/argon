@@ -3,8 +3,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::{DEFAULT_HOST, PullRequest};
-use argon_github::{Account, GithubClient, GithubError, Viewer, discover_accounts, token_for};
+use argon_core::DEFAULT_HOST;
+use argon_github::{
+    Account, GithubClient, GithubError, OrgFetch, Viewer, discover_accounts, token_for,
+};
+use argon_store::Store;
 use chrono::{DateTime, Local, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -13,7 +16,7 @@ use tracing::{error, info, warn};
 
 use super::orgs::{admin_orgs, cache_orgs, orgs_for_host};
 use super::shared::Shared;
-use super::store_handle::{StoreHandle, StoreStartup};
+use super::store_handle::{StoreHandle, StoreStartup, flatten};
 
 const THREAD_NAME: &str = "argon-services";
 const RUNTIME_THREAD_NAME: &str = "argon-tokio";
@@ -24,6 +27,7 @@ const MIN_INTERVAL: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncEvent {
     Started,
+    Partial,
     Finished { at: DateTime<Utc>, count: usize },
     Failed { host: String, error: String },
     AuthMissing { host: String },
@@ -34,6 +38,11 @@ pub(super) struct SyncRequest;
 struct Session {
     account: Account,
     client: Arc<GithubClient>,
+}
+
+enum Step {
+    Important(HashSet<String>),
+    Done(AccountOutcome),
 }
 
 enum AccountOutcome {
@@ -151,6 +160,7 @@ impl SyncLoop {
 
     async fn cycle(&mut self) {
         let started = Instant::now();
+        let more_generation = self.worker.shared.more_orgs_requested();
         self.emit(SyncEvent::Started);
         info!("sync cycle started");
         if let Some(error) = &self.store_error {
@@ -166,29 +176,23 @@ impl SyncLoop {
         }
 
         let config = self.worker.shared.config();
-        let mut outcomes = Vec::with_capacity(self.sessions.len());
+        let window = config.sync.closed_window_days;
+        let mut steps = Vec::with_capacity(self.sessions.len());
         for session in &self.sessions {
-            let host = &session.account.host;
-            if self.report_blocked(host) {
-                outcomes.push(AccountOutcome::Failed);
-                continue;
-            }
-            let orgs = orgs_for_host(&config.orgs.tracked, host);
-            let fetched = Instant::now();
-            let result = session
-                .client
-                .fetch_inbox(
-                    &session.account.login,
-                    &orgs,
-                    config.sync.closed_window_days,
-                )
-                .await;
-            outcomes.push(match result {
-                Ok(prs) => self.save_prs(&session.account, prs, fetched).await,
-                Err(error) => self.report(host, error),
+            steps.push(self.sync_important(session, window).await);
+        }
+        let mut outcomes = Vec::with_capacity(steps.len());
+        for (session, step) in self.sessions.iter().zip(steps) {
+            outcomes.push(match step {
+                Step::Important(kept) => {
+                    let orgs = orgs_for_host(&config.orgs.tracked, &session.account.host);
+                    self.sync_orgs(session, orgs, kept, window).await
+                }
+                Step::Done(outcome) => outcome,
             });
         }
         self.apply_outcomes(&outcomes);
+        self.worker.shared.serve_more_orgs(more_generation);
 
         let synced = outcomes
             .iter()
@@ -219,39 +223,91 @@ impl SyncLoop {
             .retain(|_| !expired.next().unwrap_or_default());
     }
 
-    async fn save_prs(
-        &self,
-        account: &Account,
-        prs: Vec<PullRequest>,
-        fetched: Instant,
-    ) -> AccountOutcome {
-        let fetched_count = prs.len();
+    async fn sync_important(&self, session: &Session, window: i64) -> Step {
+        let account = &session.account;
+        if self.report_blocked(&account.host) {
+            return Step::Done(AccountOutcome::Failed);
+        }
+        let fetched = Instant::now();
+        let prs = match session.client.fetch_important(window).await {
+            Ok(prs) => prs,
+            Err(error) => return Step::Done(self.report(&account.host, error)),
+        };
+        let kept: HashSet<String> = prs.iter().map(|pr| pr.id.0.clone()).collect();
         let host = account.host.clone();
         let saved = self
-            .worker
-            .store
-            .call(move |store| store.replace_prs(&host, &prs))
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|saved| saved.map_err(|error| error.to_string()));
-        match saved {
-            Ok(()) => {
-                info!(
-                    host = %account.host,
-                    login = %account.login,
-                    prs = fetched_count,
-                    elapsed_ms = elapsed_ms(fetched),
-                    "inbox synced"
-                );
-                AccountOutcome::Synced
-            }
+            .store_prs(&account.host, move |store| store.upsert_prs(&host, &prs))
+            .await;
+        if !saved {
+            return Step::Done(AccountOutcome::Failed);
+        }
+        info!(
+            host = %account.host,
+            login = %account.login,
+            prs = kept.len(),
+            elapsed_ms = elapsed_ms(fetched),
+            "important pull requests synced"
+        );
+        self.emit(SyncEvent::Partial);
+        Step::Important(kept)
+    }
+
+    async fn sync_orgs(
+        &self,
+        session: &Session,
+        orgs: Vec<String>,
+        mut kept: HashSet<String>,
+        window: i64,
+    ) -> AccountOutcome {
+        let account = &session.account;
+        let pages = self.worker.shared.org_depths(&account.host, orgs);
+        let fetched = Instant::now();
+        let OrgFetch {
+            prs,
+            orgs_with_more,
+        } = match session.client.fetch_orgs(&pages, &kept, window).await {
+            Ok(fetch) => fetch,
+            Err(error) => return self.report(&account.host, error),
+        };
+        self.worker
+            .shared
+            .set_orgs_with_more(&account.host, &orgs_with_more);
+        kept.extend(prs.iter().map(|pr| pr.id.0.clone()));
+        let org_prs = prs.len();
+        let total = kept.len();
+        let host = account.host.clone();
+        let saved = self
+            .store_prs(&account.host, move |store| {
+                store.upsert_prs(&host, &prs)?;
+                store.prune_prs(&host, &kept)
+            })
+            .await;
+        if !saved {
+            return AccountOutcome::Failed;
+        }
+        info!(
+            host = %account.host,
+            login = %account.login,
+            org_prs,
+            prs = total,
+            orgs_with_more = orgs_with_more.len(),
+            elapsed_ms = elapsed_ms(fetched),
+            "inbox synced"
+        );
+        AccountOutcome::Synced
+    }
+
+    async fn store_prs(
+        &self,
+        host: &str,
+        job: impl FnOnce(&mut Store) -> argon_store::Result<()> + Send + 'static,
+    ) -> bool {
+        match flatten(self.worker.store.call(job).await) {
+            Ok(()) => true,
             Err(error) => {
-                error!(host = %account.host, %error, "failed to store pull requests");
-                self.fail(
-                    &account.host,
-                    format!("falha ao gravar no banco local: {error}"),
-                );
-                AccountOutcome::Failed
+                error!(host, %error, "failed to store pull requests");
+                self.fail(host, format!("falha ao gravar no banco local: {error}"));
+                false
             }
         }
     }

@@ -79,7 +79,7 @@ mod tests {
     fn store_with(id: &str, updated_at: DateTime<Utc>) -> Store {
         let mut store = Store::open_in_memory().unwrap();
         store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, id, updated_at)])
+            .upsert_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, id, updated_at)])
             .unwrap();
         store
     }
@@ -99,7 +99,7 @@ mod tests {
         assert!(!state_of(&store, "a").unread);
 
         store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(1))])
+            .upsert_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(1))])
             .unwrap();
         assert!(state_of(&store, "a").unread);
     }
@@ -122,7 +122,7 @@ mod tests {
         assert!(state_of(&store, "a").archived);
 
         store
-            .replace_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(1))])
+            .upsert_prs(DEFAULT_HOST, &[pr_on(DEFAULT_HOST, "a", days_ago(1))])
             .unwrap();
         assert!(!state_of(&store, "a").archived);
     }

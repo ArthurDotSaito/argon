@@ -28,6 +28,7 @@ pub use detail::{
 };
 pub use error::{GithubError, Result};
 pub use files::{FileStatus, PrFile};
+pub use inbox::OrgFetch;
 pub use job_log::JobLog;
 pub use mutations::MergeMethod;
 pub use viewed::ViewedState;

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use argon_core::{Involvement, PullRequest};
 use chrono::{Duration, Utc};
@@ -17,6 +17,7 @@ const HYDRATE_QUERY: &str = concat!(
     include_str!("../queries/pull_request_fields.graphql")
 );
 const PAGE_SIZE: usize = 100;
+const ORG_PAGE_SIZE: usize = 50;
 const MIN_BATCH: usize = 10;
 const HYDRATE_CHUNK: usize = 40;
 const SEARCH_RESULT_LIMIT: usize = 1000;
@@ -27,28 +28,62 @@ const HYDRATE_CONCURRENCY: usize = 3;
 struct Search {
     query: String,
     involvement: Involvement,
+    page_size: usize,
+    limit: usize,
+}
+
+struct Found {
+    involvement: Involvement,
+    ids: Vec<String>,
+    has_more: bool,
+}
+
+pub struct OrgFetch {
+    pub prs: Vec<PullRequest>,
+    pub orgs_with_more: Vec<String>,
 }
 
 impl GithubClient {
-    pub async fn fetch_inbox(
-        &self,
-        _me: &str,
-        tracked_orgs: &[String],
-        closed_window_days: i64,
-    ) -> Result<Vec<PullRequest>> {
-        let since = (Utc::now() - Duration::days(closed_window_days))
-            .format("%Y-%m-%d")
-            .to_string();
-        let batches: Vec<(Involvement, Vec<String>)> = stream::iter(searches(tracked_orgs, &since))
-            .map(|search| async move {
-                let ids = self.search_ids(&search.query).await?;
-                Ok::<_, GithubError>((search.involvement, ids))
-            })
-            .buffer_unordered(SEARCH_CONCURRENCY)
-            .try_collect()
+    pub async fn fetch_important(&self, closed_window_days: i64) -> Result<Vec<PullRequest>> {
+        let found = self
+            .run_searches(important_searches(&since(closed_window_days)))
             .await?;
+        self.hydrate_all(merge_ids(into_batches(found))).await
+    }
 
-        let merged = merge_ids(batches);
+    pub async fn fetch_orgs(
+        &self,
+        orgs: &[(String, usize)],
+        known: &HashSet<String>,
+        closed_window_days: i64,
+    ) -> Result<OrgFetch> {
+        let found = self
+            .run_searches(org_searches(orgs, &since(closed_window_days)))
+            .await?;
+        let orgs_with_more = orgs
+            .iter()
+            .zip(&found)
+            .filter(|(_, found)| found.has_more)
+            .map(|((org, _), _)| org.clone())
+            .collect();
+        let prs = self
+            .hydrate_all(unknown_ids(merge_ids(into_batches(found)), known))
+            .await?;
+        Ok(OrgFetch {
+            prs,
+            orgs_with_more,
+        })
+    }
+
+    async fn run_searches(&self, searches: Vec<Search>) -> Result<Vec<Found>> {
+        stream::iter(searches)
+            .map(|search| async move { self.search_ids(&search).await })
+            .buffered(SEARCH_CONCURRENCY)
+            .try_collect()
+            .await
+    }
+
+    async fn hydrate_all(&self, merged: Vec<(String, Involvement)>) -> Result<Vec<PullRequest>> {
         let chunks: Vec<Vec<String>> = merged
             .chunks(HYDRATE_CHUNK)
             .map(|chunk| chunk.iter().map(|(id, _)| id.clone()).collect())
@@ -75,13 +110,15 @@ impl GithubClient {
         Ok(prs)
     }
 
-    async fn search_ids(&self, query: &str) -> Result<Vec<String>> {
+    async fn search_ids(&self, search: &Search) -> Result<Found> {
         let mut ids = Vec::new();
         let mut fetched = 0;
         let mut after: Option<String> = None;
-        let mut page_size = PAGE_SIZE;
-        while fetched < SEARCH_RESULT_LIMIT {
-            let variables = json!({ "query": query, "after": after, "first": page_size });
+        let mut page_size = search.page_size;
+        let mut has_next_page = false;
+        while fetched < search.limit {
+            let first = page_size.min(search.limit - fetched);
+            let variables = json!({ "query": search.query, "after": after, "first": first });
             let data: IdsData = match self.graphql("search_ids", IDS_QUERY, variables).await {
                 Err(GithubError::Http(error))
                     if is_gateway_failure(&error) && page_size / 2 >= MIN_BATCH =>
@@ -92,7 +129,7 @@ impl GithubClient {
                 result => result?,
             };
             check_rate_limit(&data.rate_limit)?;
-            page_size = (page_size * 2).min(PAGE_SIZE);
+            page_size = (page_size * 2).min(search.page_size);
             fetched += data.search.nodes.len();
             ids.extend(
                 data.search
@@ -101,18 +138,23 @@ impl GithubClient {
                     .flatten()
                     .filter_map(|node| node.id),
             );
-            if !data.search.page_info.has_next_page {
+            has_next_page = data.search.page_info.has_next_page;
+            if !has_next_page {
                 break;
             }
             after = data.search.page_info.end_cursor;
         }
         if fetched >= SEARCH_RESULT_LIMIT {
             tracing::warn!(
-                query,
+                query = search.query,
                 "search reached the result limit, results may be truncated"
             );
         }
-        Ok(ids)
+        Ok(Found {
+            involvement: search.involvement,
+            ids,
+            has_more: has_next_page && fetched < SEARCH_RESULT_LIMIT,
+        })
     }
 
     async fn hydrate(&self, ids: &[String]) -> Result<Vec<PullRequest>> {
@@ -156,12 +198,20 @@ fn is_gateway_failure(error: &reqwest::Error) -> bool {
     })
 }
 
-fn searches(tracked_orgs: &[String], since: &str) -> Vec<Search> {
+fn since(closed_window_days: i64) -> String {
+    (Utc::now() - Duration::days(closed_window_days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn important_searches(since: &str) -> Vec<Search> {
     let flagged = |query: &str, involvement: Involvement| Search {
         query: query.to_string(),
         involvement,
+        page_size: PAGE_SIZE,
+        limit: SEARCH_RESULT_LIMIT,
     };
-    let mut searches = vec![
+    vec![
         flagged(
             "is:pr is:open review-requested:@me",
             Involvement {
@@ -190,14 +240,35 @@ fn searches(tracked_orgs: &[String], since: &str) -> Vec<Search> {
                 ..Involvement::default()
             },
         ),
-    ];
-    searches.extend(tracked_orgs.iter().map(|org| {
-        flagged(
-            &format!("is:pr org:{org} updated:>={since}"),
-            Involvement::default(),
-        )
-    }));
-    searches
+    ]
+}
+
+fn org_searches(orgs: &[(String, usize)], since: &str) -> Vec<Search> {
+    orgs.iter()
+        .map(|(org, depth)| Search {
+            query: format!("is:pr org:{org} updated:>={since} sort:updated-desc"),
+            involvement: Involvement::default(),
+            page_size: ORG_PAGE_SIZE,
+            limit: ((*depth).max(1) * ORG_PAGE_SIZE).min(SEARCH_RESULT_LIMIT),
+        })
+        .collect()
+}
+
+fn into_batches(found: Vec<Found>) -> Vec<(Involvement, Vec<String>)> {
+    found
+        .into_iter()
+        .map(|found| (found.involvement, found.ids))
+        .collect()
+}
+
+fn unknown_ids(
+    merged: Vec<(String, Involvement)>,
+    known: &HashSet<String>,
+) -> Vec<(String, Involvement)> {
+    merged
+        .into_iter()
+        .filter(|(id, _)| !known.contains(id))
+        .collect()
 }
 
 fn merge_ids(batches: Vec<(Involvement, Vec<String>)>) -> Vec<(String, Involvement)> {
@@ -279,6 +350,34 @@ mod tests {
     }
 
     #[test]
+    fn org_hydration_skips_ids_known_from_the_important_phase() {
+        let ids: Vec<String> = fixture_prs().into_iter().map(|pr| pr.id.0).collect();
+        let requested = Involvement {
+            requested: true,
+            ..Involvement::default()
+        };
+        let important = merge_ids(vec![(requested, vec![ids[0].clone()])]);
+        let known: HashSet<String> = important.iter().map(|(id, _)| id.clone()).collect();
+
+        let pending = unknown_ids(
+            merge_ids(vec![
+                (Involvement::default(), vec![ids[0].clone(), ids[1].clone()]),
+                (Involvement::default(), vec![ids[2].clone()]),
+            ]),
+            &known,
+        );
+
+        assert_eq!(
+            pending,
+            vec![
+                (ids[1].clone(), Involvement::default()),
+                (ids[2].clone(), Involvement::default()),
+            ]
+        );
+        assert_eq!(important, vec![(ids[0].clone(), requested)]);
+    }
+
+    #[test]
     fn ids_page_fixture_skips_non_pull_request_nodes() {
         let envelope: Envelope<IdsData> =
             serde_json::from_str(include_str!("../tests/fixtures/search_page.json")).unwrap();
@@ -303,11 +402,11 @@ mod tests {
     }
 
     #[test]
-    fn searches_cover_the_five_inbox_queries() {
-        let orgs = vec!["orbita-health".to_string()];
-        let queries: Vec<String> = searches(&orgs, "2026-10-26")
-            .into_iter()
-            .map(|search| search.query)
+    fn important_searches_cover_the_four_me_queries_without_a_page_cap() {
+        let searches = important_searches("2026-10-26");
+        let queries: Vec<&str> = searches
+            .iter()
+            .map(|search| search.query.as_str())
             .collect();
         assert_eq!(
             queries,
@@ -316,8 +415,57 @@ mod tests {
                 "is:pr is:open assignee:@me",
                 "is:pr author:@me updated:>=2026-10-26",
                 "is:pr is:open reviewed-by:@me -author:@me",
-                "is:pr org:orbita-health updated:>=2026-10-26",
             ]
+        );
+        assert!(
+            searches
+                .iter()
+                .all(|search| search.page_size == PAGE_SIZE && search.limit == SEARCH_RESULT_LIMIT)
+        );
+    }
+
+    #[test]
+    fn org_searches_fetch_depth_pages_of_fifty() {
+        let orgs = vec![
+            ("orbita-health".to_string(), 1),
+            ("nimbus".to_string(), 3),
+            ("vela".to_string(), 0),
+            ("atlas".to_string(), 40),
+        ];
+        let searches = org_searches(&orgs, "2026-10-26");
+        let plan: Vec<(&str, usize, usize)> = searches
+            .iter()
+            .map(|search| (search.query.as_str(), search.page_size, search.limit))
+            .collect();
+        assert_eq!(
+            plan,
+            vec![
+                (
+                    "is:pr org:orbita-health updated:>=2026-10-26 sort:updated-desc",
+                    50,
+                    50
+                ),
+                (
+                    "is:pr org:nimbus updated:>=2026-10-26 sort:updated-desc",
+                    50,
+                    150
+                ),
+                (
+                    "is:pr org:vela updated:>=2026-10-26 sort:updated-desc",
+                    50,
+                    50
+                ),
+                (
+                    "is:pr org:atlas updated:>=2026-10-26 sort:updated-desc",
+                    50,
+                    1000
+                ),
+            ]
+        );
+        assert!(
+            searches
+                .iter()
+                .all(|search| search.involvement == Involvement::default())
         );
     }
 }

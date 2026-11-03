@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use argon_core::{PullRequest, ViewSet, classify};
 use argon_github::{GithubClient, discover_accounts, token_for};
 use chrono::Utc;
@@ -24,16 +26,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("== {} ({})", account.host, account.login);
         let client = GithubClient::new(&account.host, token_for(&account.host).await?);
         let viewer = client.viewer().await?;
-        let admin_orgs: Vec<String> = viewer
+        let admin_orgs: Vec<(String, usize)> = viewer
             .orgs
             .iter()
             .filter(|org| org.can_admin)
-            .map(|org| org.login.clone())
+            .map(|org| (org.login.clone(), 1))
             .collect();
-        let prs = client
-            .fetch_inbox(&viewer.login, &admin_orgs, CLOSED_WINDOW_DAYS)
+        let mut prs = client.fetch_important(CLOSED_WINDOW_DAYS).await?;
+        let known: HashSet<String> = prs.iter().map(|pr| pr.id.0.clone()).collect();
+        let orgs = client
+            .fetch_orgs(&admin_orgs, &known, CLOSED_WINDOW_DAYS)
             .await?;
+        prs.extend(orgs.prs);
         print_summary(&prs, &viewer.login);
+        println!("orgs with more pages: {:?}", orgs.orgs_with_more);
         println!("dropped nodes: {}", client.dropped_nodes());
         for pr in &prs {
             println!("{}#{} {}", pr.repo, pr.number, pr.title);

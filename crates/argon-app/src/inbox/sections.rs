@@ -10,6 +10,7 @@ use super::labels;
 pub enum InboxRow {
     Header { title: SharedString, count: usize },
     Pr { position: usize },
+    LoadMore,
 }
 
 #[derive(Default)]

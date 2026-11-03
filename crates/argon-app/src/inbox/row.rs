@@ -1,10 +1,13 @@
 use argon_core::{ChecksState, PullRequest};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex,
+};
 use gpui_kit::{
-    App, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful, Styled as _,
-    div, prelude::FluentBuilder as _, px,
+    App, ClickEvent, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
+    Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::InboxItem;
@@ -54,6 +57,27 @@ pub fn header(title: SharedString, count: usize, cx: &App) -> Div {
             div()
                 .text_color(theme.muted_foreground)
                 .child(count.to_string()),
+        )
+}
+
+pub fn load_more(
+    loading: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Div {
+    h_flex()
+        .w_full()
+        .h(px(pr_row_height(cx)))
+        .items_center()
+        .justify_center()
+        .child(
+            Button::new("inbox-load-more")
+                .label(labels::LOAD_MORE)
+                .small()
+                .outline()
+                .loading(loading)
+                .disabled(loading)
+                .on_click(on_click),
         )
 }
 

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use argon_core::Config;
 use argon_github::{Account, GithubClient, Viewer};
@@ -19,6 +19,15 @@ pub(super) struct Shared {
     accounts: RwLock<Vec<Account>>,
     admin_orgs: RwLock<Vec<String>>,
     clients: RwLock<HashMap<String, Arc<GithubClient>>>,
+    org_pages: Mutex<OrgPages>,
+}
+
+#[derive(Default)]
+struct OrgPages {
+    depths: HashMap<String, usize>,
+    with_more: HashSet<String>,
+    requested: u64,
+    served: u64,
 }
 
 impl Shared {
@@ -31,7 +40,65 @@ impl Shared {
             accounts: RwLock::default(),
             admin_orgs: RwLock::default(),
             clients: RwLock::default(),
+            org_pages: Mutex::default(),
         }
+    }
+
+    pub(super) fn org_depths(&self, host: &str, orgs: Vec<String>) -> Vec<(String, usize)> {
+        let pages = self.org_pages();
+        orgs.into_iter()
+            .map(|org| {
+                let depth = pages.depths.get(&org_key(host, &org)).copied();
+                (org, depth.unwrap_or(1))
+            })
+            .collect()
+    }
+
+    pub(super) fn set_orgs_with_more(&self, host: &str, orgs: &[String]) {
+        let prefix = org_key(host, "");
+        let mut pages = self.org_pages();
+        pages.with_more.retain(|key| !key.starts_with(&prefix));
+        pages
+            .with_more
+            .extend(orgs.iter().map(|org| org_key(host, org)));
+    }
+
+    pub(super) fn orgs_with_more(&self) -> Vec<String> {
+        self.org_pages().with_more.iter().cloned().collect()
+    }
+
+    pub(super) fn request_more_orgs(&self) -> u64 {
+        let mut pages = self.org_pages();
+        let OrgPages {
+            depths,
+            with_more,
+            requested,
+            ..
+        } = &mut *pages;
+        for key in with_more.iter() {
+            *depths.entry(key.clone()).or_insert(1) += 1;
+        }
+        *requested += 1;
+        *requested
+    }
+
+    pub(super) fn more_orgs_requested(&self) -> u64 {
+        self.org_pages().requested
+    }
+
+    pub(super) fn serve_more_orgs(&self, generation: u64) {
+        let mut pages = self.org_pages();
+        pages.served = pages.served.max(generation);
+    }
+
+    pub(super) fn more_orgs_served(&self) -> u64 {
+        self.org_pages().served
+    }
+
+    fn org_pages(&self) -> MutexGuard<'_, OrgPages> {
+        self.org_pages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(super) fn config(&self) -> Config {
@@ -184,4 +251,8 @@ impl Shared {
 
 fn host_key(host: &str) -> String {
     host.to_ascii_lowercase()
+}
+
+fn org_key(host: &str, org: &str) -> String {
+    format!("{}/{}", host_key(host), org.to_ascii_lowercase())
 }

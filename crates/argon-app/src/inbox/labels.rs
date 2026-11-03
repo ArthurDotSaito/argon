@@ -16,6 +16,7 @@ pub const NO_ORGS: &str = "Nenhuma org rastreada";
 pub const FILTER_PLACEHOLDER: &str = "Filtrar por título, repo, autor, branch…";
 pub const FILTER_SHORTCUT: &str = "/";
 pub const LOADING: &str = "Carregando PRs…";
+pub const LOAD_MORE: &str = "Carregar mais";
 pub const EMPTY_VIEW: &str = "Nenhum PR nesta visão.";
 pub const EMPTY_FILTER: &str = "Nenhum PR corresponde ao filtro.";
 pub const NEEDS_YOU_SECTION: &str = "Needs you";

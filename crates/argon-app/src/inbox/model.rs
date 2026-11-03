@@ -40,6 +40,8 @@ pub struct InboxModel {
     action_error: Option<SharedString>,
     load_task: Option<Task<()>>,
     local_epoch: u64,
+    orgs_with_more: Vec<OrgKey>,
+    awaiting_more: Option<u64>,
     _sync_subscription: Subscription,
 }
 
@@ -49,11 +51,14 @@ impl InboxModel {
         sync_status: &Entity<SyncStatus>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let sync_subscription = cx.subscribe(sync_status, |this, _, event: &SyncEvent, cx| {
-            if matches!(event, SyncEvent::Finished { .. }) {
-                this.reload(cx);
-            }
-        });
+        let sync_subscription =
+            cx.subscribe(sync_status, |this, _, event: &SyncEvent, cx| match event {
+                SyncEvent::Partial | SyncEvent::Finished { .. } => this.reload(cx),
+                SyncEvent::Failed { .. } | SyncEvent::AuthMissing { .. } => {
+                    this.stop_loading_more(cx)
+                }
+                SyncEvent::Started => {}
+            });
         let mut this = Self {
             services,
             items: Vec::new(),
@@ -73,6 +78,8 @@ impl InboxModel {
             action_error: None,
             load_task: None,
             local_epoch: 0,
+            orgs_with_more: Vec::new(),
+            awaiting_more: None,
             _sync_subscription: sync_subscription,
         };
         this.refresh_meta();
@@ -158,6 +165,54 @@ impl InboxModel {
     pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
         let ix = *self.index.get(key)?;
         self.items.get(ix).map(|item| &item.pr)
+    }
+
+    pub fn is_loading_more(&self) -> bool {
+        self.awaiting_more.is_some()
+    }
+
+    pub fn load_more(&mut self, cx: &mut Context<Self>) {
+        if self.awaiting_more.is_some() {
+            return;
+        }
+        self.awaiting_more = Some(self.services.load_more_orgs());
+        self.refilter(false);
+        cx.notify();
+    }
+
+    fn stop_loading_more(&mut self, cx: &mut Context<Self>) {
+        if self.awaiting_more.take().is_some() {
+            self.refilter(false);
+            cx.notify();
+        }
+    }
+
+    fn refresh_more(&mut self) {
+        self.orgs_with_more = self
+            .services
+            .orgs_with_more()
+            .iter()
+            .filter_map(|entry| entry.split_once('/'))
+            .map(|(host, owner)| OrgKey::new(host, owner))
+            .collect();
+        let served = self.services.more_orgs_served();
+        if self
+            .awaiting_more
+            .is_some_and(|generation| generation <= served)
+        {
+            self.awaiting_more = None;
+        }
+    }
+
+    fn shows_load_more(&self) -> bool {
+        if self.view != InboxView::Inbox {
+            return false;
+        }
+        self.awaiting_more.is_some()
+            || match &self.org {
+                Some(org) => self.orgs_with_more.contains(org),
+                None => !self.orgs_with_more.is_empty(),
+            }
     }
 
     pub fn show_view(&mut self, view: InboxView, cx: &mut Context<Self>) {
@@ -320,6 +375,7 @@ impl InboxModel {
                 self.loaded = true;
                 self.load_error = None;
                 self.refresh_meta();
+                self.refresh_more();
                 self.recount();
                 self.refilter(false);
             }
@@ -434,6 +490,9 @@ impl InboxModel {
             .map(|(ix, _)| ix)
             .collect();
         self.sections = Sections::build(&self.items, matches, self.view, Local::now());
+        if !self.sections.rows.is_empty() && self.shows_load_more() {
+            self.sections.rows.push(InboxRow::LoadMore);
+        }
         let last = self.visible_count().saturating_sub(1);
         self.selected = if reset_scroll {
             0

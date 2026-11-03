@@ -337,6 +337,17 @@ fn render_list_row(
                 })
                 .into_any_element()
         }
+        Some(InboxRow::LoadMore) => {
+            let target = inbox.downgrade();
+            row::load_more(
+                model.is_loading_more(),
+                move |_, _, cx| {
+                    _ = target.update(cx, |model, cx| model.load_more(cx));
+                },
+                cx,
+            )
+            .into_any_element()
+        }
         None => div().into_any_element(),
     }
 }

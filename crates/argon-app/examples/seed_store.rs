@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prs: Vec<PullRequest> = (0..PR_COUNT)
         .map(|index| fake_pr(index, now, &mut rng))
         .collect();
-    store.replace_prs(DEFAULT_HOST, &prs)?;
+    store.upsert_prs(DEFAULT_HOST, &prs)?;
     store.save_viewer(DEFAULT_HOST, ME, &[])?;
     println!(
         "seeded {} pull requests into {}",

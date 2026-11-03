@@ -60,6 +60,20 @@ impl Services {
         _ = self.requests.unbounded_send(SyncRequest);
     }
 
+    pub fn orgs_with_more(&self) -> Vec<String> {
+        self.shared.orgs_with_more()
+    }
+
+    pub fn load_more_orgs(&self) -> u64 {
+        let generation = self.shared.request_more_orgs();
+        self.sync_now();
+        generation
+    }
+
+    pub fn more_orgs_served(&self) -> u64 {
+        self.shared.more_orgs_served()
+    }
+
     pub fn store(&self) -> StoreHandle {
         self.store.clone()
     }
