@@ -1,5 +1,6 @@
 mod card;
 mod model;
+mod store_ops;
 mod summary;
 
 pub use card::{DraftActions, draft_blocks};

@@ -1,6 +1,8 @@
 use argon_core::Side;
 use gpui_kit::component::diff::{DiffLinePosition, DiffLineRange, DiffSide};
 
+use crate::review::file_diff::LinePos;
+
 pub fn kit_side(side: Side) -> DiffSide {
     match side {
         Side::Left => DiffSide::Original,
@@ -35,31 +37,50 @@ pub struct GutterRange {
     pub line: u32,
     pub side: Side,
     pub start: Option<(u32, Side)>,
+    pub crossed_hunks: bool,
 }
 
 pub fn gutter_range(
     range: &DiffLineRange,
-    order: impl Fn((u32, Side)) -> Option<usize>,
+    pos: impl Fn((u32, Side)) -> Option<LinePos>,
 ) -> GutterRange {
     let first = (range.start() as u32, app_side(range.side()));
     let last = (range.end() as u32, app_side(range.end_side()));
-    let (start, end) = match (order(first), order(last)) {
-        (Some(a), Some(b)) if b < a => (last, first),
+    let (a, b) = (pos(first), pos(last));
+    let (start, end) = match (a, b) {
+        (Some(a), Some(b)) if b.order < a.order => (last, first),
         _ => (first, last),
     };
+    let crossed_hunks = start != end && !same_hunk(a, b);
     GutterRange {
         path: range.path().to_string(),
         line: end.0,
         side: end.1,
-        start: (start != end).then_some(start),
+        start: (start != end && !crossed_hunks).then_some(start),
+        crossed_hunks,
     }
+}
+
+fn same_hunk(a: Option<LinePos>, b: Option<LinePos>) -> bool {
+    matches!((a, b), (Some(a), Some(b)) if a.hunk == b.hunk)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn unified_order(anchor: (u32, Side)) -> Option<usize> {
+    fn unified_order(anchor: (u32, Side)) -> Option<LinePos> {
+        unified_index(anchor).map(|order| LinePos { order, hunk: 0 })
+    }
+
+    fn two_hunks(anchor: (u32, Side)) -> Option<LinePos> {
+        unified_index(anchor).map(|order| LinePos {
+            order,
+            hunk: usize::from(order >= 4),
+        })
+    }
+
+    fn unified_index(anchor: (u32, Side)) -> Option<usize> {
         [
             ((8, Side::Left), 0),
             ((8, Side::Right), 0),
@@ -85,8 +106,40 @@ mod tests {
                 line: 9,
                 side: Side::Right,
                 start: None,
+                crossed_hunks: false,
             }
         );
+    }
+
+    #[test]
+    fn range_across_hunks_collapses_to_the_last_line() {
+        let gutter = gutter_range(
+            &range("a.rs", (9, Side::Right), (11, Side::Right)),
+            two_hunks,
+        );
+        assert!(gutter.crossed_hunks);
+        assert_eq!(gutter.start, None);
+        assert_eq!((gutter.line, gutter.side), (11, Side::Right));
+    }
+
+    #[test]
+    fn range_inside_one_hunk_keeps_its_start() {
+        let gutter = gutter_range(
+            &range("a.rs", (12, Side::Right), (10, Side::Right)),
+            two_hunks,
+        );
+        assert!(!gutter.crossed_hunks);
+        assert_eq!(gutter.start, Some((10, Side::Right)));
+    }
+
+    #[test]
+    fn range_with_unknown_line_is_not_trusted() {
+        let gutter = gutter_range(
+            &range("a.rs", (99, Side::Right), (10, Side::Right)),
+            two_hunks,
+        );
+        assert!(gutter.crossed_hunks);
+        assert_eq!(gutter.start, None);
     }
 
     #[test]

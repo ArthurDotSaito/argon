@@ -26,12 +26,18 @@ pub struct FileMeta {
     pub deletions: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinePos {
+    pub order: usize,
+    pub hunk: usize,
+}
+
 #[derive(Clone)]
 pub struct FileDiff {
     pub meta: FileMeta,
     pub body: FileBody,
     pub document: DiffFile,
-    pub order: Arc<HashMap<(u32, Side), usize>>,
+    pub order: Arc<HashMap<(u32, Side), LinePos>>,
     pub fingerprint: u64,
     pub viewed: bool,
 }
@@ -41,7 +47,7 @@ impl FileDiff {
         self.order.contains_key(&anchor)
     }
 
-    pub fn line_order(&self, anchor: (u32, Side)) -> Option<usize> {
+    pub fn line_pos(&self, anchor: (u32, Side)) -> Option<LinePos> {
         self.order.get(&anchor).copied()
     }
 }
@@ -75,14 +81,19 @@ pub fn synthetic_patch(meta: &FileMeta, body: Option<&str>) -> String {
     out
 }
 
-pub fn patch_order(hunks: &[Hunk]) -> HashMap<(u32, Side), usize> {
+pub fn patch_order(hunks: &[Hunk]) -> HashMap<(u32, Side), LinePos> {
     let mut order = HashMap::new();
-    for (ix, line) in hunks.iter().flat_map(|hunk| hunk.lines.iter()).enumerate() {
+    let lines = hunks
+        .iter()
+        .enumerate()
+        .flat_map(|(hunk, h)| h.lines.iter().map(move |line| (hunk, line)));
+    for (ix, (hunk, line)) in lines.enumerate() {
+        let pos = LinePos { order: ix, hunk };
         if let (Some(old), false) = (line.old_no, line.kind == LineKind::Added) {
-            order.insert((old, Side::Left), ix);
+            order.insert((old, Side::Left), pos);
         }
         if let (Some(new), false) = (line.new_no, line.kind == LineKind::Removed) {
-            order.insert((new, Side::Right), ix);
+            order.insert((new, Side::Right), pos);
         }
     }
     order
@@ -222,10 +233,22 @@ mod tests {
         assert!(prepared.has_line((2, Side::Left)));
         assert!(prepared.has_line((2, Side::Right)));
         assert!(!prepared.has_line((3, Side::Right)));
-        assert_eq!(prepared.line_order((1, Side::Left)), Some(0));
-        assert_eq!(prepared.line_order((1, Side::Right)), Some(0));
-        assert_eq!(prepared.line_order((2, Side::Left)), Some(1));
-        assert_eq!(prepared.line_order((2, Side::Right)), Some(2));
+        assert_eq!(
+            prepared.line_pos((1, Side::Left)).map(|pos| pos.order),
+            Some(0)
+        );
+        assert_eq!(
+            prepared.line_pos((1, Side::Right)).map(|pos| pos.order),
+            Some(0)
+        );
+        assert_eq!(
+            prepared.line_pos((2, Side::Left)).map(|pos| pos.order),
+            Some(1)
+        );
+        assert_eq!(
+            prepared.line_pos((2, Side::Right)).map(|pos| pos.order),
+            Some(2)
+        );
     }
 
     #[test]

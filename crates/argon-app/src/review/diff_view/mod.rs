@@ -60,6 +60,7 @@ pub enum DiffViewEvent {
         line: u32,
         side: Side,
         start: Option<(u32, Side)>,
+        crossed_hunks: bool,
     },
     ViewedToggled {
         path: String,
@@ -336,12 +337,13 @@ impl DiffView {
         else {
             return;
         };
-        let gutter = gutter_range(range, |anchor| file.line_order(anchor));
+        let gutter = gutter_range(range, |anchor| file.line_pos(anchor));
         cx.emit(DiffViewEvent::GutterClicked {
             path: gutter.path,
             line: gutter.line,
             side: gutter.side,
             start: gutter.start,
+            crossed_hunks: gutter.crossed_hunks,
         });
     }
 }

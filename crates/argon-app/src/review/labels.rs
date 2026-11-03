@@ -63,6 +63,12 @@ pub const SUBMIT_REVIEW: &str = "Submit review";
 pub const DISCARD_REVIEW: &str = "Descartar review";
 pub const DISCARD_REVIEW_TITLE: &str = "Descartar review?";
 pub const REVIEW_SENT: &str = "Review enviada";
+pub const DIFF_STALE: &str = "O diff exibido está desatualizado — recarregue antes de enviar";
+pub const RELOAD: &str = "Recarregar";
+pub const CROSSED_HUNKS: &str =
+    "Comentários de várias linhas precisam estar no mesmo trecho do diff";
+pub const SUSPECT_DRAFT: &str = "O GitHub recusou esta linha";
+pub const WAIT_FOR_SEND: &str = "Aguarde o envio do comentário terminar antes de trocar o escopo";
 pub const OLD_SIDE_SUFFIX: &str = " (versão antiga)";
 pub const UNKNOWN_DRAFT: &str = "um rascunho";
 pub const REVIEW_EMPTY: &str = "Escreva um comentário geral ou adicione comentários nas linhas.";
@@ -162,6 +168,30 @@ pub fn reply_failed(error: &str) -> String {
 
 pub fn resolve_failed(error: &str) -> String {
     format!("Falha ao atualizar a conversa: {error}")
+}
+
+pub fn review_sent_in(number: u64) -> String {
+    format!("Review enviada em #{number}")
+}
+
+pub fn submit_failed_in(number: u64, error: &str) -> String {
+    format!("Falha ao enviar a review em #{number}: {error}")
+}
+
+pub fn comment_sent_in(number: u64) -> String {
+    format!("Comentário publicado em #{number}")
+}
+
+pub fn reply_sent_in(number: u64) -> String {
+    format!("Resposta enviada em #{number}")
+}
+
+pub fn thread_updated_in(number: u64) -> String {
+    format!("Conversa atualizada em #{number}")
+}
+
+pub fn mutation_failed_in(number: u64, error: &str) -> String {
+    format!("Falha em #{number}: {error}")
 }
 
 pub fn submit_failed(error: &str) -> String {

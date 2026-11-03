@@ -19,6 +19,30 @@ impl Drop for AbortOnDrop {
     }
 }
 
+pub(super) fn run_detached<F, R>(
+    runtime: Option<&Handle>,
+    fut: F,
+) -> impl Future<Output = Result<R, ServiceError>> + Send + 'static + use<F, R>
+where
+    F: Future<Output = Result<R, ServiceError>> + Send + 'static,
+    R: Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel();
+    if let Some(runtime) = runtime {
+        runtime.spawn(async move {
+            let result = AssertUnwindSafe(fut).catch_unwind().await;
+            _ = sender.send(result.ok());
+        });
+    }
+    async move {
+        match receiver.await {
+            Ok(Some(result)) => result,
+            Ok(None) => Err(ServiceError::Panicked),
+            Err(_) => Err(ServiceError::Stopped),
+        }
+    }
+}
+
 pub(super) fn run_on<F, R>(
     runtime: Option<&Handle>,
     cx: &App,

@@ -29,6 +29,7 @@ pub struct DraftActions {
 pub fn draft_blocks(
     drafts: &[DraftComment],
     hidden: Option<i64>,
+    suspects: &[i64],
     viewer: Option<&str>,
     actions: &DraftActions,
 ) -> HashMap<String, Vec<InlineBlock>> {
@@ -39,8 +40,10 @@ pub fn draft_blocks(
         let render_draft = draft.clone();
         let render_author = author.clone();
         let render_actions = actions.clone();
-        let render: BlockRender =
-            Rc::new(move |_, cx| draft_card(&render_draft, &render_author, &render_actions, cx));
+        let suspect = suspects.contains(&draft.id);
+        let render: BlockRender = Rc::new(move |_, cx| {
+            draft_card(&render_draft, &render_author, suspect, &render_actions, cx)
+        });
         let start = draft
             .start_line
             .map(|line| (line, draft.start_side.unwrap_or(draft.side)));
@@ -59,6 +62,7 @@ pub fn draft_blocks(
 fn draft_card(
     draft: &DraftComment,
     author: &SharedString,
+    suspect: bool,
     actions: &DraftActions,
     cx: &mut App,
 ) -> AnyElement {
@@ -83,6 +87,7 @@ fn draft_card(
         )
         .child(pill(labels::PENDING, theme.warning))
         .children(ai)
+        .children(suspect.then(|| pill(labels::SUSPECT_DRAFT, theme.danger)))
         .child(div().flex_1())
         .child(
             Button::new(("draft-edit", id as u64))
@@ -107,7 +112,11 @@ fn draft_card(
         .gap_1()
         .rounded(theme.radius)
         .border_1()
-        .border_color(theme.warning.opacity(0.5))
+        .border_color(if suspect {
+            theme.danger
+        } else {
+            theme.warning.opacity(0.5)
+        })
         .bg(theme.background)
         .text_sm()
         .font_family(theme.font_family.clone())
@@ -152,6 +161,7 @@ mod tests {
             body: "x".to_string(),
             source: DraftSource::User,
             session_id: None,
+            head_oid: None,
         }
     }
 
@@ -169,7 +179,7 @@ mod tests {
             draft(2, "a.ts", None),
             draft(3, "b.ts", None),
         ];
-        let blocks = draft_blocks(&drafts, Some(2), None, &actions());
+        let blocks = draft_blocks(&drafts, Some(2), &[], None, &actions());
         let a = &blocks["a.ts"];
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].key.as_ref(), "draft-1");

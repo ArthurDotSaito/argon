@@ -48,6 +48,7 @@ pub enum CommentEditorEvent {
 pub struct CommentEditor {
     kind: EditorKind,
     caption: Option<SharedString>,
+    notice: Option<SharedString>,
     input: Entity<TextareaState>,
     busy: Option<EditorAction>,
     error: Option<SharedString>,
@@ -61,6 +62,7 @@ impl CommentEditor {
     pub fn new(
         kind: EditorKind,
         caption: Option<SharedString>,
+        notice: Option<SharedString>,
         initial: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -91,6 +93,7 @@ impl CommentEditor {
         Self {
             kind,
             caption,
+            notice,
             input,
             busy: None,
             error: None,
@@ -181,6 +184,10 @@ impl Render for CommentEditor {
                 .text_color(theme.muted_foreground)
                 .child(caption)
         });
+        let notice = self
+            .notice
+            .clone()
+            .map(|notice| div().text_xs().text_color(theme.warning).child(notice));
         let error = self.error.clone().map(|error| {
             div()
                 .flex_1()
@@ -211,6 +218,7 @@ impl Render for CommentEditor {
             .bg(theme.background)
             .text_sm()
             .children(caption)
+            .children(notice)
             .child(Textarea::new(&self.input).disabled(busy))
             .child(
                 h_flex()

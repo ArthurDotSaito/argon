@@ -6,6 +6,7 @@ mod file_diff;
 mod file_tree;
 mod finish_popover;
 mod labels;
+mod mutation;
 mod review_bar;
 mod review_tab;
 mod status_badge;

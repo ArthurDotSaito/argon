@@ -1,6 +1,7 @@
 use argon_core::{DraftComment, DraftSource, Side, single_comment_submission};
 use futures::FutureExt as _;
 use futures::future::LocalBoxFuture;
+use gpui_kit::component::notification::Notification;
 use gpui_kit::{App, AppContext as _, Context, Entity, SharedString, Subscription, Window};
 
 use super::{ReviewScope, ReviewTab, ReviewTabEvent};
@@ -8,6 +9,7 @@ use crate::review::comment_editor::{CommentEditor, CommentEditorEvent, EditorAct
 use crate::review::confirm::{Confirm, confirm};
 use crate::review::drafts::comment_body;
 use crate::review::labels;
+use crate::review::mutation::run_detached;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorTarget {
@@ -43,6 +45,7 @@ impl ReviewTab {
         path: String,
         anchor: (u32, Side),
         start: Option<(u32, Side)>,
+        crossed_hunks: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -55,7 +58,8 @@ impl ReviewTab {
             start,
             draft: None,
         };
-        self.request_editor(target, String::new(), window, cx);
+        let notice = crossed_hunks.then(|| labels::CROSSED_HUNKS.into());
+        self.request_editor(target, String::new(), notice, window, cx);
     }
 
     pub(super) fn open_reply_editor(
@@ -64,13 +68,20 @@ impl ReviewTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_editor(EditorTarget::Reply { thread }, String::new(), window, cx);
+        self.request_editor(
+            EditorTarget::Reply { thread },
+            String::new(),
+            None,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn request_editor(
         &mut self,
         target: EditorTarget,
         initial: String,
+        notice: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -91,19 +102,20 @@ impl ReviewTab {
                 };
                 confirm(request, window, cx, move |window, cx| {
                     _ = tab.update(cx, |tab, cx| {
-                        tab.replace_editor(target.clone(), &initial, window, cx)
+                        tab.replace_editor(target.clone(), &initial, notice.clone(), window, cx)
                     });
                 });
                 return;
             }
         }
-        self.replace_editor(target, &initial, window, cx);
+        self.replace_editor(target, &initial, notice, window, cx);
     }
 
     fn replace_editor(
         &mut self,
         target: EditorTarget,
         initial: &str,
+        notice: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -124,7 +136,7 @@ impl ReviewTab {
             ),
             EditorTarget::Reply { .. } => (EditorKind::Reply, None),
         };
-        let entity = cx.new(|cx| CommentEditor::new(kind, caption, initial, window, cx));
+        let entity = cx.new(|cx| CommentEditor::new(kind, caption, notice, initial, window, cx));
         let subscription = cx.subscribe_in(&entity, window, |this, _, event, window, cx| {
             this.on_editor_event(event, window, cx)
         });
@@ -162,7 +174,7 @@ impl ReviewTab {
         cx: &mut Context<Self>,
     ) {
         match event {
-            CommentEditorEvent::Submit(action) => self.submit_editor(*action, cx),
+            CommentEditorEvent::Submit(action) => self.submit_editor(*action, window, cx),
             CommentEditorEvent::Cancel => {
                 let Some(open) = &self.editor else {
                     return;
@@ -184,7 +196,7 @@ impl ReviewTab {
         }
     }
 
-    fn submit_editor(&mut self, action: EditorAction, cx: &mut Context<Self>) {
+    fn submit_editor(&mut self, action: EditorAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(open) = &self.editor else {
             return;
         };
@@ -192,28 +204,48 @@ impl ReviewTab {
             return;
         };
         let entity = open.entity.clone();
-        let Some(job) = self.editor_job(action, open.target.clone(), body, cx) else {
+        let target = open.target.clone();
+        let Some(number) = self.detail.as_ref().map(|detail| detail.pr.number) else {
             return;
         };
+        let job = match self.editor_job(action, target, body, cx) {
+            Ok(job) => job,
+            Err(error) => {
+                entity.update(cx, |editor, cx| editor.fail(error, cx));
+                return;
+            }
+        };
         entity.update(cx, |editor, cx| editor.set_busy(Some(action), cx));
-        self.editor_task = Some(cx.spawn(async move |this, cx| {
-            let result = job.await;
-            _ = this.update(cx, |this, cx| match result {
+        let applied = entity.clone();
+        run_detached(
+            window.window_handle(),
+            cx,
+            job,
+            move |this, result, cx| match result {
                 Ok(reload) => {
                     if this
                         .editor
                         .as_ref()
-                        .is_some_and(|open| open.entity == entity)
+                        .is_some_and(|open| open.entity == applied)
                     {
                         this.close_editor(cx);
+                    } else {
+                        applied.update(cx, |editor, cx| editor.set_busy(None, cx));
                     }
                     if reload {
                         cx.emit(ReviewTabEvent::Reload);
                     }
                 }
-                Err(error) => entity.update(cx, |editor, cx| editor.fail(error, cx)),
-            });
-        }));
+                Err(error) => applied.update(cx, |editor, cx| editor.fail(error, cx)),
+            },
+            move |result| match result {
+                Ok(_) if action == EditorAction::Reply => {
+                    Notification::success(labels::reply_sent_in(number))
+                }
+                Ok(_) => Notification::success(labels::comment_sent_in(number)),
+                Err(error) => Notification::error(labels::mutation_failed_in(number, &error)),
+            },
+        );
     }
 
     fn editor_job(
@@ -222,8 +254,9 @@ impl ReviewTab {
         target: EditorTarget,
         body: String,
         cx: &mut Context<Self>,
-    ) -> Option<Job> {
-        let detail = self.detail.clone()?;
+    ) -> Result<Job, SharedString> {
+        let unavailable = || SharedString::from(labels::SERVICES_UNAVAILABLE);
+        let detail = self.detail.clone().ok_or_else(unavailable)?;
         match (action, target) {
             (
                 EditorAction::Save,
@@ -234,7 +267,7 @@ impl ReviewTab {
                 let task = self
                     .drafts
                     .update(cx, |drafts, cx| drafts.update_body(id, body, cx));
-                Some(task.map(|result| result.map(|()| false)).boxed_local())
+                Ok(task.map(|result| result.map(|()| false)).boxed_local())
             }
             (
                 action @ (EditorAction::AddToReview | EditorAction::CommentNow),
@@ -256,39 +289,43 @@ impl ReviewTab {
                     body,
                     source: DraftSource::User,
                     session_id: None,
+                    head_oid: self.loaded_head.clone(),
                 };
                 if action == EditorAction::AddToReview {
                     let task = self.drafts.update(cx, |drafts, cx| drafts.add(draft, cx));
-                    return Some(task.map(|result| result.map(|()| false)).boxed_local());
+                    return Ok(task.map(|result| result.map(|()| false)).boxed_local());
                 }
+                let head = self.displayed_head(cx).ok_or(labels::DIFF_STALE)?;
                 let submission = single_comment_submission(&draft);
-                let (id, head) = (detail.pr.id.clone(), detail.head_oid.clone());
-                let task = self.github(cx, move |client| async move {
-                    client.submit_review(&id, &head, &submission).await
-                })?;
-                Some(
-                    task.map(|result| {
+                let id = detail.pr.id.clone();
+                let task = self
+                    .github_detached(move |client| async move {
+                        client.submit_review(&id, &head, &submission).await
+                    })
+                    .ok_or_else(unavailable)?;
+                Ok(task
+                    .map(|result| {
                         result
                             .map(|_| true)
                             .map_err(|error| labels::comment_failed(&error.to_string()).into())
                     })
-                    .boxed_local(),
-                )
+                    .boxed_local())
             }
             (EditorAction::Reply, EditorTarget::Reply { thread }) => {
-                let task = self.github(cx, move |client| async move {
-                    client.reply_thread(&thread, &body).await
-                })?;
-                Some(
-                    task.map(|result| {
+                let task = self
+                    .github_detached(move |client| async move {
+                        client.reply_thread(&thread, &body).await
+                    })
+                    .ok_or_else(unavailable)?;
+                Ok(task
+                    .map(|result| {
                         result
                             .map(|()| true)
                             .map_err(|error| labels::reply_failed(&error.to_string()).into())
                     })
-                    .boxed_local(),
-                )
+                    .boxed_local())
             }
-            _ => None,
+            _ => Err(unavailable()),
         }
     }
 }

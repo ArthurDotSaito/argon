@@ -68,8 +68,36 @@ pub fn summarize(drafts: &[DraftComment]) -> Vec<DraftSummary> {
     items
 }
 
-pub fn head_moved(session_head: Option<&str>, current: Option<&str>) -> bool {
-    matches!((session_head, current), (Some(session), Some(current)) if session != current)
+pub fn head_moved(drafts: &[DraftComment], diff_head: Option<&str>) -> bool {
+    let Some(diff_head) = diff_head else {
+        return false;
+    };
+    drafts
+        .iter()
+        .filter_map(|draft| draft.head_oid.as_deref())
+        .any(|head| head != diff_head)
+}
+
+pub fn is_ranged(draft: &DraftComment) -> bool {
+    draft.start_line.is_some_and(|start| start != draft.line)
+}
+
+const LINE_HINTS: [&str; 5] = ["line", "thread", "hunk", "position", "diff"];
+
+pub fn suspect_drafts(message: &str, drafts: &[DraftComment]) -> Vec<i64> {
+    let message = message.to_lowercase();
+    if !LINE_HINTS.iter().any(|hint| message.contains(hint)) {
+        return Vec::new();
+    }
+    let (ranged, single): (Vec<&DraftComment>, Vec<&DraftComment>) =
+        drafts.iter().partition(|draft| is_ranged(draft));
+    let only_ranges = message.contains("start_line") || message.contains("startline");
+    let suspects: Vec<&DraftComment> = if only_ranges && !ranged.is_empty() {
+        ranged
+    } else {
+        ranged.into_iter().chain(single).collect()
+    };
+    suspects.into_iter().map(|draft| draft.id).collect()
 }
 
 pub fn comment_body(text: &str) -> Option<String> {
@@ -111,6 +139,14 @@ mod tests {
             body: format!("body {id}"),
             source: DraftSource::User,
             session_id: None,
+            head_oid: None,
+        }
+    }
+
+    fn at_head(id: i64, head: Option<&str>) -> DraftComment {
+        DraftComment {
+            head_oid: head.map(str::to_string),
+            ..draft(id, "a.ts", 1, Side::Right, None)
         }
     }
 
@@ -167,11 +203,25 @@ mod tests {
     }
 
     #[test]
-    fn head_moved_only_when_session_head_differs() {
-        assert!(!head_moved(None, Some("abc")));
-        assert!(!head_moved(Some("abc"), Some("abc")));
-        assert!(!head_moved(Some("abc"), None));
-        assert!(head_moved(Some("abc"), Some("def")));
+    fn head_moved_when_a_persisted_draft_head_differs_from_the_diff() {
+        let same = vec![at_head(1, Some("abc")), at_head(2, None)];
+        assert!(!head_moved(&same, Some("abc")));
+        assert!(!head_moved(&same, None));
+        assert!(!head_moved(&[at_head(1, None)], Some("def")));
+        assert!(head_moved(&same, Some("def")));
+    }
+
+    #[test]
+    fn line_errors_suspect_ranges_first() {
+        let drafts = vec![
+            draft(1, "a.ts", 4, Side::Right, None),
+            draft(2, "a.ts", 9, Side::Right, Some(6)),
+        ];
+        let line_error = "pull_request_review_thread.line must be part of the diff";
+        assert_eq!(suspect_drafts(line_error, &drafts), vec![2, 1]);
+        let range_error = "pull_request_review_thread.start_line must be part of the same hunk";
+        assert_eq!(suspect_drafts(range_error, &drafts), vec![2]);
+        assert!(suspect_drafts("Resource not accessible by integration", &drafts).is_empty());
     }
 
     #[test]

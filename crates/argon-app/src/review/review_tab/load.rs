@@ -86,7 +86,12 @@ impl ReviewTab {
     fn apply_files(&mut self, files: Vec<FileDiff>, head: String, cx: &mut Context<Self>) {
         self.files = Files::Ready;
         let all = self.scope == ReviewScope::All;
-        self.loaded_head = all.then_some(head);
+        if all {
+            self.loaded_head = Some(head);
+            let diff_head = self.loaded_head.clone();
+            self.drafts
+                .update(cx, |drafts, cx| drafts.set_diff_head(diff_head, cx));
+        }
         let url = self.detail.as_ref().map(|detail| match &self.scope {
             ReviewScope::All => format!("{}/files", detail.pr.url),
             ReviewScope::Commit { oid, .. } => format!("{}/commits/{oid}", detail.pr.url),

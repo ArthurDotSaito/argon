@@ -30,7 +30,7 @@ impl ReviewTab {
                 .map(|line| (line, draft.start_side.unwrap_or(draft.side))),
             draft: Some(id),
         };
-        self.request_editor(target, draft.body, window, cx);
+        self.request_editor(target, draft.body, None, window, cx);
     }
 
     fn delete_draft(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -58,9 +58,11 @@ impl ReviewTab {
         };
         let mut blocks = if self.scope == ReviewScope::All {
             let actions = self.draft_actions(cx);
+            let drafts = self.drafts.read(cx);
             draft_blocks(
-                self.drafts.read(cx).drafts(),
+                drafts.drafts(),
                 editing,
+                drafts.suspects(),
                 self.viewer_login.as_deref(),
                 &actions,
             )

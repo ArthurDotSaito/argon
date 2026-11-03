@@ -107,6 +107,33 @@ impl ReviewTab {
             .child(inline)
     }
 
+    fn stale_banner(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let visible = self.scope == ReviewScope::All
+            && matches!(self.files, Files::Ready)
+            && self.drafts.read(cx).stale();
+        if !visible {
+            return None;
+        }
+        let reload = div()
+            .id("review-stale-reload")
+            .flex_none()
+            .text_color(cx.theme().link)
+            .cursor_pointer()
+            .hover(|style| style.underline())
+            .child(labels::RELOAD)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload_diff(cx)));
+        let warning = cx.theme().warning;
+        Some(
+            banner(
+                labels::DIFF_STALE.into(),
+                warning,
+                IconName::TriangleAlert,
+                cx,
+            )
+            .child(reload),
+        )
+    }
+
     fn bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         let drafts = self.drafts.read(cx);
         if !drafts.in_progress() && self.scope != ReviewScope::All {
@@ -225,11 +252,13 @@ impl Render for ReviewTab {
             ReviewScope::Commit { oid, headline } => Some(self.commit_banner(&oid, &headline, cx)),
             ReviewScope::All => None,
         };
+        let stale = self.stale_banner(cx);
         let body = self.body(cx);
         let bar = self.bar(cx);
         v_flex()
             .size_full()
             .children(notice)
+            .children(stale)
             .children(commit)
             .children(error)
             .children(outside)

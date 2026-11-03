@@ -20,6 +20,7 @@ use super::file_tree::{FileTree, FileTreeEvent};
 use super::finish_popover::FinishReview;
 use super::labels;
 use super::threads::{ThreadUi, ThreadUiEvent, file_threads};
+use crate::services::{AppServices, Services};
 use editor::OpenEditor;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -63,9 +64,8 @@ pub struct ReviewTab {
     editor: Option<OpenEditor>,
     viewer_login: Option<String>,
     finish: Option<(WeakEntity<FinishReview>, Subscription)>,
+    services: Option<Services>,
     load_task: Option<Task<()>>,
-    editor_task: Option<Task<()>>,
-    thread_tasks: HashMap<String, Task<()>>,
     viewed_inflight: HashSet<String>,
     viewed_tasks: HashMap<String, Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -98,7 +98,15 @@ impl ReviewTab {
                     line,
                     side,
                     start,
-                } => this.open_line_editor(path.clone(), (*line, *side), *start, window, cx),
+                    crossed_hunks,
+                } => this.open_line_editor(
+                    path.clone(),
+                    (*line, *side),
+                    *start,
+                    *crossed_hunks,
+                    window,
+                    cx,
+                ),
             }),
             cx.observe(&thread_ui, |this, _, cx| {
                 this.diff.update(cx, |_, cx| cx.notify());
@@ -109,7 +117,7 @@ impl ReviewTab {
                 |this, _, event, window, cx| match event {
                     ThreadUiEvent::Reply(id) => this.open_reply_editor(id.clone(), window, cx),
                     ThreadUiEvent::SetResolved { id, resolved } => {
-                        this.set_thread_resolved(id.clone(), *resolved, cx)
+                        this.set_thread_resolved(id.clone(), *resolved, window, cx)
                     }
                 },
             ),
@@ -140,9 +148,10 @@ impl ReviewTab {
             editor: None,
             viewer_login: None,
             finish: None,
+            services: cx
+                .try_global::<AppServices>()
+                .map(|global| global.0.clone()),
             load_task: None,
-            editor_task: None,
-            thread_tasks: HashMap::new(),
             viewed_inflight: HashSet::new(),
             viewed_tasks: HashMap::new(),
             _subscriptions: subscriptions,
@@ -160,9 +169,9 @@ impl ReviewTab {
         let head_moved = self.scope == ReviewScope::All
             && matches!(self.files, Files::Ready)
             && self.loaded_head.as_deref() != Some(detail.head_oid.as_str());
-        let (key, head) = (detail.pr.key(), detail.head_oid.clone());
+        let (key, number, head) = (detail.pr.key(), detail.pr.number, detail.head_oid.clone());
         self.drafts
-            .update(cx, |drafts, cx| drafts.set_pr(key, head, cx));
+            .update(cx, |drafts, cx| drafts.set_pr(key, number, head, cx));
         self.thread_ui.update(cx, |ui, cx| ui.settle(cx));
         self.detail = Some(detail);
         self.stale |= head_moved;
@@ -206,6 +215,15 @@ impl ReviewTab {
 
     pub fn set_scope(&mut self, scope: ReviewScope, cx: &mut Context<Self>) {
         if scope != ReviewScope::All {
+            if self
+                .editor
+                .as_ref()
+                .is_some_and(|open| open.entity.read(cx).is_busy())
+            {
+                self.notice = Some(labels::WAIT_FOR_SEND.into());
+                cx.notify();
+                return;
+            }
             self.close_editor(cx);
         }
         if scope != self.scope {

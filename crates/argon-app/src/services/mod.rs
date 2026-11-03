@@ -90,16 +90,41 @@ impl Services {
         Fut: Future<Output = Result<R, GithubError>> + Send,
         R: Send + 'static,
     {
-        let host = host.into();
+        tasks::run_on(self.runtime.as_ref(), cx, self.github_job(host.into(), f))
+    }
+
+    pub fn spawn_github_detached<F, Fut, R>(
+        &self,
+        host: String,
+        f: F,
+    ) -> impl Future<Output = Result<R, ServiceError>> + Send + 'static + use<F, Fut, R>
+    where
+        F: FnOnce(Arc<GithubClient>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, GithubError>> + Send,
+        R: Send + 'static,
+    {
+        tasks::run_detached(self.runtime.as_ref(), self.github_job(host, f))
+    }
+
+    fn github_job<F, Fut, R>(
+        &self,
+        host: String,
+        f: F,
+    ) -> impl Future<Output = Result<R, ServiceError>> + Send + 'static + use<F, Fut, R>
+    where
+        F: FnOnce(Arc<GithubClient>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<R, GithubError>> + Send,
+        R: Send + 'static,
+    {
         let shared = self.shared.clone();
-        tasks::run_on(self.runtime.as_ref(), cx, async move {
+        async move {
             let client = github(&shared, &host).await?;
             let result = f(client).await;
             if let Err(GithubError::AuthMissing { .. }) = &result {
                 shared.drop_client(&host);
             }
             Ok(result?)
-        })
+        }
     }
 }
 

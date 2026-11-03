@@ -4,38 +4,52 @@ use std::sync::Arc;
 use argon_github::{GithubClient, GithubError};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{Context, Task, Window};
+use gpui_kit::{Context, Window};
 
 use super::{ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::review::drafts::{DraftsEvent, EventOptions};
 use crate::review::finish_popover::{self, FinishEvent};
 use crate::review::labels;
-use crate::services::{AppServices, ServiceError};
+use crate::review::mutation::run_detached;
+use crate::services::ServiceError;
 
 impl ReviewTab {
-    pub(super) fn github<F, Fut, R>(
+    pub(super) fn github_detached<F, Fut, R>(
         &self,
-        cx: &mut Context<Self>,
         f: F,
-    ) -> Option<Task<Result<R, ServiceError>>>
+    ) -> Option<impl Future<Output = Result<R, ServiceError>> + Send + 'static + use<F, Fut, R>>
     where
         F: FnOnce(Arc<GithubClient>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<R, GithubError>> + Send,
         R: Send + 'static,
     {
         let host = self.detail.as_ref()?.pr.host.clone();
-        let services = cx.try_global::<AppServices>()?.0.clone();
-        Some(services.spawn_github(cx, host, f))
+        Some(self.services.as_ref()?.spawn_github_detached(host, f))
+    }
+
+    pub(super) fn displayed_head(&self, cx: &Context<Self>) -> Option<String> {
+        self.loaded_head
+            .clone()
+            .filter(|_| !self.drafts.read(cx).stale())
+    }
+
+    pub(super) fn reload_diff(&mut self, cx: &mut Context<Self>) {
+        cx.emit(ReviewTabEvent::Reload);
+        if self.scope == ReviewScope::All {
+            self.load_files(true, cx);
+        }
     }
 
     pub(super) fn set_thread_resolved(
         &mut self,
         id: String,
         resolved: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let thread = id.clone();
-        let Some(job) = self.github(cx, move |client| async move {
+        let number = self.detail.as_ref().map_or(0, |detail| detail.pr.number);
+        let Some(job) = self.github_detached(move |client| async move {
             client.set_thread_resolved(&thread, resolved).await
         }) else {
             let error = labels::resolve_failed(labels::SERVICES_UNAVAILABLE).into();
@@ -43,13 +57,15 @@ impl ReviewTab {
                 .update(cx, |ui, cx| ui.resolved_done(&id, Some(error), cx));
             return;
         };
-        let key = id.clone();
-        let task = cx.spawn(async move |this, cx| {
-            let result = job.await;
-            _ = this.update(cx, |this, cx| {
+        let job = async move { job.await.map_err(|error| error.to_string()) };
+        run_detached(
+            window.window_handle(),
+            cx,
+            job,
+            move |this, result, cx| {
                 let error = result.err().map(|error| {
                     tracing::warn!(%error, "failed to update review thread resolution");
-                    labels::resolve_failed(&error.to_string()).into()
+                    labels::resolve_failed(&error).into()
                 });
                 let reload = error.is_none();
                 this.thread_ui
@@ -57,9 +73,12 @@ impl ReviewTab {
                 if reload {
                     cx.emit(ReviewTabEvent::Reload);
                 }
-            });
-        });
-        self.thread_tasks.insert(key, task);
+            },
+            move |result| match result {
+                Ok(()) => Notification::success(labels::thread_updated_in(number)),
+                Err(error) => Notification::error(labels::mutation_failed_in(number, &error)),
+            },
+        );
     }
 
     pub fn open_finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -76,6 +95,7 @@ impl ReviewTab {
         let options = EventOptions::for_viewer(&author, self.viewer_login.as_deref());
         let finish = finish_popover::open(self.drafts.clone(), options, window, cx);
         let subscription = cx.subscribe(&finish, |this, _, event, cx| match event {
+            FinishEvent::Reload => this.reload_diff(cx),
             FinishEvent::Reveal { path, line, side } => {
                 if this.scope != ReviewScope::All {
                     this.set_scope(ReviewScope::All, cx);

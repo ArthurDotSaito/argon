@@ -30,6 +30,7 @@ const EVENTS: [ReviewEvent; 3] = [
 
 pub enum FinishEvent {
     Reveal { path: String, line: u32, side: Side },
+    Reload,
 }
 
 pub struct FinishReview {
@@ -122,11 +123,12 @@ impl FinishReview {
         }
     }
 
-    fn submit(&mut self, cx: &mut Context<Self>) {
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let body = self.body(cx);
         let event = self.event;
+        let handle = window.window_handle();
         self.drafts
-            .update(cx, |drafts, cx| drafts.submit(body, event, cx));
+            .update(cx, |drafts, cx| drafts.submit(body, event, handle, cx));
     }
 
     fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -176,7 +178,10 @@ impl FinishReview {
     }
 
     fn pending(&self, sending: bool, cx: &mut Context<Self>) -> Div {
-        let items = summarize(self.drafts.read(cx).drafts());
+        let drafts = self.drafts.read(cx);
+        let suspects = drafts.suspects().to_vec();
+        let mut items = summarize(drafts.drafts());
+        items.sort_by_key(|item| !suspects.contains(&item.id));
         let theme = cx.theme();
         let title = div()
             .font_semibold()
@@ -189,18 +194,29 @@ impl FinishReview {
                     .child(labels::NO_PENDING),
             );
         }
-        let link = theme.link;
+        let (link, danger) = (theme.link, theme.danger);
         let rows = items.into_iter().enumerate().map(|(ix, item)| {
             let (path, line, side) = (item.path, item.line, item.side);
+            let suspect = suspects.contains(&item.id);
+            let (icon, color) = if suspect {
+                (IconName::TriangleAlert, danger)
+            } else {
+                (IconName::MessageSquare, link)
+            };
+            let label = if suspect {
+                format!("{} — {}", item.label, labels::SUSPECT_DRAFT)
+            } else {
+                item.label
+            };
             h_flex()
                 .id(("finish-draft", ix))
                 .gap_1p5()
                 .items_center()
-                .text_color(link)
+                .text_color(color)
                 .cursor_pointer()
                 .hover(|style| style.underline())
-                .child(Icon::new(IconName::MessageSquare).xsmall())
-                .child(div().min_w_0().truncate().child(item.label))
+                .child(Icon::new(icon).xsmall())
+                .child(div().min_w_0().truncate().child(label))
                 .when(!sending, |row| {
                     row.on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
                         window.close_dialog(cx);
@@ -222,7 +238,32 @@ impl FinishReview {
         )
     }
 
-    fn footer(&self, sending: bool, cx: &mut Context<Self>) -> Div {
+    fn stale_warning(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        h_flex()
+            .gap_2()
+            .items_center()
+            .px_2()
+            .py_1p5()
+            .rounded(theme.radius)
+            .bg(theme.warning.opacity(0.1))
+            .text_color(theme.foreground)
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .small()
+                    .text_color(theme.warning),
+            )
+            .child(div().flex_1().min_w_0().child(labels::DIFF_STALE))
+            .child(
+                Button::new("finish-review-reload")
+                    .label(labels::RELOAD)
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(FinishEvent::Reload))),
+            )
+    }
+
+    fn footer(&self, sending: bool, stale: bool, cx: &mut Context<Self>) -> Div {
         h_flex()
             .w_full()
             .gap_2()
@@ -254,8 +295,10 @@ impl FinishReview {
                     .small()
                     .primary()
                     .loading(sending)
-                    .disabled(sending)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx))),
+                    .disabled(sending || stale)
+                    .on_click(
+                        cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)),
+                    ),
             )
     }
 }
@@ -270,7 +313,9 @@ impl Render for FinishReview {
         let sending = state == SubmitState::Sending;
         let events = self.events(sending, cx);
         let pending = self.pending(sending, cx);
-        let footer = self.footer(sending, cx);
+        let stale = self.drafts.read(cx).stale();
+        let warning = stale.then(|| self.stale_warning(cx));
+        let footer = self.footer(sending, stale, cx);
         let theme = cx.theme();
         let own_pr = (!self.options.judge).then(|| {
             h_flex()
@@ -300,6 +345,7 @@ impl Render for FinishReview {
             .child(events)
             .children(own_pr)
             .child(pending)
+            .children(warning)
             .children(error)
             .child(footer)
     }

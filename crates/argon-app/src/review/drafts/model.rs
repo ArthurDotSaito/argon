@@ -2,11 +2,14 @@ use std::time::Duration;
 
 use argon_core::{DraftComment, DraftReview, PrKey, ReviewEvent, build_submission};
 use argon_store::Store;
-use gpui_kit::{Context, EventEmitter, SharedString, Task};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::{AnyWindowHandle, Context, EventEmitter, SharedString, Task};
 
-use super::summary::{head_moved, review_error};
+use super::store_ops::{SentReview, clear_sent, empty_review, load, store_job};
+use super::summary::{head_moved, review_error, suspect_drafts};
 use crate::review::labels;
-use crate::services::{AppServices, Services, StoreHandle, flatten};
+use crate::review::mutation::run_detached;
+use crate::services::{AppServices, Services, flatten};
 
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 
@@ -25,15 +28,16 @@ pub enum DraftsEvent {
 pub struct DraftsModel {
     services: Option<Services>,
     key: Option<PrKey>,
+    number: u64,
     head: Option<String>,
-    session_head: Option<String>,
+    diff_head: Option<String>,
     drafts: Vec<DraftComment>,
     review: DraftReview,
     submit: SubmitState,
+    suspects: Vec<i64>,
     epoch: u64,
     load_task: Option<Task<()>>,
     save_task: Option<Task<()>>,
-    submit_task: Option<Task<()>>,
 }
 
 impl EventEmitter<DraftsEvent> for DraftsModel {}
@@ -45,15 +49,16 @@ impl DraftsModel {
                 .try_global::<AppServices>()
                 .map(|global| global.0.clone()),
             key: None,
+            number: 0,
             head: None,
-            session_head: None,
+            diff_head: None,
             drafts: Vec::new(),
             review: empty_review(),
             submit: SubmitState::Idle,
+            suspects: Vec::new(),
             epoch: 0,
             load_task: None,
             save_task: None,
-            submit_task: None,
         }
     }
 
@@ -78,10 +83,26 @@ impl DraftsModel {
     }
 
     pub fn head_moved(&self) -> bool {
-        head_moved(self.session_head.as_deref(), self.head.as_deref())
+        head_moved(&self.drafts, self.diff_head.as_deref())
     }
 
-    pub fn set_pr(&mut self, key: PrKey, head: String, cx: &mut Context<Self>) {
+    pub fn stale(&self) -> bool {
+        self.diff_head.is_none() || self.diff_head != self.head
+    }
+
+    pub fn suspects(&self) -> &[i64] {
+        &self.suspects
+    }
+
+    pub fn set_diff_head(&mut self, head: Option<String>, cx: &mut Context<Self>) {
+        if self.diff_head != head {
+            self.diff_head = head;
+            cx.notify();
+        }
+    }
+
+    pub fn set_pr(&mut self, key: PrKey, number: u64, head: String, cx: &mut Context<Self>) {
+        self.number = number;
         self.head = Some(head);
         if self.key.as_ref() == Some(&key) {
             cx.notify();
@@ -121,15 +142,11 @@ impl DraftsModel {
         draft: DraftComment,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), SharedString>> {
-        let head = self.head.clone();
         let stored = draft.clone();
         let job = self.store_job(move |store| store.add_draft(&stored));
         cx.spawn(async move |this, cx| {
             let id = job.await?;
             _ = this.update(cx, |this, cx| {
-                if this.session_head.is_none() {
-                    this.session_head = head;
-                }
                 this.drafts.push(DraftComment { id, ..draft });
                 cx.notify();
             });
@@ -163,7 +180,10 @@ impl DraftsModel {
             let result = job.await;
             _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(()) => this.drafts.retain(|draft| draft.id != id),
+                    Ok(()) => {
+                        this.drafts.retain(|draft| draft.id != id);
+                        this.suspects.retain(|suspect| *suspect != id);
+                    }
                     Err(error) => cx.emit(DraftsEvent::Failed(error)),
                 }
                 cx.notify();
@@ -215,13 +235,26 @@ impl DraftsModel {
         .detach();
     }
 
-    pub fn submit(&mut self, body: String, event: ReviewEvent, cx: &mut Context<Self>) {
+    pub fn submit(
+        &mut self,
+        body: String,
+        event: ReviewEvent,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         if self.is_sending() {
             return;
         }
-        let (Some(services), Some(key), Some(head)) =
-            (self.services.clone(), self.key.clone(), self.head.clone())
-        else {
+        if self.stale() {
+            self.submit = SubmitState::Failed(labels::DIFF_STALE.into());
+            cx.notify();
+            return;
+        }
+        let (Some(services), Some(key), Some(head)) = (
+            self.services.clone(),
+            self.key.clone(),
+            self.diff_head.clone(),
+        ) else {
             self.submit =
                 SubmitState::Failed(labels::submit_failed(labels::SERVICES_UNAVAILABLE).into());
             cx.notify();
@@ -235,47 +268,77 @@ impl DraftsModel {
                 return;
             }
         };
-        self.save_review(body, event, cx);
+        self.save_review(body.clone(), event, cx);
+        self.save_task = None;
+        let store = services.store();
+        let saved_key = key.clone();
+        let saved_body = body.clone();
+        store.submit(move |store| {
+            if let Err(error) = store.save_draft_review(&saved_key, &saved_body, event) {
+                tracing::warn!(%error, "failed to save draft review before submitting");
+            }
+        });
         self.submit = SubmitState::Sending;
+        self.suspects.clear();
+        let ids: Vec<i64> = self.drafts.iter().map(|draft| draft.id).collect();
+        let sent = SentReview {
+            ids: ids.clone(),
+            body: body.clone(),
+        };
+        let number = self.number;
         let id = key.id.clone();
-        let task = services.spawn_github(cx, key.host.clone(), move |client| async move {
+        let request = services.spawn_github_detached(key.host.clone(), move |client| async move {
             client.submit_review(&id, &head, &submission).await
         });
-        let store = services.store();
-        self.submit_task = Some(cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let cleared = match &result {
-                Ok(_) => Some(flatten(
-                    store.call(move |store| store.clear_review(&key)).await,
-                )),
-                Err(_) => None,
-            };
-            _ = this.update(cx, |this, cx| {
-                match (result, cleared) {
-                    (Ok(_), cleared) => {
-                        if let Some(Err(error)) = cleared {
-                            tracing::warn!(%error, "failed to clear submitted review drafts");
+        let job = async move {
+            let result = request.await;
+            if result.is_ok() {
+                let cleanup = flatten(
+                    store
+                        .call(move |store| clear_sent(store, &key, &ids, &body))
+                        .await,
+                );
+                if let Err(error) = cleanup {
+                    tracing::warn!(%error, "failed to clear submitted review drafts");
+                }
+            }
+            result.map_err(|error| error.to_string())
+        };
+        run_detached(
+            window,
+            cx,
+            job,
+            move |this, result, cx| {
+                match result {
+                    Ok(_) => {
+                        this.drafts.retain(|draft| !sent.ids.contains(&draft.id));
+                        if this.review.body == sent.body {
+                            this.review = empty_review();
                         }
-                        this.reset();
+                        this.submit = SubmitState::Idle;
                         cx.emit(DraftsEvent::Submitted);
                     }
-                    (Err(error), _) => {
+                    Err(error) => {
                         tracing::warn!(%error, "failed to submit review");
-                        this.submit =
-                            SubmitState::Failed(labels::submit_failed(&error.to_string()).into());
+                        this.suspects = suspect_drafts(&error, &this.drafts);
+                        this.submit = SubmitState::Failed(labels::submit_failed(&error).into());
                     }
                 }
                 cx.notify();
-            });
-        }));
+            },
+            move |result| match result {
+                Ok(_) => Notification::success(labels::review_sent_in(number)),
+                Err(error) => Notification::error(labels::submit_failed_in(number, &error)),
+            },
+        );
         cx.notify();
     }
 
     fn reset(&mut self) {
         self.drafts.clear();
         self.review = empty_review();
-        self.session_head = None;
         self.submit = SubmitState::Idle;
+        self.suspects.clear();
         self.save_task = None;
     }
 
@@ -284,32 +347,5 @@ impl DraftsModel {
         f: impl FnOnce(&mut Store) -> argon_store::Result<R> + Send + 'static,
     ) -> impl Future<Output = Result<R, SharedString>> + 'static {
         store_job(self.services.as_ref().map(Services::store), f)
-    }
-}
-
-async fn store_job<R: Send + 'static>(
-    store: Option<StoreHandle>,
-    f: impl FnOnce(&mut Store) -> argon_store::Result<R> + Send + 'static,
-) -> Result<R, SharedString> {
-    let Some(store) = store else {
-        return Err(labels::draft_failed(labels::SERVICES_UNAVAILABLE).into());
-    };
-    flatten(store.call(f).await).map_err(|error| {
-        tracing::warn!(%error, "draft store operation failed");
-        labels::draft_failed(&error).into()
-    })
-}
-
-fn load(
-    store: &mut Store,
-    key: &PrKey,
-) -> argon_store::Result<(Vec<DraftComment>, Option<DraftReview>)> {
-    Ok((store.drafts(key)?, store.draft_review(key)?))
-}
-
-fn empty_review() -> DraftReview {
-    DraftReview {
-        body: String::new(),
-        event: ReviewEvent::Comment,
     }
 }
