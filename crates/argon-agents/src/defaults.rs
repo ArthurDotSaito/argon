@@ -231,7 +231,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: CLAUDE_MODELS,
         default_model: "default",
-        permission_mode: Some("default"),
+        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "claude-agent-acp 0.100.0 / claude 2.1.316",
@@ -342,4 +342,16 @@ pub fn agent_defaults(kind: AgentKind) -> &'static AgentDefaults {
         AgentKind::Antigravity => 4,
     };
     &AGENT_DEFAULTS[index]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agents_inherit_the_user_permission_mode() {
+        for defaults in &AGENT_DEFAULTS {
+            assert_eq!(defaults.permission_mode, None, "{:?}", defaults.kind);
+        }
+    }
 }
