@@ -7,8 +7,6 @@ pub const MERGE: &str = "Merge";
 pub const REVIEW: &str = "Revisar";
 pub const REVIEW_TOOLTIP: &str = "Abrir a review deste PR";
 pub const AI_REVIEW: &str = "Revisar com IA";
-pub const AI_REVIEW_SOON: &str =
-    "Em breve: review com agentes de IA (Claude Code, Codex, OpenCode…)";
 pub const RETRY: &str = "Tentar de novo";
 pub const COPY_BRANCH: &str = "Copiar branch";
 pub const MERGING: &str = "Fazendo merge…";

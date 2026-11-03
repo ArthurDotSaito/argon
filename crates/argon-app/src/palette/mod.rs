@@ -2,19 +2,16 @@ mod entries;
 mod ranking;
 
 use argon_core::{PrKey, PrState};
-use gpui_kit::assets::IconName;
 use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IndexPath, Sizable as _, h_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IndexPath, h_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
     IntoElement, MouseButton, ParentElement as _, Render, SharedString, Styled as _, Window,
     deferred, div, hsla, px,
 };
 
-use self::entries::{COMING_SOON, CommandKind, CommandSpec, PrEntry, command_specs};
+use self::entries::{CommandSpec, PrEntry, command_specs};
 use self::ranking::{Ranker, prs_first};
 use crate::inbox::InboxModel;
 use crate::ui;
@@ -153,30 +150,10 @@ impl Palette {
 }
 
 fn command_item(spec: &CommandSpec) -> CommandItem {
-    let item = CommandItem::new()
+    CommandItem::new()
         .label(spec.title)
-        .icon(Icon::new(spec.icon));
-    match &spec.kind {
-        CommandKind::Run(action) => item.action(action.boxed_clone()),
-        CommandKind::Soon => {
-            let (title, icon) = (spec.title, spec.icon);
-            item.disabled(true)
-                .child(move |_, cx| soon_row(title, icon, cx))
-        }
-    }
-}
-
-fn soon_row(title: &'static str, icon: IconName, cx: &App) -> Div {
-    let muted = cx.theme().muted_foreground;
-    h_flex()
-        .flex_1()
-        .min_w_0()
-        .gap_2()
-        .items_center()
-        .text_color(muted)
-        .child(Icon::new(icon).small())
-        .child(div().flex_1().truncate().child(title))
-        .child(div().flex_none().text_xs().child(COMING_SOON))
+        .icon(Icon::new(spec.icon))
+        .action(spec.action.boxed_clone())
 }
 
 fn pr_item(entry: &PrEntry) -> CommandItem {

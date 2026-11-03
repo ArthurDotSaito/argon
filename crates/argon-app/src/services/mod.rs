@@ -93,6 +93,17 @@ impl Services {
         tasks::run_on(self.runtime.as_ref(), cx, self.github_job(host.into(), f))
     }
 
+    pub fn spawn_runtime<F, R>(
+        &self,
+        fut: F,
+    ) -> impl Future<Output = Result<R, ServiceError>> + Send + 'static + use<F, R>
+    where
+        F: Future<Output = R> + Send + 'static,
+        R: Send + 'static,
+    {
+        tasks::run_detached(self.runtime.as_ref(), async move { Ok(fut.await) })
+    }
+
     pub fn spawn_github_detached<F, Fut, R>(
         &self,
         host: String,

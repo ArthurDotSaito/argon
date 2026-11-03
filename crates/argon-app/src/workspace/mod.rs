@@ -14,7 +14,8 @@ use gpui_kit::{
 
 pub use self::docks::DockPosition;
 use self::palette_slot::PaletteSlot;
-use crate::actions::{GoToView, OpenSettings, StartReview, SyncNow};
+use crate::actions::{GoToView, OpenSettings, ReviewWithAi, StartReview, SyncNow};
+use crate::agents::{AgentSessions, AgentsEvent};
 use crate::bottom;
 use crate::center::{CenterContentFactory, CenterItem};
 use crate::inbox::{InboxEvent, InboxModel, InboxView};
@@ -37,7 +38,7 @@ pub struct Workspace {
     sync_status: Entity<SyncStatus>,
     inbox: Entity<InboxModel>,
     palette: Option<PaletteSlot>,
-    _subscriptions: [Subscription; 5],
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Workspace {
@@ -76,7 +77,7 @@ impl Workspace {
             sync_status,
             inbox,
             palette: None,
-            _subscriptions: [
+            _subscriptions: vec![
                 dock_subscription,
                 sync_subscription,
                 inbox_observation,
@@ -84,6 +85,10 @@ impl Workspace {
                 job_log_subscription,
             ],
         };
+        if let Some(sessions) = AgentSessions::global(cx) {
+            let subscription = cx.subscribe_in(&sessions, window, Self::on_agents_event);
+            this._subscriptions.push(subscription);
+        }
         if !this.restore_layout(window, cx) {
             this.reset_layout(window, cx);
         } else if this.center_panels(cx).is_empty() {
@@ -117,6 +122,27 @@ impl Workspace {
             return;
         };
         view.update(cx, |view, cx| view.start_review(window, cx));
+    }
+
+    fn on_review_with_ai(&mut self, _: &ReviewWithAi, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self.active_center_panel(window, cx) else {
+            return;
+        };
+        let Ok(view) = panel.read(cx).view().clone().downcast::<PrView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| view.open_ai_review(window, cx));
+    }
+
+    fn on_agents_event(
+        &mut self,
+        _: &Entity<AgentSessions>,
+        event: &AgentsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let AgentsEvent::SessionStarted { .. } = event;
+        self.reveal_dock(DockPosition::Right, window, cx);
     }
 
     fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
@@ -172,6 +198,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_sync_now))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_start_review))
+            .on_action(cx.listener(Self::on_review_with_ai))
             .child(title_bar)
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(status_bar)

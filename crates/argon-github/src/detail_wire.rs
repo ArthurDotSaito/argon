@@ -79,6 +79,8 @@ pub(crate) struct WireDetail {
     #[serde(flatten)]
     pub(crate) pr: WirePr,
     pub(crate) head_ref_oid: String,
+    #[serde(default)]
+    pub(crate) base_ref_oid: Option<String>,
     pub(crate) body: Option<String>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) labels: PagedConnection<WireLabel>,

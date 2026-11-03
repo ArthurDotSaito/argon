@@ -1,4 +1,5 @@
 mod actions;
+mod agents;
 mod assets;
 mod bottom;
 mod center;
@@ -28,6 +29,7 @@ use gpui_kit::{
 };
 use tracing_appender::non_blocking::WorkerGuard;
 
+use crate::agents::AgentSessions;
 use crate::assets::AppAssets;
 use crate::inbox::{InboxHandle, InboxModel};
 use crate::services::{AppServices, Services};
@@ -63,6 +65,7 @@ fn main() {
             gpui_kit::component::set_locale(UI_LOCALE);
             theme::apply_one_dark(cx);
             keymap::bind(cx);
+            AgentSessions::init(paths.clone(), cx);
             let (services, events) = Services::start(paths, config);
             let sync_status = cx.new(|cx| SyncStatus::new(services.clone(), events, cx));
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));

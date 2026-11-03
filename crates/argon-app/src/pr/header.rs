@@ -7,14 +7,15 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, ParentElement as _, Rgba,
-    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div, hsla, px, rgb,
+    AnyElement, App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, Rgba, SharedString, StatefulInteractiveElement as _, Styled as _, div,
+    hsla, px, rgb,
 };
 
 use super::labels;
 use super::pr_view::{MergeState, PrView};
 use super::timeline_item::review_style;
-use crate::ui;
+use crate::{agents, ui};
 
 const META_AVATAR: f32 = 18.;
 const AI_BUTTON_HEIGHT: f32 = 24.;
@@ -25,6 +26,7 @@ pub struct HeaderProps<'a> {
     pub pr: &'a PullRequest,
     pub detail: Option<&'a PrDetail>,
     pub can_merge: bool,
+    pub can_review_with_ai: bool,
     pub merge_state: &'a MergeState,
     pub refreshing: bool,
     pub now: DateTime<Utc>,
@@ -151,7 +153,7 @@ fn actions(props: &HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
             .tooltip(labels::REVIEW_TOOLTIP)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.start_review(window, cx)))
     });
-    let ai_review = ai_review_button(cx);
+    let ai_review = ai_review_button(props.can_review_with_ai, cx);
     h_flex()
         .gap_1()
         .items_center()
@@ -162,7 +164,19 @@ fn actions(props: &HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
         .child(ai_review)
 }
 
-fn ai_review_button(cx: &App) -> Stateful<Div> {
+fn ai_review_button(enabled: bool, cx: &mut Context<PrView>) -> AnyElement {
+    if enabled {
+        return Button::new("pr-ai-review")
+            .icon(Icon::new(IconName::Sparkles))
+            .label(labels::AI_REVIEW)
+            .small()
+            .primary()
+            .tooltip(agents::BUTTON_TOOLTIP)
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.open_ai_review(window, cx)),
+            )
+            .into_any_element();
+    }
     let theme = cx.theme();
     h_flex()
         .id("pr-ai-review")
@@ -176,9 +190,10 @@ fn ai_review_button(cx: &App) -> Stateful<Div> {
         .font_medium()
         .text_color(theme.primary_foreground.opacity(0.85))
         .cursor_not_allowed()
-        .tooltip(|window, cx| Tooltip::new(labels::AI_REVIEW_SOON).build(window, cx))
+        .tooltip(|window, cx| Tooltip::new(agents::CLOSED_TOOLTIP).build(window, cx))
         .child(Icon::new(IconName::Sparkles).small())
         .child(labels::AI_REVIEW)
+        .into_any_element()
 }
 
 fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {

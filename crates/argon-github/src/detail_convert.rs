@@ -28,6 +28,7 @@ pub(crate) fn into_pr_detail(wire: WireDetail, host: &str) -> PrDetail {
         pr,
         body: wire.body.unwrap_or_default(),
         head_oid: wire.head_ref_oid,
+        base_oid: wire.base_ref_oid.filter(|oid| !oid.is_empty()),
         labels: wire.labels.into_items().into_iter().map(label).collect(),
         reviewers,
         timeline,
@@ -246,6 +247,10 @@ mod tests {
         assert_eq!(detail.pr.checks, Some(ChecksState::Failure));
         assert_eq!(detail.pr.head_committed_at, at("2026-10-31T20:11:09Z"));
         assert_eq!(detail.head_oid, "3fa91c0de4b27a85d6e1f09c4b7a2d83e5f61a90");
+        assert_eq!(
+            detail.base_oid.as_deref(),
+            Some("9b1e44c07a2f5d3e8c6b0a1d2e3f4a5b6c7d8e9f")
+        );
         assert!(detail.body.starts_with("Adds a retry budget"));
         assert!(detail.body.contains("- jittered backoff"));
     }

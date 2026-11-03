@@ -10,6 +10,7 @@ name = "argon"
 path = "src/main.rs"
 
 [dependencies]
+argon-agents = { path = "../argon-agents" }
 argon-core = { path = "../argon-core" }
 argon-github = { path = "../argon-github" }
 argon-store = { path = "../argon-store" }

@@ -56,6 +56,18 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(super) fn reveal_dock(
+        &mut self,
+        dock: DockPosition,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let open = self.dock_area.read(cx).is_dock_open(dock.placement());
+        if !open {
+            self.toggle_dock(dock, window, cx);
+        }
+    }
+
     pub(super) fn on_job_log_event(
         &mut self,
         model: &Entity<JobLogModel>,

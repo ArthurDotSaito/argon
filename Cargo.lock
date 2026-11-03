@@ -285,6 +285,7 @@ dependencies = [
 name = "argon-app"
 version = "0.1.0"
 dependencies = [
+ "argon-agents",
  "argon-core",
  "argon-github",
  "argon-store",

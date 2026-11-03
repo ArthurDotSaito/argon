@@ -3,6 +3,7 @@ query PrDetail($id: ID!) {
     ... on PullRequest {
       ...PullRequestFields
       headRefOid
+      baseRefOid
       body
       labels(first: 50) {
         nodes {

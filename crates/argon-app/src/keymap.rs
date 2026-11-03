@@ -3,8 +3,8 @@ use gpui_kit::{App, KeyBinding};
 
 use crate::actions::{
     ArchiveSelected, CancelComment, ClearFilter, CloseActiveItem, FocusFilter, OpenPalette,
-    OpenSelected, SelectNext, SelectPrevious, ToggleBottomDock, ToggleDiffMode, ToggleLeftDock,
-    ToggleRead, ToggleRightDock,
+    OpenSelected, ReviewWithAi, SelectNext, SelectPrevious, ToggleBottomDock, ToggleDiffMode,
+    ToggleLeftDock, ToggleRead, ToggleRightDock,
 };
 use crate::palette::PALETTE_CONTEXT;
 
@@ -14,6 +14,8 @@ pub const INBOX_LIST_CONTEXT: &str = "InboxList";
 pub const DIFF_VIEW_CONTEXT: &str = "DiffView";
 pub const COMMENT_EDITOR_CONTEXT: &str = "CommentEditor";
 const DIFF_VIEW_SHORTCUT_CONTEXT: &str = "DiffView && !Input";
+pub const PR_VIEW_CONTEXT: &str = "PrView";
+const PR_VIEW_SHORTCUT_CONTEXT: &str = "PrView && !Input";
 
 pub fn bind(cx: &mut App) {
     cx.bind_keys([
@@ -35,5 +37,6 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("escape", ClearFilter, Some(INBOX_CONTEXT)),
         KeyBinding::new("s", ToggleDiffMode, Some(DIFF_VIEW_SHORTCUT_CONTEXT)),
         KeyBinding::new("escape", CancelComment, Some(COMMENT_EDITOR_CONTEXT)),
+        KeyBinding::new("a", ReviewWithAi, Some(PR_VIEW_SHORTCUT_CONTEXT)),
     ]);
 }

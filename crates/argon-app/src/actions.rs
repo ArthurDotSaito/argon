@@ -19,7 +19,8 @@ gpui_kit::actions!(
         OpenSettings,
         ToggleDiffMode,
         CancelComment,
-        StartReview
+        StartReview,
+        ReviewWithAi
     ]
 );
 

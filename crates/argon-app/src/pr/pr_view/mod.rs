@@ -1,3 +1,4 @@
+mod ai;
 mod body;
 mod loading;
 mod merge;
@@ -21,6 +22,7 @@ use super::conversation::{Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
 use super::labels;
 use crate::inbox::InboxModel;
+use crate::keymap::PR_VIEW_CONTEXT;
 use crate::review::{ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::services::{AppServices, Services};
 
@@ -257,11 +259,13 @@ impl Render for PrView {
         let head = match pr {
             Some(pr) => {
                 let can_merge = self.can_merge();
+                let can_review_with_ai = self.can_review_with_ai();
                 header(
                     HeaderProps {
                         pr,
                         detail: detail.as_deref(),
                         can_merge,
+                        can_review_with_ai,
                         merge_state: &self.merge_state,
                         refreshing: self.refreshing,
                         now,
@@ -276,6 +280,7 @@ impl Render for PrView {
         let body = self.body(cx);
         let theme = cx.theme();
         v_flex()
+            .key_context(PR_VIEW_CONTEXT)
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(theme.background)

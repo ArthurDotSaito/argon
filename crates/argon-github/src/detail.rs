@@ -17,6 +17,7 @@ pub struct PrDetail {
     pub pr: PullRequest,
     pub body: String,
     pub head_oid: String,
+    pub base_oid: Option<String>,
     pub labels: Vec<Label>,
     pub reviewers: Vec<ReviewerStatus>,
     pub timeline: Vec<TimelineItem>,

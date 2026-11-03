@@ -15,6 +15,7 @@
       "baseRefName": "main",
       "headRefName": "feat/retry-budget",
       "headRefOid": "3fa91c0de4b27a85d6e1f09c4b7a2d83e5f61a90",
+      "baseRefOid": "9b1e44c07a2f5d3e8c6b0a1d2e3f4a5b6c7d8e9f",
       "body": "Adds a retry budget so the slot finder stops hammering the scheduling API.\n\n- budget per request\n- jittered backoff",
       "additions": 214,
       "deletions": 37,
