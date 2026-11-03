@@ -48,4 +48,5 @@ sha2 = "0.10"
 agent-client-protocol = { version = "5", features = ["process"] }
 which = "8"
 dunce = "1"
+tauri-winrt-notification = "0.8"
 windows-sys = "0.61"

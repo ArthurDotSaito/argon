@@ -10,6 +10,7 @@ mod dock_items;
 mod inbox;
 mod keymap;
 mod layout_store;
+mod notify;
 mod palette;
 mod placeholders;
 mod pr;
@@ -74,6 +75,7 @@ fn main() {
             config_watch::init(cx);
             theme::init(cx);
             cx.set_global(InboxHandle(inbox.clone()));
+            notify::init(&sync_status, &inbox, cx);
             open_main_window(sync_status, inbox, cx);
             cx.activate(true);
         });

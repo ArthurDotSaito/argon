@@ -296,6 +296,7 @@ dependencies = [
  "open",
  "serde",
  "serde_json",
+ "tauri-winrt-notification",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
