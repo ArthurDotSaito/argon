@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use argon_core::{Config, Paths};
@@ -10,6 +11,7 @@ use super::orgs::{admin_orgs, merge_tracked, viewer_from_cache};
 
 pub(super) struct Shared {
     config: RwLock<Config>,
+    config_version: AtomicU64,
     accounts: RwLock<Vec<Account>>,
     admin_orgs: RwLock<Vec<String>>,
     clients: RwLock<HashMap<String, Arc<GithubClient>>>,
@@ -19,6 +21,7 @@ impl Shared {
     pub(super) fn new(config: Config) -> Self {
         Self {
             config: RwLock::new(config),
+            config_version: AtomicU64::new(0),
             accounts: RwLock::default(),
             admin_orgs: RwLock::default(),
             clients: RwLock::default(),
@@ -30,6 +33,13 @@ impl Shared {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    pub(super) fn update_config(&self, f: impl FnOnce(&mut Config)) -> (u64, Config) {
+        let mut config = self.config.write().unwrap_or_else(PoisonError::into_inner);
+        f(&mut config);
+        let version = self.config_version.fetch_add(1, Ordering::SeqCst) + 1;
+        (version, config.clone())
     }
 
     pub(super) fn accounts(&self) -> Vec<Account> {

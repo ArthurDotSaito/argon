@@ -4,6 +4,11 @@ mod assets;
 mod bottom;
 mod center;
 mod config_load;
+#[expect(
+    dead_code,
+    reason = "consumed by settings, notifications and theme in phase 5"
+)]
+mod config_watch;
 mod content;
 mod dock_items;
 mod inbox;
@@ -71,6 +76,7 @@ fn main() {
             let sync_status = cx.new(|cx| SyncStatus::new(services.clone(), events, cx));
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));
+            config_watch::init(cx);
             cx.set_global(InboxHandle(inbox.clone()));
             open_main_window(sync_status, inbox, cx);
             cx.activate(true);

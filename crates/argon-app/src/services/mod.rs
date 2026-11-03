@@ -7,6 +7,7 @@ mod sync;
 mod tasks;
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use argon_core::{Config, Paths};
@@ -30,6 +31,8 @@ pub struct Services {
     store: StoreHandle,
     shared: Arc<Shared>,
     runtime: Option<Handle>,
+    config_file: PathBuf,
+    saved_config: Arc<tokio::sync::Mutex<u64>>,
 }
 
 impl Services {
@@ -38,6 +41,7 @@ impl Services {
         let (requests, queue) = mpsc::unbounded();
         let (store, store_startup) = StoreHandle::spawn(paths.data_dir.clone(), paths.db_file());
         let shared = Arc::new(Shared::new(config));
+        let config_file = paths.config_file();
         load_cached_viewers(&store, shared.clone());
         let runtime = SyncWorker {
             paths,
@@ -53,6 +57,8 @@ impl Services {
             store,
             shared,
             runtime,
+            config_file,
+            saved_config: Arc::default(),
         };
         (services, receiver)
     }
@@ -67,6 +73,24 @@ impl Services {
 
     pub fn config(&self) -> Config {
         self.shared.config()
+    }
+
+    pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Config {
+        let (version, snapshot) = self.shared.update_config(f);
+        let path = self.config_file.clone();
+        let saved = self.saved_config.clone();
+        let pending = snapshot.clone();
+        drop(tasks::run_detached(self.runtime.as_ref(), async move {
+            let mut last = saved.lock().await;
+            if version > *last {
+                match pending.save(&path) {
+                    Ok(()) => *last = version,
+                    Err(error) => tracing::warn!(%error, "failed to save config"),
+                }
+            }
+            Ok(())
+        }));
+        snapshot
     }
 
     pub fn accounts(&self) -> Vec<Account> {
