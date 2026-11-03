@@ -1,3 +1,4 @@
+mod agents;
 mod drafts;
 mod error;
 mod local;
@@ -9,6 +10,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+pub use agents::{FindingState, NewAgentSession, SessionRow, SessionStatus, StoredFinding};
 pub use error::{Result, StoreError};
 pub use local::LocalState;
 pub use viewers::{CachedOrg, CachedViewer};

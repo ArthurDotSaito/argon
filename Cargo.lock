@@ -266,8 +266,11 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "argon-core",
+ "argon-github",
+ "argon-store",
  "dunce",
  "futures",
+ "getrandom 0.4.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

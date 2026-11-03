@@ -8,7 +8,7 @@ use crate::defaults::{AgentDefaults, ModelSelection, Transport, agent_defaults};
 const ANTIGRAVITY_REASON: &str =
     "Ainda não suportado — o modo headless exige liberar ferramentas sem confirmação";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub label: String,

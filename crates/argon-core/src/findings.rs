@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::Side;
 
@@ -13,7 +13,8 @@ pub enum FindingsError {
     InvalidJson(#[from] serde_json::Error),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     High,
     Medium,
@@ -21,7 +22,15 @@ pub enum Severity {
 }
 
 impl Severity {
-    fn parse(value: &str) -> Option<Severity> {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Severity> {
         match value.trim().to_ascii_lowercase().as_str() {
             "high" => Some(Self::High),
             "medium" => Some(Self::Medium),
@@ -31,7 +40,7 @@ impl Severity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     pub severity: Severity,
     pub file: String,

@@ -7,8 +7,11 @@ publish.workspace = true
 
 [dependencies]
 argon-core = { path = "../argon-core" }
+argon-store = { path = "../argon-store" }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "sync"] }
+tokio = { workspace = true, features = ["fs", "sync", "io-util"] }
+serde.workspace = true
+getrandom.workspace = true
 tracing.workspace = true
 dunce.workspace = true
 agent-client-protocol.workspace = true
@@ -24,6 +27,5 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["io-util"] }
-serde.workspace = true
+argon-github = { path = "../argon-github" }
 tracing-subscriber.workspace = true
