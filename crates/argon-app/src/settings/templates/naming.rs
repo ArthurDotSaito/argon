@@ -8,11 +8,16 @@ const RESERVED_IDS: [&str; 22] = [
 
 pub const BUILT_IN_IDS: [&str; 3] = ["review-padrao", "seguranca", "performance"];
 
-pub const VARIABLES: [&str; 14] = [
+pub const VARIABLES: [&str; 19] = [
     "pr.title",
     "pr.number",
     "pr.url",
     "pr.body",
+    "pr.repo",
+    "pr.base",
+    "pr.head",
+    "pr.sha",
+    "pr.threads",
     "repo",
     "base",
     "base_sha",

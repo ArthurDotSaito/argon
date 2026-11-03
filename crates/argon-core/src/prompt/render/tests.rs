@@ -21,6 +21,7 @@ fn context() -> PromptContext {
         base: "main".into(),
         base_sha: None,
         head: "fix/login".into(),
+        head_sha: "9b1d7a3c5e2f4086".into(),
         diff: "+a\n-b\n".into(),
         files: vec!["src/a.rs".into(), "src/b.rs".into()],
         file_stats: Vec::new(),
@@ -33,6 +34,14 @@ fn render(body: &str, ctx: &PromptContext, max_diff_chars: usize) -> String {
     render_prompt(&template(body), ctx, max_diff_chars)
         .unwrap()
         .text
+}
+
+const REVIEW_PADRAO: &str = "review-padrao";
+
+fn diff_aware_templates() -> impl Iterator<Item = (&'static str, &'static str)> {
+    DEFAULT_TEMPLATES
+        .into_iter()
+        .filter(|(id, _)| *id != REVIEW_PADRAO)
 }
 
 fn embedded(id: &str) -> PromptTemplate {
@@ -195,7 +204,7 @@ fn every_embedded_template_renders_with_a_full_context() {
     let mut ctx = context();
     ctx.base_sha = Some("abc1234".into());
     ctx.diff = "+``````\n+{{ boom }}\n".into();
-    for (id, source) in DEFAULT_TEMPLATES {
+    for (id, source) in diff_aware_templates() {
         let parsed = parse_template(id, source).unwrap();
 
         let rendered = render_prompt(&parsed, &ctx, 1000)
@@ -343,7 +352,7 @@ fn worktree_mode_prompt_has_the_instruction_and_no_diff_content() {
     let mut ctx = context();
     ctx.diff = "+SEGREDO_DO_DIFF\n".into();
     ctx.base_sha = Some("abc1234".into());
-    for (id, _) in DEFAULT_TEMPLATES {
+    for (id, _) in diff_aware_templates() {
         let rendered = render_prompt(&embedded(id), &ctx, 0).unwrap();
 
         assert!(!rendered.text.contains("SEGREDO_DO_DIFF"), "`{id}`");
@@ -373,7 +382,7 @@ fn worktree_instruction_falls_back_to_the_base_name() {
         let mut ctx = context();
         ctx.base_sha = base_sha;
 
-        let rendered = render_prompt(&embedded("review-padrao"), &ctx, 0).unwrap();
+        let rendered = render_prompt(&embedded("seguranca"), &ctx, 0).unwrap();
 
         assert!(rendered.text.contains("`git diff main...HEAD`"));
     }
@@ -382,7 +391,7 @@ fn worktree_instruction_falls_back_to_the_base_name() {
 #[test]
 fn inline_mode_prompt_has_the_diff_block_and_no_worktree_instruction() {
     let ctx = context();
-    for (id, _) in DEFAULT_TEMPLATES {
+    for (id, _) in diff_aware_templates() {
         let rendered = render_prompt(&embedded(id), &ctx, 1000).unwrap();
 
         assert!(rendered.text.contains("kind=\"diff\""), "`{id}`");
@@ -414,4 +423,63 @@ fn files_block_is_present_in_worktree_mode_with_stats() {
     let rendered = render_prompt(&embedded("performance"), &ctx, 0).unwrap();
 
     assert!(rendered.text.contains("src/a.rs  +3 −4\nsrc/b.rs\n"));
+}
+
+#[test]
+fn review_padrao_exposes_pr_metadata_and_threads_inside_untrusted_blocks() {
+    let ctx = context();
+
+    let rendered = render_prompt(&embedded(REVIEW_PADRAO), &ctx, 0).unwrap();
+
+    let nonce = &rendered.nonce;
+    let text = &rendered.text;
+    assert!(text.contains(&format!(
+        "Review pull request #42 in acme/api ({}).",
+        ctx.pr_url
+    )));
+    assert!(text.contains("Base main ← head @ 9b1d7a3c5e2f4086"));
+    assert!(text.contains(&format!(
+        "<untrusted kind=\"head\" nonce=\"{nonce}\">\nfix/login\n</untrusted nonce=\"{nonce}\">"
+    )));
+    assert!(text.contains("`gh pr diff 42 --repo acme/api`"));
+    let threads = format!(
+        "<untrusted kind=\"previous_reviews\" nonce=\"{nonce}\">\n```text\nalguém pediu testes\n```\n</untrusted nonce=\"{nonce}\">"
+    );
+    assert!(text.contains(&threads));
+    assert!(text.contains(&format!("```argon-findings-{nonce}")));
+    assert!(rendered.warnings.is_empty());
+}
+
+#[test]
+fn review_padrao_omits_the_previous_reviews_block_when_there_are_none() {
+    let mut ctx = context();
+    ctx.previous_reviews.clear();
+
+    let rendered = render_prompt(&embedded(REVIEW_PADRAO), &ctx, 0).unwrap();
+
+    assert!(!rendered.text.contains("Previous reviews:"));
+    assert!(!rendered.text.contains("kind=\"previous_reviews\""));
+}
+
+#[test]
+fn pr_threads_matches_previous_reviews_including_truncation() {
+    let mut ctx = context();
+    ctx.previous_reviews = format!("{}\n", "x".repeat(99)).repeat(600);
+
+    let rendered = render("{{pr.threads}}\u{0}{{previous_reviews}}", &ctx, 0);
+
+    let (threads, reviews) = rendered.split_once('\u{0}').unwrap();
+    assert_eq!(threads, reviews);
+    assert!(threads.ends_with(PREVIOUS_REVIEWS_NOTICE));
+}
+
+#[test]
+fn nested_pr_variables_are_known() {
+    let rendered = render(
+        "{{pr.repo}}|{{pr.base}}|{{pr.head}}|{{pr.sha}}",
+        &context(),
+        0,
+    );
+
+    assert_eq!(rendered, "acme/api|main|fix/login|9b1d7a3c5e2f4086");
 }

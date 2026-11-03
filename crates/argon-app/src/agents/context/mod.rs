@@ -43,6 +43,7 @@ pub fn prompt_context(
         base: pr.base.clone(),
         base_sha: detail.base_oid.clone(),
         head: pr.head.clone(),
+        head_sha: detail.head_oid.clone(),
         diff: if max_diff_chars == 0 {
             String::new()
         } else {

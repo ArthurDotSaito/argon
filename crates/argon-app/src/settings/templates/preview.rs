@@ -71,6 +71,7 @@ pub fn sample_context() -> PromptContext {
         base: "main".into(),
         base_sha: Some("4f2c9e1".into()),
         head: "feat/pagination".into(),
+        head_sha: "9b1d7a3c5e2f4086a1b3c4d5e6f708192a3b4c5d".into(),
         diff: "diff --git a/src/appointments.ts b/src/appointments.ts\n--- a/src/appointments.ts\n+++ b/src/appointments.ts\n@@ -10,3 +10,5 @@\n-  return db.all();\n+  const page = await db.page(cursor, limit);\n+  return page;\n".into(),
         files: vec!["src/appointments.ts".into(), "src/db.ts".into()],
         file_stats: vec![

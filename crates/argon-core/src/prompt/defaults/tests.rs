@@ -59,17 +59,43 @@ fn embedded_source(id: &str) -> &'static str {
         .1
 }
 
+const V2_REVIEW_PADRAO: &str = include_str!("../testdata/review-padrao.v2.md");
+
+fn expected_version(id: &str) -> u32 {
+    match id {
+        "review-padrao" => 3,
+        _ => 2,
+    }
+}
+
 #[test]
 fn embedded_templates_carry_the_version_header() {
     for (id, source) in DEFAULT_TEMPLATES {
-        assert!(
-            source
-                .lines()
-                .take(6)
-                .any(|line| line == "argon_template_version = 2"),
-            "{id}"
-        );
+        let header = format!("argon_template_version = {}", expected_version(id));
+        assert!(source.lines().take(6).any(|line| line == header), "{id}");
     }
+}
+
+#[test]
+fn v2_review_padrao_hash_is_registered_as_a_previous_version() {
+    assert!(is_previous_version(
+        "review-padrao",
+        &content_hash(V2_REVIEW_PADRAO)
+    ));
+}
+
+#[test]
+fn unedited_v2_review_padrao_is_upgraded_to_the_current_template() {
+    let dir = TempDir::new("ensure-upgrades-v2");
+    let path = dir.path().join("review-padrao.md");
+    fs::write(&path, V2_REVIEW_PADRAO).unwrap();
+
+    ensure_default_templates(dir.path()).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        embedded_source("review-padrao")
+    );
 }
 
 #[test]

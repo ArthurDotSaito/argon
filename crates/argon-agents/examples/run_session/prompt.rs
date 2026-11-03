@@ -60,6 +60,7 @@ pub fn render(
         base: detail.pr.base.clone(),
         base_sha: None,
         head: detail.pr.head.clone(),
+        head_sha: detail.head_oid.clone(),
         diff: unified_diff(files),
         files: files.iter().map(|file| file.path.clone()).collect(),
         file_stats: files

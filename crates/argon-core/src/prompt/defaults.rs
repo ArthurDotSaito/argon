@@ -29,6 +29,7 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 3] = [
             "72ce4cf7ab3244c035c9bff06eae6f55292c43b600c5b5096450b99b13c0b0da",
             "4ee28d1f7461110d20df8556e2b2ed149b8ea5177d3a9b3d30d5a67e98875135",
             "ac307efe3dd13d85417f904aaa333640bf0898250bfd27de8a0970ba89110748",
+            "bd53ac457bafdf5151e463924e2afc8547ec4366c1569760f2d87ac33321fd33",
         ],
     ),
     (

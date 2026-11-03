@@ -10,12 +10,17 @@ use super::{PromptError, PromptTemplate};
 #[cfg(test)]
 mod tests;
 
-const KNOWN_VARIABLES: [&str; 15] = [
+const KNOWN_VARIABLES: [&str; 20] = [
     "pr",
     "pr.title",
     "pr.number",
     "pr.url",
     "pr.body",
+    "pr.repo",
+    "pr.base",
+    "pr.head",
+    "pr.sha",
+    "pr.threads",
     "repo",
     "base",
     "base_sha",
@@ -51,6 +56,7 @@ pub struct PromptContext {
     pub base: String,
     pub base_sha: Option<String>,
     pub head: String,
+    pub head_sha: String,
     pub diff: String,
     pub files: Vec<String>,
     pub file_stats: Vec<(String, u32, u32)>,
@@ -191,6 +197,11 @@ pub fn render_prompt(
         random_nonce,
     )?;
     let inline = diff_fits_inline(&ctx.diff, max_diff_chars);
+    let previous_reviews = truncate_with_notice(
+        &ctx.previous_reviews,
+        MAX_PREVIOUS_REVIEWS_CHARS,
+        PREVIOUS_REVIEWS_NOTICE,
+    );
     let values = context! {
         nonce => nonce,
         pr => context! {
@@ -198,6 +209,11 @@ pub fn render_prompt(
             number => ctx.pr_number,
             url => ctx.pr_url,
             body => ctx.pr_body,
+            repo => ctx.repo,
+            base => ctx.base,
+            head => ctx.head,
+            sha => ctx.head_sha,
+            threads => previous_reviews,
         },
         repo => ctx.repo,
         base => ctx.base,
@@ -206,11 +222,7 @@ pub fn render_prompt(
         diff => if inline { ctx.diff.as_str() } else { "" },
         diff_mode => if inline { DIFF_MODE_INLINE } else { DIFF_MODE_WORKTREE },
         files => Value::from_object(FileList(files)),
-        previous_reviews => truncate_with_notice(
-            &ctx.previous_reviews,
-            MAX_PREVIOUS_REVIEWS_CHARS,
-            PREVIOUS_REVIEWS_NOTICE,
-        ),
+        previous_reviews => previous_reviews,
         ci_failures => truncate_with_notice(
             &ctx.ci_failures,
             MAX_CI_FAILURES_CHARS,
