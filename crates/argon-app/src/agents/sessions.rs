@@ -23,6 +23,7 @@ pub struct ActiveSession {
     pub model_label: String,
     pub worktree: PathBuf,
     pub handle: AgentSessionHandle,
+    pub head_oid: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -40,6 +41,7 @@ impl ActiveSession {
             ended_at: None,
             resumable: agent_defaults(self.agent).load_session,
             failure_reason: None,
+            head_oid: self.head_oid.clone(),
         }
     }
 }

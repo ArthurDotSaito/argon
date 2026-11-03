@@ -77,6 +77,10 @@ impl FindingSet {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn counts(&self) -> SeverityCounts {
         SeverityCounts::tally(
             self.entries

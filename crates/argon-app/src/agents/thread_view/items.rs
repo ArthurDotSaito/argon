@@ -3,8 +3,8 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div,
+    AnyElement, App, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div,
 };
 
 use super::ThreadView;
@@ -13,8 +13,8 @@ use crate::agents::finding_card::findings_block;
 use crate::agents::message_text::hide_findings_block;
 use crate::agents::panel_labels as labels;
 use crate::agents::permission_card::permission_card;
+use crate::agents::safe_markdown::agent_markdown;
 use crate::agents::transcript::Item;
-use crate::pr::markdown;
 
 const USER_PREVIEW_CHARS: usize = 480;
 const CURSOR: &str = " ▍";
@@ -27,65 +27,66 @@ fn preview(text: &str, limit: usize) -> (String, bool) {
 }
 
 impl ThreadView {
-    pub(super) fn render_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(super) fn row_count(&self, cx: &App) -> usize {
+        self.model.read(cx).transcript().items().len() + 1
+    }
+
+    pub(super) fn render_row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let model = self.model.read(cx);
-        let transcript = model.transcript().clone();
-        let findings = model.findings().clone();
-        let loading = model.is_loading();
-        let load_error = model.load_error().cloned();
-        let busy: Vec<i64> = findings_busy(&transcript, |id| model.is_finding_busy(id));
+        let transcript = model.transcript();
+        let last = transcript.items().len().saturating_sub(1);
+        let streaming = ix == last && transcript.is_streaming();
+        let open_thought = ix == last && transcript.in_turn();
+        let Some(item) = transcript.items().get(ix).cloned() else {
+            return self.status_row(cx);
+        };
         let weak = self.model.downgrade();
-        let items = transcript.items();
-        let last = items.len().saturating_sub(1);
-        let mut out = Vec::with_capacity(items.len() + 2);
-        for (ix, item) in items.iter().enumerate() {
-            let element = match item {
-                Item::User(text) => self.user_message(ix, text, cx),
-                Item::Agent(text) => {
-                    let streaming = ix == last && transcript.is_streaming();
-                    agent_message(ix, text, streaming)
-                }
-                Item::Thought(thought) => {
-                    let open = ix == last && transcript.in_turn();
-                    self.thought(ix, thought, open, cx)
-                }
-                Item::Tool(tool) => self.tool(tool, cx),
-                Item::Plan(entries) => self.plan(entries, cx),
-                Item::Permission(permission) => {
-                    permission_card(weak.clone(), permission, cx).into_any_element()
-                }
-                Item::Findings { ids, skipped } => {
-                    findings_block(weak.clone(), ids, *skipped, &findings, &busy, cx)
-                        .into_any_element()
-                }
-                Item::Interrupted(reason) => self.notice(labels::interrupted(reason), cx),
-                Item::Error(message) => self.error(ix, message, cx),
-            };
-            out.push(element);
-        }
+        let element = match item {
+            Item::User(text) => self.user_message(ix, &text, cx),
+            Item::Agent(text) => agent_message(ix, &text, streaming),
+            Item::Thought(thought) => self.thought(ix, &thought, open_thought, cx),
+            Item::Tool(tool) => self.tool(ix, &tool, cx),
+            Item::Plan(entries) => self.plan(&entries, cx),
+            Item::Permission(permission) => {
+                permission_card(weak, &permission, cx).into_any_element()
+            }
+            Item::Findings {
+                ids,
+                outside,
+                unreadable,
+            } => findings_block(weak, &ids, (outside, unreadable), self.model.read(cx), cx)
+                .into_any_element(),
+            Item::Interrupted(reason) => self.notice(labels::interrupted(&reason), cx),
+            Item::Error(message) => self.error(ix, &message, cx),
+        };
+        div().px_2().pb_2().child(element).into_any_element()
+    }
+
+    fn status_row(&self, cx: &Context<Self>) -> AnyElement {
+        let model = self.model.read(cx);
         let theme = cx.theme();
-        if loading {
-            out.push(status_line(
+        let mut row = v_flex().px_2().pb_2().gap_1();
+        if model.is_loading() {
+            row = row.child(status_line(
                 labels::LOADING_TRANSCRIPT.into(),
                 theme.muted_foreground,
             ));
         }
-        if let Some(error) = load_error {
-            out.push(status_line(error, theme.danger));
+        if let Some(error) = model.load_error().cloned() {
+            row = row.child(status_line(error, theme.danger));
         }
-        if transcript.is_thinking() {
-            out.push(
+        if model.transcript().is_thinking() {
+            row = row.child(
                 h_flex()
                     .gap_1p5()
                     .items_center()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(Spinner::new().xsmall().color(theme.muted_foreground))
-                    .child(labels::THINKING)
-                    .into_any_element(),
+                    .child(labels::THINKING),
             );
         }
-        out
+        row.into_any_element()
     }
 
     fn user_message(&self, ix: usize, text: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -108,7 +109,7 @@ impl ThreadView {
                 } else {
                     labels::SHOW_ALL
                 })
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), ix, cx)))
         });
         v_flex()
             .ml_6()
@@ -213,22 +214,6 @@ impl ThreadView {
     }
 }
 
-fn findings_busy(
-    transcript: &crate::agents::transcript::Transcript,
-    is_busy: impl Fn(i64) -> bool,
-) -> Vec<i64> {
-    transcript
-        .items()
-        .iter()
-        .filter_map(|item| match item {
-            Item::Findings { ids, .. } => Some(ids.iter().copied()),
-            _ => None,
-        })
-        .flatten()
-        .filter(|id| is_busy(*id))
-        .collect()
-}
-
 fn agent_message(ix: usize, text: &str, streaming: bool) -> AnyElement {
     let text = hide_findings_block(text);
     let body = if streaming {
@@ -238,7 +223,10 @@ fn agent_message(ix: usize, text: &str, streaming: bool) -> AnyElement {
     };
     div()
         .text_sm()
-        .child(markdown(format!("agent-msg-{ix}").into(), body.into()))
+        .child(agent_markdown(
+            SharedString::from(format!("agent-msg-{ix}")),
+            &body,
+        ))
         .into_any_element()
 }
 

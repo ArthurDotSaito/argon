@@ -156,6 +156,7 @@ impl ThreadModel {
                     }
                 }
                 cx.emit(ThreadEvent::Activity);
+                this.ensure_diff(cx);
                 cx.notify();
             });
         }));
@@ -186,6 +187,7 @@ impl ThreadModel {
         self.transcript = transcript;
         self.findings = findings;
         if !snapshot.models.is_empty() {
+            cx.emit(ThreadEvent::ModelsAvailable(snapshot.models.clone()));
             self.models = snapshot.models;
         }
         self.set_model_id(snapshot.model);

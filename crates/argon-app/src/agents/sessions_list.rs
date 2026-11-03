@@ -42,7 +42,7 @@ pub struct SessionCard {
     pub controls: SessionControls,
 }
 
-fn pr_labels(pr: &PrKey, number: Option<u64>, cx: &App) -> (SharedString, SharedString) {
+pub fn pr_labels(pr: &PrKey, number: Option<u64>, cx: &App) -> (SharedString, SharedString) {
     let found = InboxModel::global(cx).and_then(|inbox| inbox.read(cx).pr(pr).cloned());
     match found {
         Some(pr) => (
@@ -111,7 +111,10 @@ impl SessionCard {
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
             status,
             counts,
-            elapsed: duration_label(row.updated_at - row.created_at).into(),
+            elapsed: match status {
+                CardStatus::Archived => SharedString::default(),
+                _ => duration_label(row.updated_at - row.created_at).into(),
+            },
             created_at: row.created_at,
             note: row.failure_reason.clone().map(SharedString::from),
             controls: SessionControls {

@@ -23,6 +23,7 @@ pub struct Composer {
     input: Entity<TextareaState>,
     model_select: Entity<SelectState<Vec<Choice>>>,
     shown: (Vec<String>, String),
+    was_changing: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -64,6 +65,7 @@ impl Composer {
             input,
             model_select,
             shown: (Vec::new(), String::new()),
+            was_changing: false,
             _subscriptions: subscriptions,
         };
         this.sync_models(window, cx);
@@ -74,7 +76,9 @@ impl Composer {
         let model = self.model.read(cx);
         let ids: Vec<String> = model.models().iter().map(|info| info.id.clone()).collect();
         let current = model.info().model.clone();
-        if self.shown.0 == ids && self.shown.1 == current {
+        let changing = model.is_changing_model();
+        let settled = std::mem::replace(&mut self.was_changing, changing) && !changing;
+        if !settled && self.shown.0 == ids && self.shown.1 == current {
             return;
         }
         let mut choices: Vec<Choice> = model

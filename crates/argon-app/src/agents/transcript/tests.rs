@@ -227,7 +227,11 @@ fn findings_event_keeps_ids_and_skipped_count() {
         ended("end_turn"),
         AgentEvent::Findings {
             findings: vec![SavedFinding { id: 7, finding }],
-            skipped: vec!["vendor/x.rs".into(), "y".into()],
+            skipped: vec![
+                "finding `a`: file `vendor/x.rs` is not part of the PR".into(),
+                "item 2: missing field `line`".into(),
+                "finding `b`: file `y` is not part of the PR".into(),
+            ],
         },
         AgentEvent::Error("aviso".into()),
     ]);
@@ -236,7 +240,8 @@ fn findings_event_keeps_ids_and_skipped_count() {
         [
             Item::Findings {
                 ids: vec![7],
-                skipped: 2
+                outside: 2,
+                unreadable: 1,
             },
             Item::Error("aviso".into()),
         ]
@@ -264,4 +269,29 @@ fn empty_findings_only_show_for_the_review_turn() {
         .filter(|item| matches!(item, Item::Findings { .. }))
         .count();
     assert_eq!(blocks, 1);
+}
+
+#[test]
+fn long_tool_output_is_clipped_when_applied() {
+    let transcript = replay(&[
+        user("go"),
+        AgentEvent::ToolCall {
+            id: "t".into(),
+            title: "cat".into(),
+            kind: "read".into(),
+            status: ToolStatus::InProgress,
+        },
+        AgentEvent::ToolCallUpdate {
+            id: "t".into(),
+            status: None,
+            output: Some("é".repeat(20_000)),
+            title: None,
+        },
+    ]);
+    let Item::Tool(tool) = &transcript.items()[1] else {
+        panic!("expected tool");
+    };
+    let output = tool.output.as_deref().unwrap();
+    assert!(output.len() <= 16 * 1024 + 32);
+    assert!(output.ends_with("… saída truncada"));
 }

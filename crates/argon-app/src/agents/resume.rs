@@ -125,6 +125,7 @@ impl AgentSessions {
                 model: row.model,
                 worktree,
                 handle,
+                head_oid: Some(head.clone()),
                 created_at: row.created_at,
             },
             cx,

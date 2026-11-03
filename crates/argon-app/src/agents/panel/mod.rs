@@ -1,7 +1,7 @@
 mod history;
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 
@@ -35,6 +35,7 @@ pub struct AgentPanel {
     history_task: Option<Task<()>>,
     historical: HashMap<String, Entity<ThreadModel>>,
     thread: Option<(Entity<ThreadView>, Subscription)>,
+    last_render: Option<Instant>,
     _ticker: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -66,7 +67,7 @@ impl AgentPanel {
             loop {
                 cx.background_executor().timer(TICK).await;
                 let alive = this.update(cx, |this, cx| {
-                    if this.has_active(cx) {
+                    if this.is_visible() && this.has_active(cx) {
                         cx.notify();
                     }
                 });
@@ -84,11 +85,17 @@ impl AgentPanel {
             history_task: None,
             historical: HashMap::new(),
             thread: None,
+            last_render: None,
             _ticker: ticker,
             _subscriptions: subscriptions,
         };
         this.reload_history(cx);
         this
+    }
+
+    fn is_visible(&self) -> bool {
+        self.last_render
+            .is_some_and(|at| at.elapsed() < TICK + TICK)
     }
 
     fn has_active(&self, cx: &App) -> bool {
@@ -198,6 +205,7 @@ impl Panel for AgentPanel {
 
 impl Render for AgentPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.last_render = Some(Instant::now());
         let body = match &self.thread {
             Some((view, _)) => view.clone().into_any_element(),
             None => self.render_list(cx).into_any_element(),

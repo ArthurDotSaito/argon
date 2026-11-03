@@ -1,8 +1,10 @@
 mod actions;
+mod diff;
 mod feed;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use argon_agents::{AgentSessionHandle, ModelInfo};
 use argon_core::PrKey;
@@ -11,6 +13,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use gpui_kit::{App, Context, EventEmitter, SharedString, Subscription, Task};
 
 use super::card_status::{CardStatus, ResumeAction, card_status, resume_action};
+use super::diff_lines::DiffLines;
 use super::finding_set::{FindingSet, SeverityCounts};
 use super::lifecycle::APP_CLOSED_REASON;
 use super::transcript::Transcript;
@@ -30,6 +33,7 @@ pub struct SessionInfo {
     pub ended_at: Option<DateTime<Utc>>,
     pub resumable: bool,
     pub failure_reason: Option<String>,
+    pub head_oid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +58,8 @@ pub struct ThreadModel {
     services: Option<Services>,
     feed: Option<Task<()>>,
     notice: Option<SharedString>,
+    diff_lines: Option<Arc<DiffLines>>,
+    diff_requested: bool,
     _drafts: Option<Subscription>,
 }
 
@@ -98,6 +104,8 @@ impl ThreadModel {
                 .map(|global| global.0.clone()),
             feed: None,
             notice: None,
+            diff_lines: None,
+            diff_requested: false,
             _drafts: None,
         }
     }
@@ -192,6 +200,7 @@ impl ThreadModel {
             }
             cx.emit(ThreadEvent::Activity);
         }
+        self.ensure_diff(cx);
         cx.notify();
     }
 

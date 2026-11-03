@@ -37,10 +37,13 @@ pub const REFERENCE: &str = "Referenciar a linha selecionada no diff";
 pub const NO_LINE_SELECTED: &str = "Selecione uma linha no diff do PR para referenciar";
 pub const DRAFTS_ONLY: &str = "só rascunhos";
 pub const BUSY: &str = "Aguarde o turno atual terminar";
-pub const SERVICES_UNAVAILABLE: &str = "serviços em segundo plano indisponíveis";
+pub use super::labels::SERVICES_UNAVAILABLE;
 pub const UNKNOWN_PR: &str = "PR fora da inbox";
 pub const YOU: &str = "você";
 pub const CONTINUE: &str = "Continuar";
+pub const OUT_OF_DIFF: &str = "Linha fora do diff — abra no diff e comente manualmente";
+pub const OPEN_LINK_TITLE: &str = "Abrir link externo?";
+pub const OPEN_LINK: &str = "Abrir";
 pub const RETRY: &str = "Tentar continuar";
 pub const RESUMING: &str = "retomando…";
 pub const ARCHIVE: &str = "Arquivar";
@@ -130,10 +133,17 @@ pub fn interrupted(reason: &str) -> String {
     }
 }
 
-pub fn skipped(count: usize) -> String {
+pub fn skipped_outside(count: usize) -> String {
     match count {
         1 => "1 achado descartado (fora dos arquivos do PR)".into(),
         _ => format!("{count} achados descartados (fora dos arquivos do PR)"),
+    }
+}
+
+pub fn skipped_unreadable(count: usize) -> String {
+    match count {
+        1 => "1 achado descartado (formato ilegível)".into(),
+        _ => format!("{count} achados descartados (formato ilegível)"),
     }
 }
 
@@ -171,4 +181,17 @@ pub fn worktree_invalid(error: &str) -> String {
 
 pub fn resume_failed(error: &str) -> String {
     format!("Não consegui retomar: {error}")
+}
+
+pub fn blocked_image(alt: &str, url: &str) -> String {
+    let alt = if alt.is_empty() {
+        "sem descrição"
+    } else {
+        alt
+    };
+    format!("_imagem bloqueada: {alt}_ (`{url}`)")
+}
+
+pub fn blocked_link(url: &str) -> String {
+    format!("Link bloqueado (só http/https): {url}")
 }

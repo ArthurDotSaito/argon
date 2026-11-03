@@ -14,4 +14,5 @@ mod threads;
 
 pub(crate) use confirm::{Confirm, confirm};
 pub use drafts::{DraftsBus, DraftsChanged};
+pub(crate) use file_diff::patch_order;
 pub use review_tab::{ReviewScope, ReviewTab, ReviewTabEvent};

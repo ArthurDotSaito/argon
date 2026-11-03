@@ -100,7 +100,7 @@ impl ThreadView {
                     .child(Icon::new(chevron).xsmall())
                     .child(Icon::new(IconName::Brain).xsmall())
                     .child(title)
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), ix, cx))),
             )
             .children(expanded.then(|| {
                 div()
@@ -116,7 +116,7 @@ impl ThreadView {
             .into_any_element()
     }
 
-    pub(super) fn tool(&self, tool: &ToolItem, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn tool(&self, ix: usize, tool: &ToolItem, cx: &mut Context<Self>) -> AnyElement {
         let key: SharedString = format!("out:{}", tool.id).into();
         let expanded = self.is_expanded(&key);
         let theme = cx.theme();
@@ -137,7 +137,7 @@ impl ThreadView {
                 label,
                 cx,
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), ix, cx)))
         });
         let output = tool.output.as_ref().filter(|_| expanded).map(|output| {
             div()

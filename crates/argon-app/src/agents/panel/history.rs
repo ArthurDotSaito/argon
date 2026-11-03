@@ -53,6 +53,7 @@ pub fn session_info(row: &SessionRow, worktree_present: bool, cx: &App) -> Sessi
             && row.acp_session_id.is_some()
             && row.status != SessionStatus::Archived,
         failure_reason: row.failure_reason.clone(),
+        head_oid: None,
     }
 }
 

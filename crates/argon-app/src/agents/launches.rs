@@ -141,6 +141,7 @@ impl AgentSessions {
                         model_label: identity.meta.model_label,
                         worktree: launched.worktree,
                         handle: launched.handle,
+                        head_oid: launched.head,
                         created_at: chrono::Utc::now(),
                     },
                     cx,

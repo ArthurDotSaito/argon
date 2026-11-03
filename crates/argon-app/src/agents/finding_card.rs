@@ -9,10 +9,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{App, Div, ParentElement as _, SharedString, Styled as _, WeakEntity, Window, div};
 
 use super::badges::{severity_counts, severity_pill};
-use super::finding_set::{FindingEntry, FindingSet, SeverityCounts};
+use super::finding_set::{FindingEntry, SeverityCounts};
 use super::panel_labels as labels;
+use super::safe_markdown::agent_markdown;
 use super::thread_model::ThreadModel;
-use crate::pr::markdown;
 use crate::workspace::Workspace;
 
 #[derive(Clone)]
@@ -50,15 +50,23 @@ fn reveal_button(id: String, target: Target) -> Button {
         .on_click(move |_, window, cx| target.reveal(window, cx))
 }
 
+#[derive(Clone, Copy)]
+struct CardState {
+    busy: bool,
+    in_diff: Option<bool>,
+}
+
 fn actions(
     model: WeakEntity<ThreadModel>,
     id: i64,
     entry: &FindingEntry,
-    busy: bool,
+    state: CardState,
     target: Target,
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
+    let busy = state.busy;
+    let outside = state.in_diff == Some(false);
     let reveal = reveal_button(format!("finding-reveal-{id}"), target);
     let row = h_flex().gap_1p5().items_center().flex_wrap();
     match entry.state {
@@ -71,7 +79,7 @@ fn actions(
                     .xsmall()
                     .primary()
                     .loading(busy)
-                    .disabled(busy)
+                    .disabled(busy || outside)
                     .on_click(move |_, _, cx| {
                         _ = add_model.update(cx, |model, cx| model.add_finding(id, cx));
                     }),
@@ -86,6 +94,12 @@ fn actions(
                         _ = model.update(cx, |model, cx| model.ignore_finding(id, cx));
                     }),
             )
+            .children(outside.then(|| {
+                div()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(labels::OUT_OF_DIFF)
+            }))
             .child(div().flex_1())
             .child(reveal)
         }
@@ -114,7 +128,7 @@ fn card(
     model: WeakEntity<ThreadModel>,
     id: i64,
     entry: &FindingEntry,
-    busy: bool,
+    state: CardState,
     pr: &PrKey,
     cx: &App,
 ) -> Div {
@@ -129,9 +143,9 @@ fn card(
     };
     let ignored = entry.state == FindingState::Ignored;
     let body = (!ignored && !finding.body.trim().is_empty()).then(|| {
-        div().text_sm().child(markdown(
-            format!("finding-body-{id}").into(),
-            finding.body.clone().into(),
+        div().text_sm().child(agent_markdown(
+            SharedString::from(format!("finding-body-{id}")),
+            &finding.body,
         ))
     });
     let suggestion = finding
@@ -193,21 +207,19 @@ fn card(
         )
         .children(body)
         .children(suggestion)
-        .child(actions(model, id, entry, busy, target, cx))
+        .child(actions(model, id, entry, state, target, cx))
 }
 
 pub fn findings_block(
     model: WeakEntity<ThreadModel>,
     ids: &[i64],
-    skipped: usize,
-    findings: &FindingSet,
-    busy: &[i64],
+    skipped: (usize, usize),
+    thread: &ThreadModel,
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
-    let pr = model
-        .upgrade()
-        .map(|model| model.read(cx).info().pr.clone());
+    let findings = thread.findings();
+    let pr = thread.info().pr.clone();
     let entries: Vec<(i64, &FindingEntry)> = ids
         .iter()
         .filter_map(|id| findings.get(*id).map(|entry| (*id, entry)))
@@ -231,24 +243,34 @@ pub fn findings_block(
             .text_color(theme.muted_foreground)
             .child(labels::NO_FINDINGS)
     });
-    let note = (skipped > 0).then(|| {
+    let (outside, unreadable) = skipped;
+    let notes = [
+        (outside > 0).then(|| labels::skipped_outside(outside)),
+        (unreadable > 0).then(|| labels::skipped_unreadable(unreadable)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|text| {
         div()
             .text_xs()
             .italic()
             .text_color(theme.muted_foreground)
-            .child(labels::skipped(skipped))
+            .child(text)
     });
-    let cards: Vec<Div> = match &pr {
-        Some(pr) => entries
-            .iter()
-            .map(|(id, entry)| card(model.clone(), *id, entry, busy.contains(id), pr, cx))
-            .collect(),
-        None => Vec::new(),
-    };
+    let cards: Vec<Div> = entries
+        .iter()
+        .map(|(id, entry)| {
+            let state = CardState {
+                busy: thread.is_finding_busy(*id),
+                in_diff: thread.finding_in_diff(&entry.finding),
+            };
+            card(model.clone(), *id, entry, state, &pr, cx)
+        })
+        .collect();
     v_flex()
         .gap_2()
         .child(heading)
         .children(empty)
         .children(cards)
-        .children(note)
+        .children(notes)
 }

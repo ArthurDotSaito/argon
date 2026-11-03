@@ -36,6 +36,7 @@ pub struct LaunchRequest {
 
 pub struct Launched {
     pub worktree: PathBuf,
+    pub head: Option<String>,
     pub handle: AgentSessionHandle,
 }
 
@@ -94,6 +95,13 @@ pub async fn launch(
         }
         Some(Ok(path)) => path,
     };
+    let head = match worktrees.head_oid(&worktree).await {
+        Ok(head) => Some(head),
+        Err(error) => {
+            tracing::warn!(%error, "failed to read worktree head at session start");
+            None
+        }
+    };
     _ = progress.unbounded_send(LaunchStage::StartingAgent);
     let started = unless_cancelled(&mut cancel, start(&request, worktree.clone())).await;
     let outcome = match started {
@@ -104,7 +112,13 @@ pub async fn launch(
             Err(LaunchError::Cancelled)
         }
         Some(Ok(handle)) => match handle.prompt(request.prompt.text.clone()) {
-            Ok(()) => return Ok(Launched { worktree, handle }),
+            Ok(()) => {
+                return Ok(Launched {
+                    worktree,
+                    head,
+                    handle,
+                });
+            }
             Err(error) => {
                 handle.shutdown().await;
                 Err(LaunchError::Failed(error.to_string()))

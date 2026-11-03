@@ -112,6 +112,9 @@ impl ThreadModel {
         let Some(entry) = self.findings.get(id).cloned() else {
             return;
         };
+        if self.finding_in_diff(&entry.finding) == Some(false) {
+            return;
+        }
         let Some(services) = self.services.clone() else {
             self.fail_action(labels::SERVICES_UNAVAILABLE, cx);
             return;
@@ -121,11 +124,13 @@ impl ThreadModel {
         }
         cx.notify();
         let worktrees = AgentSessions::global(cx).map(|sessions| sessions.read(cx).worktrees());
+        let known_head = self.info.head_oid.clone();
         let head = self
             .info
             .worktree
             .clone()
             .zip(worktrees)
+            .filter(|_| known_head.is_none())
             .map(|(path, worktrees)| {
                 services.spawn_runtime(async move { worktrees.head_oid(&path).await })
             });
@@ -145,7 +150,7 @@ impl ThreadModel {
                         None
                     }
                 },
-                None => None,
+                None => known_head,
             };
             let draft = draft_for(&entry.finding, pr.clone(), &session, head_oid);
             let result = flatten(

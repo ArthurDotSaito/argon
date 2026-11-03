@@ -8,20 +8,20 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, px,
+    AppContext as _, Context, Div, Entity, EventEmitter, FollowMode, IntoElement, ListAlignment,
+    ListState, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
+    list, px,
 };
 
 use super::badges::{severity_counts, status_chip};
 use super::composer::Composer;
 use super::panel_labels as labels;
 use super::session_actions::{SessionControls, controls};
+use super::sessions_list::pr_labels;
 use super::thread_model::ThreadModel;
 use crate::bottom::duration_label;
-use crate::inbox::InboxModel;
 
-const FOLLOW_SLACK: f32 = 48.;
+const LIST_OVERDRAW: f32 = 600.;
 
 pub enum ThreadViewEvent {
     Back,
@@ -31,8 +31,8 @@ pub struct ThreadView {
     model: Entity<ThreadModel>,
     composer: Option<Entity<Composer>>,
     expanded: HashSet<SharedString>,
-    scroll: ScrollHandle,
-    follow: bool,
+    list: ListState,
+    rows: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -44,49 +44,50 @@ impl ThreadView {
             .read(cx)
             .is_live()
             .then(|| cx.new(|cx| Composer::new(model.clone(), window, cx)));
-        let subscriptions = vec![cx.observe(&model, |this, _, cx| {
-            this.follow |= this.at_bottom();
-            cx.notify();
-        })];
-        Self {
+        let subscriptions = vec![cx.observe(&model, |this, _, cx| this.sync_rows(cx))];
+        let list = ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW));
+        list.set_follow_mode(FollowMode::Tail);
+        let mut this = Self {
             model,
             composer,
             expanded: HashSet::new(),
-            scroll: ScrollHandle::new(),
-            follow: true,
+            list,
+            rows: 0,
             _subscriptions: subscriptions,
-        }
+        };
+        this.sync_rows(cx);
+        this
     }
 
-    fn at_bottom(&self) -> bool {
-        let max = self.scroll.max_offset().y;
-        let offset = -self.scroll.offset().y;
-        max - offset <= px(FOLLOW_SLACK)
+    fn sync_rows(&mut self, cx: &mut Context<Self>) {
+        let rows = self.row_count(cx);
+        if rows > self.rows {
+            self.list.splice(self.rows..self.rows, rows - self.rows);
+        } else if rows < self.rows {
+            self.list.reset(rows);
+        }
+        self.rows = rows;
+        self.list.remeasure_items(0..rows);
+        cx.notify();
     }
 
     pub(super) fn is_expanded(&self, key: &str) -> bool {
         self.expanded.contains(key)
     }
 
-    pub(super) fn toggle(&mut self, key: SharedString, cx: &mut Context<Self>) {
-        self.follow = false;
+    pub(super) fn toggle(&mut self, key: SharedString, ix: usize, cx: &mut Context<Self>) {
+        self.list.pause_following_tail();
         if !self.expanded.remove(&key) {
             self.expanded.insert(key);
         }
+        self.list.remeasure_items(ix..ix + 1);
         cx.notify();
     }
 
     fn header(&self, cx: &mut Context<Self>) -> Div {
         let model = self.model.read(cx);
         let info = model.info();
-        let pr = InboxModel::global(cx).and_then(|inbox| inbox.read(cx).pr(&info.pr).cloned());
-        let title: SharedString = pr
-            .as_ref()
-            .map_or(labels::UNKNOWN_PR.into(), |pr| pr.title.clone().into());
-        let reference = pr.as_ref().map_or_else(
-            || info.number.map(|n| format!("#{n}")).unwrap_or_default(),
-            |pr| format!("{} #{}", pr.repo, pr.number),
-        );
+        let (title, reference) = pr_labels(&info.pr, info.number, cx);
         let meta = format!("{reference} · {} · {}", info.agent_label, info.model_label);
         let status = model.card_status();
         let session_controls = SessionControls {
@@ -198,27 +199,18 @@ impl ThreadView {
 
 impl Render for ThreadView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.follow {
-            self.scroll.scroll_to_bottom();
-        }
         let header = self.header(cx);
-        let items = self.render_items(cx);
         let footer = self.footer(cx);
+        let view = cx.weak_entity();
+        let rows = list(self.list.clone(), move |ix, _, cx| {
+            view.update(cx, |this, cx| this.render_row(ix, cx))
+                .unwrap_or_else(|_| div().into_any_element())
+        })
+        .size_full();
         v_flex()
             .size_full()
             .child(header)
-            .child(
-                v_flex()
-                    .id("agent-thread-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .track_scroll(&self.scroll)
-                    .overflow_y_scroll()
-                    .on_scroll(cx.listener(|this, _, _, _| this.follow = false))
-                    .p_2()
-                    .gap_2()
-                    .children(items),
-            )
+            .child(div().flex_1().min_h_0().pt_2().child(rows))
             .child(footer)
     }
 }

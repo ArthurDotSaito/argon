@@ -4,6 +4,29 @@ use argon_agents::{AgentEvent, PermissionOption, ToolStatus};
 use argon_store::SessionStatus;
 
 const END_TURN: &str = "end_turn";
+const OUTPUT_LIMIT: usize = 16 * 1024;
+const OUTPUT_TRUNCATED: &str = "
+… saída truncada";
+const OUTSIDE_PR_MARKER: &str = "is not part of the PR";
+
+fn clip_output(output: &str) -> String {
+    if output.len() <= OUTPUT_LIMIT {
+        return output.to_owned();
+    }
+    let mut cut = OUTPUT_LIMIT;
+    while !output.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{OUTPUT_TRUNCATED}", &output[..cut])
+}
+
+pub fn split_skipped(skipped: &[String]) -> (usize, usize) {
+    let outside = skipped
+        .iter()
+        .filter(|reason| reason.ends_with(OUTSIDE_PR_MARKER))
+        .count();
+    (outside, skipped.len() - outside)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionState {
@@ -51,7 +74,11 @@ pub enum Item {
     Tool(ToolItem),
     Plan(Vec<String>),
     Permission(PermissionItem),
-    Findings { ids: Vec<i64>, skipped: usize },
+    Findings {
+        ids: Vec<i64>,
+        outside: usize,
+        unreadable: usize,
+    },
     Interrupted(String),
     Error(String),
 }
@@ -148,7 +175,7 @@ impl Transcript {
                         tool.title = title.clone();
                     }
                     if let Some(output) = output {
-                        tool.output = Some(output.clone());
+                        tool.output = Some(clip_output(output));
                     }
                 }
             }
@@ -181,9 +208,11 @@ impl Transcript {
                 if self.turns > 1 && findings.is_empty() && skipped.is_empty() {
                     return;
                 }
+                let (outside, unreadable) = split_skipped(skipped);
                 self.items.push(Item::Findings {
                     ids: findings.iter().map(|saved| saved.id).collect(),
-                    skipped: skipped.len(),
+                    outside,
+                    unreadable,
                 });
             }
             AgentEvent::Error(message) => self.items.push(Item::Error(message.clone())),
