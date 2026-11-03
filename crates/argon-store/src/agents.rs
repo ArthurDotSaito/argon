@@ -9,7 +9,7 @@ use crate::Store;
 use crate::error::Result;
 
 const SESSION_COLUMNS: &str = "id, host, pr_id, agent, model, template, status, worktree_path, \
-     acp_session_id, nonce, allowed_files, created_at, updated_at";
+     acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionStatus {
@@ -17,6 +17,7 @@ pub enum SessionStatus {
     AwaitingUser,
     Completed,
     Failed,
+    Archived,
 }
 
 impl SessionStatus {
@@ -26,6 +27,7 @@ impl SessionStatus {
             Self::AwaitingUser => "awaiting_user",
             Self::Completed => "completed",
             Self::Failed => "failed",
+            Self::Archived => "archived",
         }
     }
 
@@ -35,6 +37,7 @@ impl SessionStatus {
             "awaiting_user" => Some(Self::AwaitingUser),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
+            "archived" => Some(Self::Archived),
             _ => None,
         }
     }
@@ -93,6 +96,8 @@ pub struct SessionRow {
     pub allowed_files: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub model_label: Option<String>,
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +149,8 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
             .map_err(|_| invalid(10, "allowed_files", &allowed))?,
         created_at: millis(11, row.get(11)?)?,
         updated_at: millis(12, row.get(12)?)?,
+        model_label: row.get(13)?,
+        failure_reason: row.get(14)?,
     })
 }
 
@@ -178,7 +185,9 @@ impl Store {
 
     pub fn set_session_status(&mut self, id: &str, status: SessionStatus) -> Result<()> {
         self.conn.execute(
-            "UPDATE agent_sessions SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE agent_sessions SET status = ?1, updated_at = ?2,
+                 failure_reason = CASE WHEN ?1 = 'failed' THEN failure_reason END
+             WHERE id = ?3",
             params![status.as_str(), Utc::now().timestamp_millis(), id],
         )?;
         Ok(())

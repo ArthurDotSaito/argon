@@ -54,7 +54,9 @@ fn apply_write(tx: &Transaction<'_>, write: &SessionWrite, now: i64) -> Result<(
     }
     if let Some(status) = write.status {
         tx.execute(
-            "UPDATE agent_sessions SET status = ?1 WHERE id = ?2",
+            "UPDATE agent_sessions
+                 SET status = ?1, failure_reason = CASE WHEN ?1 = 'failed' THEN failure_reason END
+             WHERE id = ?2",
             params![status.as_str(), write.session_id],
         )?;
     }

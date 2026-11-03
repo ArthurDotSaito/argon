@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use argon_core::{DraftComment, DraftReview, DraftSource, PrKey, ReviewEvent, Side};
 use chrono::Utc;
 use rusqlite::types::Type;
-use rusqlite::{Row, params};
+use rusqlite::{Connection, Row, params};
 
 use crate::Store;
 use crate::error::Result;
@@ -42,28 +42,59 @@ fn draft_from_row(row: &Row<'_>) -> rusqlite::Result<DraftComment> {
     })
 }
 
+pub(crate) fn insert_draft(
+    conn: &Connection,
+    draft: &DraftComment,
+    finding_id: Option<i64>,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO draft_comments
+            (host, pr_id, path, line, side, start_line, start_side, body, source, session_id,
+             head_oid, created_at, finding_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            draft.pr.host,
+            draft.pr.id.0,
+            draft.path,
+            draft.line,
+            draft.side.as_graphql(),
+            draft.start_line,
+            draft.start_side.map(Side::as_graphql),
+            draft.body,
+            draft.source.as_str(),
+            draft.session_id,
+            draft.head_oid,
+            Utc::now().timestamp_millis(),
+            finding_id,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+fn reset_findings_of_draft(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE findings SET state = 'new'
+         WHERE state = 'added'
+           AND id IN (SELECT finding_id FROM draft_comments WHERE id = ?1 AND finding_id IS NOT NULL)",
+        params![id],
+    )?;
+    Ok(())
+}
+
+fn reset_findings_of_pr(conn: &Connection, pr: &PrKey) -> Result<()> {
+    conn.execute(
+        "UPDATE findings SET state = 'new'
+         WHERE state = 'added'
+           AND id IN (SELECT finding_id FROM draft_comments
+                      WHERE host = ?1 AND pr_id = ?2 AND finding_id IS NOT NULL)",
+        params![pr.host, pr.id.0],
+    )?;
+    Ok(())
+}
+
 impl Store {
     pub fn add_draft(&mut self, draft: &DraftComment) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO draft_comments
-                (host, pr_id, path, line, side, start_line, start_side, body, source, session_id, head_oid, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                draft.pr.host,
-                draft.pr.id.0,
-                draft.path,
-                draft.line,
-                draft.side.as_graphql(),
-                draft.start_line,
-                draft.start_side.map(Side::as_graphql),
-                draft.body,
-                draft.source.as_str(),
-                draft.session_id,
-                draft.head_oid,
-                Utc::now().timestamp_millis(),
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_draft(&self.conn, draft, None)
     }
 
     pub fn drafts(&self, pr: &PrKey) -> Result<Vec<DraftComment>> {
@@ -86,8 +117,10 @@ impl Store {
     }
 
     pub fn delete_draft(&mut self, id: i64) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM draft_comments WHERE id = ?1", params![id])?;
+        let tx = self.conn.transaction()?;
+        reset_findings_of_draft(&tx, id)?;
+        tx.execute("DELETE FROM draft_comments WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -105,15 +138,19 @@ impl Store {
     }
 
     pub fn clear_drafts(&mut self, pr: &PrKey) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.transaction()?;
+        reset_findings_of_pr(&tx, pr)?;
+        tx.execute(
             "DELETE FROM draft_comments WHERE host = ?1 AND pr_id = ?2",
             params![pr.host, pr.id.0],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
     pub fn clear_review(&mut self, pr: &PrKey) -> Result<()> {
         let tx = self.conn.transaction()?;
+        reset_findings_of_pr(&tx, pr)?;
         tx.execute(
             "DELETE FROM draft_comments WHERE host = ?1 AND pr_id = ?2",
             params![pr.host, pr.id.0],

@@ -170,11 +170,18 @@ ALTER TABLE agent_sessions ADD COLUMN allowed_files TEXT NOT NULL DEFAULT '[]';
 CREATE INDEX idx_agent_sessions_updated ON agent_sessions(updated_at);
 ";
 
+const SESSION_LIFECYCLE: &str = "
+ALTER TABLE agent_sessions ADD COLUMN model_label TEXT;
+ALTER TABLE agent_sessions ADD COLUMN failure_reason TEXT;
+ALTER TABLE draft_comments ADD COLUMN finding_id INTEGER;
+";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
     M::up(DRAFT_HEAD_OID),
     M::up(AGENT_SESSION_CONTEXT),
+    M::up(SESSION_LIFECYCLE),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -339,5 +346,30 @@ mod tests {
         assert_eq!(session.nonce, "");
         assert!(session.allowed_files.is_empty());
         assert_eq!(session.agent, argon_core::AgentKind::Codex);
+    }
+
+    #[test]
+    fn migration_five_adds_lifecycle_columns_and_keeps_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 4).unwrap();
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'sonnet', 't', 'running', 1, 2);
+             INSERT INTO draft_comments
+                (host, pr_id, path, line, side, body, source, created_at)
+             VALUES ('github.com', 'PR_1', 'a.rs', 3, 'RIGHT', 'keep', 'agent', 1);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert_eq!(session.model_label, None);
+        assert_eq!(session.failure_reason, None);
+        let drafts = store.drafts(&PrKey::new(DEFAULT_HOST, "PR_1")).unwrap();
+        assert_eq!(drafts[0].body, "keep");
     }
 }

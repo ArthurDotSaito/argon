@@ -64,6 +64,7 @@ fn status_and_state_strings_round_trip() {
         SessionStatus::AwaitingUser,
         SessionStatus::Completed,
         SessionStatus::Failed,
+        SessionStatus::Archived,
     ] {
         assert_eq!(SessionStatus::parse(status.as_str()), Some(status));
     }
