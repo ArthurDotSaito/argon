@@ -56,7 +56,7 @@ fn apply_write(tx: &Transaction<'_>, write: &SessionWrite, now: i64) -> Result<(
         tx.execute(
             "UPDATE agent_sessions
                  SET status = ?1, failure_reason = CASE WHEN ?1 = 'failed' THEN failure_reason END
-             WHERE id = ?2",
+             WHERE id = ?2 AND status <> 'archived'",
             params![status.as_str(), write.session_id],
         )?;
     }

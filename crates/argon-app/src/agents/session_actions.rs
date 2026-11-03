@@ -73,6 +73,8 @@ pub fn controls(controls: &SessionControls, prefix: &str, cx: &App) -> Option<Di
             resume(id.clone(), cx)
         })
     });
+    let archivable = AgentSessions::global(cx)
+        .is_none_or(|sessions| sessions.read(cx).can_archive(&controls.id));
     let archive = (controls.status != CardStatus::Archived).then(|| {
         let (id, worktree) = (controls.id.clone(), controls.worktree.clone());
         Button::new(SharedString::from(format!(
@@ -83,6 +85,7 @@ pub fn controls(controls: &SessionControls, prefix: &str, cx: &App) -> Option<Di
         .xsmall()
         .ghost()
         .tooltip(labels::ARCHIVE_TOOLTIP)
+        .disabled(!archivable)
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             confirm_archive(id.clone(), worktree.clone(), window, cx)

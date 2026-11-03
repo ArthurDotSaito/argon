@@ -9,7 +9,41 @@ use crate::agents::{FindingState, SessionStatus};
 use crate::drafts::insert_draft;
 use crate::error::Result;
 
+pub const ARCHIVE_PENDING: &str = "arquivamento pendente: o worktree não pôde ser removido";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleWorktree {
+    pub session_id: String,
+    pub path: PathBuf,
+    pub archive: bool,
+}
+
 impl Store {
+    pub fn mark_archive_pending(&mut self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_sessions SET status = ?1, failure_reason = ?2, updated_at = ?3
+             WHERE id = ?4 AND status <> ?5",
+            params![
+                SessionStatus::Failed.as_str(),
+                ARCHIVE_PENDING,
+                Utc::now().timestamp_millis(),
+                id,
+                SessionStatus::Archived.as_str()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT worktree_path FROM agent_sessions WHERE worktree_path IS NOT NULL")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().map(PathBuf::from).collect())
+    }
+
     pub fn set_session_model_label(&mut self, id: &str, label: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_sessions SET model_label = ?1 WHERE id = ?2",
@@ -60,10 +94,11 @@ impl Store {
         Ok(())
     }
 
-    pub fn stale_worktrees(&self, before: DateTime<Utc>) -> Result<Vec<(String, PathBuf)>> {
+    pub fn stale_worktrees(&self, before: DateTime<Utc>) -> Result<Vec<StaleWorktree>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, worktree_path FROM agent_sessions
-             WHERE status IN (?1, ?2) AND worktree_path IS NOT NULL AND updated_at < ?3
+            "SELECT id, worktree_path, failure_reason IS ?4 FROM agent_sessions
+             WHERE status IN (?1, ?2) AND worktree_path IS NOT NULL
+               AND (updated_at < ?3 OR failure_reason IS ?4)
              ORDER BY updated_at",
         )?;
         let rows = stmt
@@ -71,15 +106,19 @@ impl Store {
                 params![
                     SessionStatus::Completed.as_str(),
                     SessionStatus::Failed.as_str(),
-                    before.timestamp_millis()
+                    before.timestamp_millis(),
+                    ARCHIVE_PENDING
                 ],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok(StaleWorktree {
+                        session_id: row.get(0)?,
+                        path: PathBuf::from(row.get::<_, String>(1)?),
+                        archive: row.get(2)?,
+                    })
+                },
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows
-            .into_iter()
-            .map(|(id, path)| (id, PathBuf::from(path)))
-            .collect())
+        Ok(rows)
     }
 
     pub fn add_agent_draft(&mut self, draft: &DraftComment, finding_id: i64) -> Result<i64> {
@@ -229,13 +268,50 @@ mod tests {
         let cutoff = Utc::now() + TimeDelta::seconds(5);
         let stale = store.stale_worktrees(cutoff).unwrap();
         assert_eq!(stale.len(), 1);
-        assert_eq!(stale[0].0, "old");
+        assert_eq!(stale[0].session_id, "old");
+        assert!(!stale[0].archive);
         assert!(
             store
                 .stale_worktrees(Utc::now() - TimeDelta::days(7))
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn archived_is_terminal_for_late_status_writes() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create_session(&new_session("s1")).unwrap();
+        store
+            .set_session_status("s1", SessionStatus::Archived)
+            .unwrap();
+        store
+            .set_session_status("s1", SessionStatus::Completed)
+            .unwrap();
+        store
+            .append_batch(&[crate::SessionWrite {
+                session_id: "s1".into(),
+                status: Some(SessionStatus::Running),
+                ..Default::default()
+            }])
+            .unwrap();
+        store.mark_archive_pending("s1").unwrap();
+        let row = store.session("s1").unwrap().unwrap();
+        assert_eq!(row.status, SessionStatus::Archived);
+        assert_eq!(row.failure_reason, None);
+    }
+
+    #[test]
+    fn pending_archives_are_retried_regardless_of_age() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.create_session(&new_session("s1")).unwrap();
+        store.mark_archive_pending("s1").unwrap();
+        let stale = store
+            .stale_worktrees(Utc::now() - TimeDelta::days(7))
+            .unwrap();
+        assert_eq!(stale.len(), 1);
+        assert!(stale[0].archive);
+        assert_eq!(store.worktree_paths().unwrap().len(), 1);
     }
 
     #[test]

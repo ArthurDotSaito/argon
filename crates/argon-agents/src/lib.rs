@@ -13,4 +13,4 @@ pub use session::{
     SessionContext, SessionError, SessionHandle, SessionOptions, SessionWriter, Snapshot,
     ToolStatus, new_session_id, resume_session, start_session, start_session_with,
 };
-pub use worktree::{WorktreeError, WorktreeManager};
+pub use worktree::{FoundWorktree, WorktreeError, WorktreeManager, orphan_worktrees};

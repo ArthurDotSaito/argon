@@ -1,42 +1,25 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use argon_agents::{AgentEvent, AgentSessionHandle, WorktreeManager};
+use argon_agents::AgentSessionHandle;
 use argon_store::{SessionStatus, Store};
-use chrono::{TimeDelta, Utc};
-use gpui_kit::{App, Context, Entity};
+use gpui_kit::Context;
 
-use super::sessions::{AgentSessions, AgentsEvent, Closing};
+use super::sessions::{AgentSessions, AgentsEvent, Closing, ResumeState};
 use super::sink::SessionStore;
 use crate::services::{Services, StoreHandle, flatten};
 
 pub const APP_CLOSED_REASON: &str = "Argon foi encerrado durante a sessão";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
-const STALE_AFTER: TimeDelta = TimeDelta::days(7);
+const LAUNCH_CANCEL_WAIT: Duration = Duration::from_secs(5);
+const CLOSE_POLL: Duration = Duration::from_millis(100);
 
-fn recover_store(store: &mut Store) -> argon_store::Result<Vec<(String, PathBuf)>> {
-    for id in store.fail_orphaned_sessions(APP_CLOSED_REASON)? {
-        tracing::info!(session = %id, "marked orphaned agent session as failed");
-        store.append_event(&id, &AgentEvent::Error(APP_CLOSED_REASON.to_owned()))?;
-    }
-    store.stale_worktrees(Utc::now() - STALE_AFTER)
-}
-
-async fn remove_stale(worktrees: WorktreeManager, stale: Vec<(String, PathBuf)>) {
-    for (session, path) in stale {
-        match tokio::fs::try_exists(&path).await {
-            Ok(true) => {}
-            _ => continue,
-        }
-        match worktrees.remove(&path).await {
-            Ok(()) => tracing::info!(
-                %session,
-                path = %path.display(),
-                "removed worktree of agent session finished more than 7 days ago"
-            ),
-            Err(error) => tracing::warn!(%session, %error, "failed to remove stale worktree"),
-        }
+fn record_archive(store: &mut Store, id: &str, removed: bool) -> argon_store::Result<()> {
+    if removed {
+        store.set_session_status(id, SessionStatus::Archived)
+    } else {
+        store.mark_archive_pending(id)
     }
 }
 
@@ -70,23 +53,6 @@ pub async fn shutdown_all(
 }
 
 impl AgentSessions {
-    pub fn recover(sessions: &Entity<Self>, services: &Services, cx: &mut App) {
-        let worktrees = sessions.read(cx).worktrees();
-        let store = services.store();
-        let services = services.clone();
-        cx.background_executor()
-            .spawn(async move {
-                match flatten(store.call(recover_store).await) {
-                    Ok(stale) if !stale.is_empty() => {
-                        _ = services.spawn_runtime(remove_stale(worktrees, stale)).await;
-                    }
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(%error, "failed to recover agent sessions"),
-                }
-            })
-            .detach();
-    }
-
     pub fn begin_close(&mut self, services: &Services, cx: &mut Context<Self>) -> bool {
         match self.closing() {
             Closing::Done => return true,
@@ -94,18 +60,33 @@ impl AgentSessions {
             Closing::Open => {}
         }
         let handles = self.live_handles();
-        if handles.is_empty() {
+        let launches = self.pending_launches();
+        if handles.is_empty() && launches.is_empty() {
             self.set_closing(Closing::Done);
             return true;
         }
         tracing::info!(
-            count = handles.len(),
+            sessions = handles.len(),
+            launches = launches.len(),
             "shutting down agent sessions before quitting"
         );
+        for id in &launches {
+            self.cancel_launch(id, cx);
+        }
         self.set_closing(Closing::ShuttingDown);
         let job = services.spawn_runtime(shutdown_all(handles, self.store(), services.store()));
         cx.spawn(async move |this, cx| {
             _ = job.await;
+            let deadline = Instant::now() + LAUNCH_CANCEL_WAIT;
+            while Instant::now() < deadline {
+                let pending = this
+                    .update(cx, |this, _| !this.pending_launches().is_empty())
+                    .unwrap_or(false);
+                if !pending {
+                    break;
+                }
+                cx.background_executor().timer(CLOSE_POLL).await;
+            }
             _ = this.update(cx, |this, cx| {
                 this.set_closing(Closing::Done);
                 cx.quit();
@@ -115,6 +96,11 @@ impl AgentSessions {
         false
     }
 
+    pub fn can_archive(&self, session_id: &str) -> bool {
+        !matches!(self.resume_state(session_id), Some(ResumeState::Running))
+            && !self.pending_launches().iter().any(|id| id == session_id)
+    }
+
     pub fn archive(
         &mut self,
         session_id: String,
@@ -122,13 +108,20 @@ impl AgentSessions {
         services: &Services,
         cx: &mut Context<Self>,
     ) {
+        if !self.can_archive(&session_id) {
+            return;
+        }
         let handle = self.handle(&session_id);
         let worktrees = self.worktrees();
+        let sessions = self.store();
         let store = services.store();
         let id = session_id.clone();
         let job = services.spawn_runtime(async move {
             if let Some(handle) = handle {
                 _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, handle.shutdown()).await;
+                if let Ok(writer) = sessions.writer() {
+                    _ = tokio::time::timeout(FLUSH_TIMEOUT, writer.flush()).await;
+                }
             }
             let removed = match &worktree {
                 Some(path) => worktrees
@@ -137,9 +130,10 @@ impl AgentSessions {
                     .map_err(|error| error.to_string()),
                 None => Ok(()),
             };
+            let archived = removed.is_ok();
             let stored = flatten(
                 store
-                    .call(move |store| store.set_session_status(&id, SessionStatus::Archived))
+                    .call(move |store| record_archive(store, &id, archived))
                     .await,
             );
             removed.and(stored)
@@ -149,14 +143,55 @@ impl AgentSessions {
             _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => tracing::info!(session = %session_id, "agent session archived"),
-                    Err(error) => {
-                        tracing::warn!(session = %session_id, %error, "failed to archive session")
-                    }
+                    Err(error) => tracing::warn!(
+                        session = %session_id,
+                        %error,
+                        "archive left pending; it is retried on the next start"
+                    ),
                 }
                 this.remove(&session_id, cx);
                 cx.emit(AgentsEvent::SessionArchived { session_id });
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use argon_core::{AgentKind, PrKey};
+    use argon_store::{ARCHIVE_PENDING, NewAgentSession};
+
+    use super::*;
+
+    fn store_with(id: &str) -> Store {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .create_session(&NewAgentSession {
+                id: id.into(),
+                pr: PrKey::new("github.com", "PR_1"),
+                agent: AgentKind::ClaudeCode,
+                model: "default".into(),
+                template: "review-padrao".into(),
+                worktree_path: Some(PathBuf::from(r"C:\wt\pr-1")),
+                acp_session_id: Some("acp".into()),
+                nonce: String::new(),
+                allowed_files: Vec::new(),
+            })
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn failed_worktree_removal_leaves_the_archive_pending() {
+        let mut store = store_with("s1");
+        record_archive(&mut store, "s1", false).unwrap();
+        let row = store.session("s1").unwrap().unwrap();
+        assert_ne!(row.status, SessionStatus::Archived);
+        assert_eq!(row.failure_reason.as_deref(), Some(ARCHIVE_PENDING));
+        record_archive(&mut store, "s1", true).unwrap();
+        let row = store.session("s1").unwrap().unwrap();
+        assert_eq!(row.status, SessionStatus::Archived);
+        assert_eq!(row.failure_reason, None);
     }
 }

@@ -15,6 +15,7 @@ mod message_text;
 mod panel;
 mod panel_labels;
 mod permission_card;
+mod recovery;
 mod resume;
 mod safe_markdown;
 mod session_actions;

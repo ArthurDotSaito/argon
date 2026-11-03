@@ -39,6 +39,19 @@ pub struct PendingLaunch {
 }
 
 impl AgentSessions {
+    pub fn pending_launches(&self) -> Vec<String> {
+        self.launches()
+            .iter()
+            .filter(|(_, launch)| {
+                matches!(
+                    launch.state,
+                    LaunchState::Running(_) | LaunchState::Cancelling
+                )
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     pub fn launch_state(&self, session_id: &str) -> Option<&LaunchState> {
         self.launches().get(session_id).map(|launch| &launch.state)
     }

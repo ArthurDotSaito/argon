@@ -5,14 +5,14 @@ use argon_agents::{
     AgentSessionHandle, SessionContext, WorktreeManager, agent_spec, resume_session,
 };
 use argon_core::Config;
-use argon_store::SessionRow;
+use argon_store::{ARCHIVE_PENDING, SessionRow, SessionStatus};
 use gpui_kit::{Context, SharedString};
 
 use super::panel_labels as labels;
 use super::sessions::{ActiveSession, AgentSessions, ResumeState};
 use super::sink::SessionStore;
 use crate::inbox::InboxModel;
-use crate::services::{Services, flatten};
+use crate::services::{Services, StoreHandle, flatten};
 
 struct Resumed {
     row: SessionRow,
@@ -21,20 +21,35 @@ struct Resumed {
     handle: AgentSessionHandle,
 }
 
+fn is_archived(row: &SessionRow) -> bool {
+    row.status == SessionStatus::Archived || row.failure_reason.as_deref() == Some(ARCHIVE_PENDING)
+}
+
+fn resume_target(row: &SessionRow) -> Result<(String, PathBuf), &'static str> {
+    if is_archived(row) {
+        return Err(labels::SESSION_ARCHIVED);
+    }
+    let acp_session = row.acp_session_id.clone().ok_or(labels::NO_ACP_SESSION)?;
+    let worktree = row.worktree_path.clone().ok_or(labels::WORKTREE_GONE)?;
+    Ok((acp_session, worktree))
+}
+
+async fn still_resumable(rows: &StoreHandle, id: &str) -> bool {
+    let id = id.to_owned();
+    match flatten(rows.call(move |store| store.session(&id)).await) {
+        Ok(Some(row)) => !is_archived(&row),
+        _ => false,
+    }
+}
+
 async fn resume(
     row: SessionRow,
     config: Config,
     store: SessionStore,
     worktrees: WorktreeManager,
+    rows: StoreHandle,
 ) -> Result<Resumed, String> {
-    let acp_session = row
-        .acp_session_id
-        .clone()
-        .ok_or_else(|| labels::NO_ACP_SESSION.to_owned())?;
-    let worktree = row
-        .worktree_path
-        .clone()
-        .ok_or_else(|| labels::WORKTREE_GONE.to_owned())?;
+    let (acp_session, worktree) = resume_target(&row).map_err(str::to_owned)?;
     if !tokio::fs::try_exists(&worktree).await.unwrap_or(false) {
         return Err(labels::WORKTREE_GONE.to_owned());
     }
@@ -58,6 +73,10 @@ async fn resume(
     let (_, handle) = resume_session(&spec, &acp_session, ctx, writer)
         .await
         .map_err(|error| error.to_string())?;
+    if !still_resumable(&rows, &row.id).await {
+        handle.shutdown().await;
+        return Err(labels::SESSION_ARCHIVED.to_owned());
+    }
     Ok(Resumed {
         row,
         worktree,
@@ -82,7 +101,7 @@ impl AgentSessions {
         let job = services.spawn_runtime(async move {
             let row = flatten(store.call(move |store| store.session(&id)).await)?
                 .ok_or_else(|| labels::SESSION_MISSING.to_owned())?;
-            resume(row, config, session_store, worktrees).await
+            resume(row, config, session_store, worktrees, store).await
         });
         let services = services.clone();
         cx.spawn(async move |this, cx| {
@@ -149,5 +168,53 @@ impl AgentSessions {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use argon_core::{AgentKind, PrKey};
+
+    use super::*;
+
+    fn row(status: SessionStatus) -> SessionRow {
+        SessionRow {
+            id: "s1".into(),
+            pr: PrKey::new("github.com", "PR_1"),
+            agent: AgentKind::ClaudeCode,
+            model: "default".into(),
+            template: "review-padrao".into(),
+            status,
+            worktree_path: Some(PathBuf::from(r"C:\wt\pr-1")),
+            acp_session_id: Some("acp".into()),
+            nonce: String::new(),
+            allowed_files: Vec::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            model_label: None,
+            failure_reason: None,
+        }
+    }
+
+    #[test]
+    fn archived_sessions_are_never_resumed() {
+        assert_eq!(
+            resume_target(&row(SessionStatus::Archived)),
+            Err(labels::SESSION_ARCHIVED)
+        );
+        let mut pending = row(SessionStatus::Failed);
+        pending.failure_reason = Some(ARCHIVE_PENDING.into());
+        assert_eq!(resume_target(&pending), Err(labels::SESSION_ARCHIVED));
+        assert!(resume_target(&row(SessionStatus::Failed)).is_ok());
+    }
+
+    #[test]
+    fn resume_needs_acp_id_and_worktree() {
+        let mut no_acp = row(SessionStatus::Completed);
+        no_acp.acp_session_id = None;
+        assert_eq!(resume_target(&no_acp), Err(labels::NO_ACP_SESSION));
+        let mut no_worktree = row(SessionStatus::Completed);
+        no_worktree.worktree_path = None;
+        assert_eq!(resume_target(&no_worktree), Err(labels::WORKTREE_GONE));
     }
 }

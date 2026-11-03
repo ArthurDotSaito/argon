@@ -187,7 +187,7 @@ impl Store {
         self.conn.execute(
             "UPDATE agent_sessions SET status = ?1, updated_at = ?2,
                  failure_reason = CASE WHEN ?1 = 'failed' THEN failure_reason END
-             WHERE id = ?3",
+             WHERE id = ?3 AND status <> 'archived'",
             params![status.as_str(), Utc::now().timestamp_millis(), id],
         )?;
         Ok(())

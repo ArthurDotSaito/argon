@@ -3,6 +3,7 @@ mod error;
 mod invocation;
 mod layout;
 mod mirror;
+mod scan;
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -18,6 +19,7 @@ use layout::{
     RepoRef, mirror_dir, mirror_from_gitfile, pr_ref, session_prefix, validate_host,
     worktree_dir_name, worktree_parent,
 };
+pub use scan::{FoundWorktree, orphan_worktrees};
 
 type RepoLock = Arc<tokio::sync::Mutex<()>>;
 

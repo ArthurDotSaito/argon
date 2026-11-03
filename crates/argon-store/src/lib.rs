@@ -15,6 +15,7 @@ use rusqlite::Connection;
 pub use agent_log::SessionWrite;
 pub use agents::{FindingState, NewAgentSession, SessionRow, SessionStatus, StoredFinding};
 pub use error::{Result, StoreError};
+pub use lifecycle::{ARCHIVE_PENDING, StaleWorktree};
 pub use local::LocalState;
 pub use viewers::{CachedOrg, CachedViewer};
 

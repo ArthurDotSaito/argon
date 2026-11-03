@@ -54,6 +54,7 @@ pub const ARCHIVE_MESSAGE: &str =
 pub const HEAD_MOVED: &str = "O PR recebeu commits novos desde esta sessão";
 pub const NO_ACP_SESSION: &str = "esta sessão não tem id ACP para retomar";
 pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
+pub const SESSION_ARCHIVED: &str = "esta sessão foi arquivada";
 pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
 
 pub fn filter_label(filter: SessionFilter) -> &'static str {
