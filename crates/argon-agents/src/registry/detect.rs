@@ -10,7 +10,7 @@ use super::version::parse_version;
 use super::{AgentSpec, Detection, Support};
 use crate::defaults::{AgentDefaults, agent_defaults};
 
-const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const UNKNOWN_VERSION: &str = "unknown";
 
 enum Resolved {
