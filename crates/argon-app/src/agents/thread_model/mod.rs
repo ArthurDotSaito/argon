@@ -8,12 +8,14 @@ use argon_agents::{AgentSessionHandle, ModelInfo};
 use argon_core::PrKey;
 use argon_store::SessionStatus;
 use chrono::{DateTime, TimeDelta, Utc};
-use gpui_kit::{App, Context, EventEmitter, SharedString, Task};
+use gpui_kit::{App, Context, EventEmitter, SharedString, Subscription, Task};
 
-use super::card_status::{CardStatus, card_status};
+use super::card_status::{CardStatus, ResumeAction, card_status, resume_action};
 use super::finding_set::{FindingSet, SeverityCounts};
+use super::lifecycle::APP_CLOSED_REASON;
 use super::transcript::Transcript;
-use crate::services::{AppServices, Services};
+use crate::review::{DraftsBus, DraftsChanged};
+use crate::services::{AppServices, Services, flatten};
 
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
@@ -26,6 +28,8 @@ pub struct SessionInfo {
     pub worktree: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    pub resumable: bool,
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +53,8 @@ pub struct ThreadModel {
     changing_model: bool,
     services: Option<Services>,
     feed: Option<Task<()>>,
+    notice: Option<SharedString>,
+    _drafts: Option<Subscription>,
 }
 
 impl EventEmitter<ThreadEvent> for ThreadModel {}
@@ -56,12 +62,14 @@ impl EventEmitter<ThreadEvent> for ThreadModel {}
 impl ThreadModel {
     pub fn live(info: SessionInfo, handle: AgentSessionHandle, cx: &mut Context<Self>) -> Self {
         let mut this = Self::empty(info, Some(handle), SessionStatus::Running, cx);
+        this.watch_drafts(cx);
         this.start_feed(cx);
         this
     }
 
     pub fn historical(info: SessionInfo, status: SessionStatus, cx: &mut Context<Self>) -> Self {
         let mut this = Self::empty(info, None, status, cx);
+        this.watch_drafts(cx);
         this.load_history(cx);
         this
     }
@@ -89,6 +97,8 @@ impl ThreadModel {
                 .try_global::<AppServices>()
                 .map(|global| global.0.clone()),
             feed: None,
+            notice: None,
+            _drafts: None,
         }
     }
 
@@ -185,6 +195,23 @@ impl ThreadModel {
         cx.notify();
     }
 
+    pub fn notice(&self) -> Option<&SharedString> {
+        self.notice.as_ref()
+    }
+
+    pub fn set_notice(&mut self, notice: Option<SharedString>, cx: &mut Context<Self>) {
+        self.notice = notice;
+        cx.notify();
+    }
+
+    pub fn resume_action(&self) -> Option<ResumeAction> {
+        if self.is_live() || self.info.worktree.is_none() {
+            return None;
+        }
+        let app_closed = self.info.failure_reason.as_deref() == Some(APP_CLOSED_REASON);
+        resume_action(self.card_status(), self.info.resumable, app_closed)
+    }
+
     fn set_model_id(&mut self, model: String) {
         if model.is_empty() {
             return;
@@ -195,5 +222,47 @@ impl ThreadModel {
             .find(|info| info.id == model)
             .map_or_else(|| model.clone(), |info| info.label.clone());
         self.info.model = model;
+        if let (Some(_), Some(services)) = (&self.handle, &self.services) {
+            let id = self.info.session_id.clone();
+            let label = self.info.model_label.clone();
+            services.store().submit(move |store| {
+                if let Err(error) = store.set_session_model_label(&id, &label) {
+                    tracing::warn!(%error, "failed to store session model label");
+                }
+            });
+        }
+    }
+
+    fn watch_drafts(&mut self, cx: &mut Context<Self>) {
+        let bus = DraftsBus::global(cx);
+        self._drafts = Some(cx.subscribe(&bus, |this, _, event: &DraftsChanged, cx| {
+            if event.pr == this.info.pr {
+                this.reload_findings(cx);
+            }
+        }));
+    }
+
+    fn reload_findings(&mut self, cx: &mut Context<Self>) {
+        let Some(services) = self.services.clone() else {
+            return;
+        };
+        let id = self.info.session_id.clone();
+        cx.spawn(async move |this, cx| {
+            let stored = flatten(
+                services
+                    .store()
+                    .call(move |store| store.findings(&id))
+                    .await,
+            );
+            _ = this.update(cx, |this, cx| match stored {
+                Ok(stored) => {
+                    let before = this.activity();
+                    this.findings.merge_stored(stored);
+                    this.notify_activity(before, cx);
+                }
+                Err(error) => tracing::warn!(%error, "failed to reload agent findings"),
+            });
+        })
+        .detach();
     }
 }

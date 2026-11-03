@@ -64,8 +64,12 @@ impl Workspace {
 
         let workspace = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
-            _ = workspace.update(cx, |workspace, cx| workspace.save_now(cx));
-            true
+            workspace
+                .update(cx, |workspace, cx| {
+                    workspace.save_now(cx);
+                    workspace.close_requested(cx)
+                })
+                .unwrap_or(true)
         });
 
         let mut this = Self {

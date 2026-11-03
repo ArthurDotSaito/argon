@@ -5,6 +5,7 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
     [
+        Archive,
         AtSign,
         Brain,
         Check,

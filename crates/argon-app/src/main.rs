@@ -65,8 +65,9 @@ fn main() {
             gpui_kit::component::set_locale(UI_LOCALE);
             theme::apply_one_dark(cx);
             keymap::bind(cx);
-            AgentSessions::init(paths.clone(), cx);
+            let sessions = AgentSessions::init(paths.clone(), cx);
             let (services, events) = Services::start(paths, config);
+            AgentSessions::recover(&sessions, &services, cx);
             let sync_status = cx.new(|cx| SyncStatus::new(services.clone(), events, cx));
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));

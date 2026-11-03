@@ -134,13 +134,14 @@ impl AgentSessions {
                     ActiveSession {
                         session_id: identity.session_id,
                         pr: identity.pr,
-                        number: identity.number,
+                        number: Some(identity.number),
                         agent: identity.meta.agent,
                         agent_label: identity.meta.agent_label,
                         model: identity.model,
                         model_label: identity.meta.model_label,
                         worktree: launched.worktree,
                         handle: launched.handle,
+                        created_at: chrono::Utc::now(),
                     },
                     cx,
                 );

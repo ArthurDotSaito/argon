@@ -6,6 +6,13 @@ pub enum CardStatus {
     Awaiting,
     Completed,
     Failed,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeAction {
+    Continue,
+    Retry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +31,7 @@ impl CardStatus {
         match filter {
             SessionFilter::All => true,
             SessionFilter::Active => self.is_active(),
-            SessionFilter::Completed => !self.is_active(),
+            SessionFilter::Completed => matches!(self, Self::Completed | Self::Failed),
         }
     }
 }
@@ -38,6 +45,21 @@ pub fn card_status(status: SessionStatus, live: bool, pending: usize) -> CardSta
         (false, SessionStatus::Running | SessionStatus::AwaitingUser) => CardStatus::Failed,
         (_, SessionStatus::Completed) => CardStatus::Completed,
         (_, SessionStatus::Failed) => CardStatus::Failed,
+        (_, SessionStatus::Archived) => CardStatus::Archived,
+    }
+}
+
+pub fn resume_action(
+    status: CardStatus,
+    resumable: bool,
+    app_closed: bool,
+) -> Option<ResumeAction> {
+    match (resumable, status) {
+        (false, _) => None,
+        (true, CardStatus::Completed) => Some(ResumeAction::Continue),
+        (true, CardStatus::Failed) if app_closed => Some(ResumeAction::Continue),
+        (true, CardStatus::Failed) => Some(ResumeAction::Retry),
+        (true, CardStatus::Running | CardStatus::Awaiting | CardStatus::Archived) => None,
     }
 }
 
@@ -116,6 +138,32 @@ mod tests {
         assert!(!CardStatus::Failed.matches(SessionFilter::Active));
         assert!(CardStatus::Failed.matches(SessionFilter::Completed));
         assert!(CardStatus::Running.matches(SessionFilter::All));
+        assert!(CardStatus::Archived.matches(SessionFilter::All));
+        assert!(!CardStatus::Archived.matches(SessionFilter::Active));
+        assert!(!CardStatus::Archived.matches(SessionFilter::Completed));
+        assert_eq!(
+            card_status(SessionStatus::Archived, false, 0),
+            CardStatus::Archived
+        );
+    }
+
+    #[test]
+    fn resume_is_offered_only_for_finished_resumable_sessions() {
+        assert_eq!(
+            resume_action(CardStatus::Failed, true, true),
+            Some(ResumeAction::Continue)
+        );
+        assert_eq!(
+            resume_action(CardStatus::Failed, true, false),
+            Some(ResumeAction::Retry)
+        );
+        assert_eq!(
+            resume_action(CardStatus::Completed, true, false),
+            Some(ResumeAction::Continue)
+        );
+        assert_eq!(resume_action(CardStatus::Running, true, false), None);
+        assert_eq!(resume_action(CardStatus::Archived, true, true), None);
+        assert_eq!(resume_action(CardStatus::Failed, false, true), None);
     }
 
     #[test]

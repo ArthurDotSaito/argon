@@ -1,9 +1,16 @@
 use gpui_kit::Context;
 
+use super::bus::DraftsBus;
 use super::model::DraftsModel;
 use crate::services::flatten;
 
 impl DraftsModel {
+    pub(super) fn announce(&self, cx: &mut Context<Self>) {
+        if let Some(key) = self.key.clone() {
+            DraftsBus::notify(key, cx);
+        }
+    }
+
     pub(super) fn reload_drafts(&mut self, cx: &mut Context<Self>) {
         let (Some(services), Some(key)) = (self.services.clone(), self.key.clone()) else {
             return;

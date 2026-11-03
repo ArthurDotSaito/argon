@@ -16,6 +16,7 @@ use gpui_kit::{
 use super::badges::{severity_counts, status_chip};
 use super::composer::Composer;
 use super::panel_labels as labels;
+use super::session_actions::{SessionControls, controls};
 use super::thread_model::ThreadModel;
 use crate::bottom::duration_label;
 use crate::inbox::InboxModel;
@@ -88,6 +89,13 @@ impl ThreadView {
         );
         let meta = format!("{reference} · {} · {}", info.agent_label, info.model_label);
         let status = model.card_status();
+        let session_controls = SessionControls {
+            id: info.session_id.clone(),
+            status,
+            resume: model.resume_action(),
+            worktree: info.worktree.clone(),
+        };
+        let notice = model.notice().cloned();
         let counts = model.counts();
         let elapsed = duration_label(model.elapsed(Utc::now()));
         let theme = cx.theme();
@@ -135,6 +143,16 @@ impl ThreadView {
                     )
                     .children((counts.total() > 0).then(|| severity_counts(counts, cx))),
             )
+            .children(notice.map(|notice| {
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(Icon::new(IconName::TriangleAlert).xsmall())
+                    .child(notice)
+            }))
+            .children(controls(&session_controls, "thread", cx))
     }
 
     fn footer(&self, cx: &mut Context<Self>) -> Div {

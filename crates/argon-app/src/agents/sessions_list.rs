@@ -12,10 +12,12 @@ use gpui_kit::{
 };
 
 use super::badges::{severity_counts, status_chip};
-use super::card_status::{CardStatus, SessionFilter, card_status};
+use super::card_status::{CardStatus, SessionFilter, card_status, resume_action};
 use super::finding_set::SeverityCounts;
+use super::lifecycle::APP_CLOSED_REASON;
 use super::panel::AgentPanel;
 use super::panel_labels as labels;
+use super::session_actions::{SessionControls, controls};
 use super::thread_model::ThreadModel;
 use super::transcript::{Item, PermissionState};
 use crate::bottom::duration_label;
@@ -37,6 +39,7 @@ pub struct SessionCard {
     pub elapsed: SharedString,
     pub created_at: DateTime<Utc>,
     pub note: Option<SharedString>,
+    pub controls: SessionControls,
 }
 
 fn pr_labels(pr: &PrKey, number: Option<u64>, cx: &App) -> (SharedString, SharedString) {
@@ -77,22 +80,46 @@ impl SessionCard {
             elapsed: duration_label(thread.elapsed(now)).into(),
             created_at: info.created_at,
             note,
+            controls: SessionControls {
+                id: info.session_id.clone(),
+                status: thread.card_status(),
+                resume: thread.resume_action(),
+                worktree: info.worktree.clone(),
+            },
         }
     }
 
-    pub fn from_row(row: &SessionRow, counts: SeverityCounts, cx: &App) -> Self {
-        let info = super::panel::session_info(row, cx);
+    pub fn from_row(
+        row: &SessionRow,
+        counts: SeverityCounts,
+        worktree_present: bool,
+        cx: &App,
+    ) -> Self {
+        let info = super::panel::session_info(row, worktree_present, cx);
+        let status = card_status(row.status, false, 0);
+        let app_closed = row.failure_reason.as_deref() == Some(APP_CLOSED_REASON);
+        let resume = resume_action(
+            status,
+            info.resumable && info.worktree.is_some(),
+            app_closed,
+        );
         let (title, reference) = pr_labels(&row.pr, info.number, cx);
         Self {
             id: row.id.clone(),
             title,
             reference,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
-            status: card_status(row.status, false, 0),
+            status,
             counts,
             elapsed: duration_label(row.updated_at - row.created_at).into(),
             created_at: row.created_at,
-            note: None,
+            note: row.failure_reason.clone().map(SharedString::from),
+            controls: SessionControls {
+                id: row.id.clone(),
+                status,
+                resume,
+                worktree: info.worktree.clone(),
+            },
         }
     }
 }
@@ -100,6 +127,7 @@ impl SessionCard {
 fn card(card: SessionCard, cx: &mut Context<AgentPanel>) -> Stateful<Div> {
     let theme = cx.theme();
     let id = card.id.clone();
+    let actions = controls(&card.controls, "card", cx);
     let foot = h_flex()
         .gap_2()
         .items_center()
@@ -159,6 +187,7 @@ fn card(card: SessionCard, cx: &mut Context<AgentPanel>) -> Stateful<Div> {
                 .child(card.agent_line),
         )
         .child(foot)
+        .children(actions)
         .on_click(cx.listener(move |this, _, window, cx| this.open_thread(&id, window, cx)))
 }
 

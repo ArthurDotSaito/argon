@@ -12,5 +12,6 @@ mod review_tab;
 mod status_badge;
 mod threads;
 
-pub use drafts::DraftsBus;
+pub(crate) use confirm::{Confirm, confirm};
+pub use drafts::{DraftsBus, DraftsChanged};
 pub use review_tab::{ReviewScope, ReviewTab, ReviewTabEvent};

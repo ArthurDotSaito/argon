@@ -194,6 +194,7 @@ impl DraftsModel {
                     Ok(()) => {
                         this.drafts.retain(|draft| draft.id != id);
                         this.suspects.retain(|suspect| *suspect != id);
+                        this.announce(cx);
                     }
                     Err(error) => cx.emit(DraftsEvent::Failed(error)),
                 }
@@ -237,7 +238,10 @@ impl DraftsModel {
             let result = job.await;
             _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(()) => this.reset(),
+                    Ok(()) => {
+                        this.reset();
+                        this.announce(cx);
+                    }
                     Err(error) => cx.emit(DraftsEvent::Failed(error)),
                 }
                 cx.notify();

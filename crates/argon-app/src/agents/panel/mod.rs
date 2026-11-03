@@ -48,9 +48,17 @@ impl AgentPanel {
             subscriptions.push(cx.subscribe_in(
                 sessions,
                 window,
-                |this, _, event: &AgentsEvent, window, cx| {
-                    let AgentsEvent::SessionStarted { session_id, .. } = event;
-                    this.open_thread(session_id, window, cx);
+                |this, _, event: &AgentsEvent, window, cx| match event {
+                    AgentsEvent::SessionStarted { session_id, .. } => {
+                        this.historical.remove(session_id);
+                        this.open_thread(session_id, window, cx);
+                    }
+                    AgentsEvent::SessionArchived { session_id } => {
+                        this.historical.remove(session_id);
+                        this.thread = None;
+                        this.reload_history(cx);
+                        cx.notify();
+                    }
                 },
             ));
         }
@@ -136,7 +144,12 @@ impl AgentPanel {
         }
         for history in &self.history {
             if !active.contains(&history.row.id) {
-                cards.push(SessionCard::from_row(&history.row, history.counts, cx));
+                cards.push(SessionCard::from_row(
+                    &history.row,
+                    history.counts,
+                    history.worktree_present,
+                    cx,
+                ));
             }
         }
         render_list(cards, self.filter, self.history_loaded, cx)

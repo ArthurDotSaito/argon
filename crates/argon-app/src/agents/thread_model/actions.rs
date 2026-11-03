@@ -150,10 +150,7 @@ impl ThreadModel {
             let draft = draft_for(&entry.finding, pr.clone(), &session, head_oid);
             let result = flatten(
                 store
-                    .call(move |store| {
-                        store.add_draft(&draft)?;
-                        store.set_finding_state(id, FindingState::Added)
-                    })
+                    .call(move |store| store.add_agent_draft(&draft, id).map(drop))
                     .await,
             );
             _ = this.update(cx, |this, cx| {

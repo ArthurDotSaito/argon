@@ -8,6 +8,7 @@ use crate::actions::ReviewWithAi;
 use crate::agents::{AgentSessions, AgentsEvent};
 use crate::center::CenterItem;
 use crate::pr::PrView;
+use crate::services::AppServices;
 
 const OPEN_A_PR: &str = "Abra a aba de um PR para revisar com IA";
 
@@ -66,6 +67,18 @@ impl Workspace {
         }
     }
 
+    pub(super) fn close_requested(&mut self, cx: &mut Context<Self>) -> bool {
+        let services = cx
+            .try_global::<AppServices>()
+            .map(|global| global.0.clone());
+        match (AgentSessions::global(cx), services) {
+            (Some(sessions), Some(services)) => {
+                sessions.update(cx, |sessions, cx| sessions.begin_close(&services, cx))
+            }
+            _ => true,
+        }
+    }
+
     pub fn reveal_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reveal_dock(DockPosition::Right, window, cx);
     }
@@ -88,7 +101,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let AgentsEvent::SessionStarted { .. } = event;
-        self.reveal_agents(window, cx);
+        if let AgentsEvent::SessionStarted { .. } = event {
+            self.reveal_agents(window, cx);
+        }
     }
 }

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use argon_agents::defaults::agent_defaults;
 use argon_agents::{AgentSessionHandle, WorktreeManager};
 use argon_core::{AgentKind, Paths, PrKey};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription};
 
 use super::card_status::CardStatus;
@@ -15,13 +16,14 @@ use super::thread_model::{SessionInfo, ThreadEvent, ThreadModel};
 pub struct ActiveSession {
     pub session_id: String,
     pub pr: PrKey,
-    pub number: u64,
+    pub number: Option<u64>,
     pub agent: AgentKind,
     pub agent_label: &'static str,
     pub model: String,
     pub model_label: String,
     pub worktree: PathBuf,
     pub handle: AgentSessionHandle,
+    pub created_at: DateTime<Utc>,
 }
 
 impl ActiveSession {
@@ -29,13 +31,15 @@ impl ActiveSession {
         SessionInfo {
             session_id: self.session_id.clone(),
             pr: self.pr.clone(),
-            number: Some(self.number),
+            number: self.number,
             agent_label: self.agent_label,
             model: self.model.clone(),
             model_label: self.model_label.clone(),
             worktree: Some(self.worktree.clone()),
-            created_at: Utc::now(),
+            created_at: self.created_at,
             ended_at: None,
+            resumable: agent_defaults(self.agent).load_session,
+            failure_reason: None,
         }
     }
 }
@@ -49,6 +53,7 @@ pub struct Activity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentsEvent {
     SessionStarted { session_id: String, pr: PrKey },
+    SessionArchived { session_id: String },
 }
 
 pub struct AgentSessions {
@@ -60,7 +65,22 @@ pub struct AgentSessions {
     worktrees: WorktreeManager,
     launches: HashMap<String, PendingLaunch>,
     threads: HashMap<String, Entity<ThreadModel>>,
-    _thread_subscriptions: Vec<Subscription>,
+    thread_subscriptions: HashMap<String, Subscription>,
+    resumes: HashMap<String, ResumeState>,
+    closing: Closing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeState {
+    Running,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closing {
+    Open,
+    ShuttingDown,
+    Done,
 }
 
 struct AgentSessionsHandle(Entity<AgentSessions>);
@@ -82,7 +102,9 @@ impl AgentSessions {
             worktrees: WorktreeManager::new(&paths),
             launches: HashMap::new(),
             threads: HashMap::new(),
-            _thread_subscriptions: Vec::new(),
+            thread_subscriptions: HashMap::new(),
+            resumes: HashMap::new(),
+            closing: Closing::Open,
             paths,
         });
         cx.set_global(AgentSessionsHandle(sessions.clone()));
@@ -110,7 +132,7 @@ impl AgentSessions {
             match thread.read(cx).card_status() {
                 CardStatus::Running => activity.running += 1,
                 CardStatus::Awaiting => activity.awaiting += 1,
-                CardStatus::Completed | CardStatus::Failed => {}
+                CardStatus::Completed | CardStatus::Failed | CardStatus::Archived => {}
             }
         }
         activity
@@ -148,7 +170,48 @@ impl AgentSessions {
         &mut self.launches
     }
 
+    pub fn resume_state(&self, session_id: &str) -> Option<&ResumeState> {
+        self.resumes.get(session_id)
+    }
+
+    pub(super) fn resumes_mut(&mut self) -> &mut HashMap<String, ResumeState> {
+        &mut self.resumes
+    }
+
+    pub(super) fn closing(&self) -> Closing {
+        self.closing
+    }
+
+    pub(super) fn set_closing(&mut self, closing: Closing) {
+        self.closing = closing;
+    }
+
+    pub(super) fn handle(&self, session_id: &str) -> Option<AgentSessionHandle> {
+        self.sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .map(|session| session.handle.clone())
+    }
+
+    pub(super) fn live_handles(&self) -> Vec<(String, AgentSessionHandle)> {
+        self.sessions
+            .iter()
+            .filter(|session| !session.handle.is_finished())
+            .map(|session| (session.session_id.clone(), session.handle.clone()))
+            .collect()
+    }
+
+    pub(super) fn remove(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        self.sessions
+            .retain(|session| session.session_id != session_id);
+        self.threads.remove(session_id);
+        self.thread_subscriptions.remove(session_id);
+        cx.notify();
+    }
+
     pub(super) fn add(&mut self, session: ActiveSession, cx: &mut Context<Self>) {
+        self.sessions
+            .retain(|existing| existing.session_id != session.session_id);
         let event = AgentsEvent::SessionStarted {
             session_id: session.session_id.clone(),
             pr: session.pr.clone(),
@@ -168,7 +231,8 @@ impl AgentSessions {
             ThreadEvent::Activity => cx.notify(),
             ThreadEvent::ModelsAvailable(models) => this.detection.report_models(kind, models),
         });
-        self._thread_subscriptions.push(subscription);
+        self.thread_subscriptions
+            .insert(session.session_id.clone(), subscription);
         self.threads.insert(session.session_id.clone(), thread);
         self.sessions.push(session);
         cx.emit(event);

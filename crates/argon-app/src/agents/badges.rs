@@ -15,6 +15,7 @@ pub fn status_color(status: CardStatus, cx: &App) -> Hsla {
         CardStatus::Awaiting => theme.warning,
         CardStatus::Completed => theme.success,
         CardStatus::Failed => theme.danger,
+        CardStatus::Archived => theme.muted_foreground,
     }
 }
 
@@ -31,6 +32,7 @@ pub fn status_icon(status: CardStatus, cx: &App) -> AnyElement {
         CardStatus::Awaiting => IconName::Hand,
         CardStatus::Completed => IconName::CircleCheck,
         CardStatus::Failed => IconName::Ban,
+        CardStatus::Archived => IconName::Archive,
     };
     Icon::new(icon)
         .xsmall()

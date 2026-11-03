@@ -212,7 +212,7 @@ impl Transcript {
                     self.in_turn = true;
                 }
             }
-            SessionStatus::Completed => {
+            SessionStatus::Completed | SessionStatus::Archived => {
                 self.in_turn = false;
                 self.failed = false;
             }

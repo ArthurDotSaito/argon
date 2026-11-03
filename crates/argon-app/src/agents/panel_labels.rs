@@ -40,6 +40,18 @@ pub const BUSY: &str = "Aguarde o turno atual terminar";
 pub const SERVICES_UNAVAILABLE: &str = "serviços em segundo plano indisponíveis";
 pub const UNKNOWN_PR: &str = "PR fora da inbox";
 pub const YOU: &str = "você";
+pub const CONTINUE: &str = "Continuar";
+pub const RETRY: &str = "Tentar continuar";
+pub const RESUMING: &str = "retomando…";
+pub const ARCHIVE: &str = "Arquivar";
+pub const ARCHIVE_TOOLTIP: &str = "Arquivar sessão (remove o worktree, mantém o transcript)";
+pub const ARCHIVE_TITLE: &str = "Arquivar sessão?";
+pub const ARCHIVE_MESSAGE: &str =
+    "O agente é encerrado e o worktree desta sessão é removido. O transcript continua em Todas.";
+pub const HEAD_MOVED: &str = "O PR recebeu commits novos desde esta sessão";
+pub const NO_ACP_SESSION: &str = "esta sessão não tem id ACP para retomar";
+pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
+pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
 
 pub fn filter_label(filter: SessionFilter) -> &'static str {
     match filter {
@@ -55,6 +67,7 @@ pub fn status_label(status: CardStatus) -> &'static str {
         CardStatus::Awaiting => "aguardando você",
         CardStatus::Completed => "concluída",
         CardStatus::Failed => "erro",
+        CardStatus::Archived => "arquivada",
     }
 }
 
@@ -150,4 +163,12 @@ pub fn location(path: &str, line: u32) -> String {
 
 pub fn reference(path: &str, line: u32) -> String {
     format!("@{path}:{line} ")
+}
+
+pub fn worktree_invalid(error: &str) -> String {
+    format!("worktree inválido: {error}")
+}
+
+pub fn resume_failed(error: &str) -> String {
+    format!("Não consegui retomar: {error}")
 }
