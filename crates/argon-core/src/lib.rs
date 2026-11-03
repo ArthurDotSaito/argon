@@ -16,15 +16,17 @@ pub use config::{
     ReviewCfg, SyncCfg, ThemeChoice,
 };
 pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patch, split_rows};
-pub use findings::{Finding, FindingsError, FindingsParse, Severity, parse_findings};
+pub use findings::{
+    Finding, FindingsError, FindingsParse, Severity, filter_findings, parse_findings,
+};
 pub use model::{
     ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrKey, PrState,
     PullRequest, ReviewDecision, ReviewState, Side,
 };
 pub use paths::Paths;
 pub use prompt::{
-    PromptContext, PromptError, PromptTemplate, ensure_default_templates, load_templates,
-    render_prompt,
+    PromptContext, PromptError, PromptTemplate, RenderedPrompt, ensure_default_templates,
+    load_templates, render_prompt,
 };
 pub use reason::{Reason, reason};
 pub use review::{

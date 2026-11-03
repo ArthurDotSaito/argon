@@ -9,7 +9,7 @@ use super::PromptError;
 const HEADER_FENCE: &str = "+++";
 const TEMPLATE_EXTENSION: &str = "md";
 
-const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
+pub(super) const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
     (
         "review-padrao",
         include_str!("../../templates/review-padrao.md"),
@@ -59,7 +59,7 @@ fn split_header(source: &str) -> Result<(Header, &str), String> {
     Err(format!("missing closing `{HEADER_FENCE}` line"))
 }
 
-fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, PromptError> {
+pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, PromptError> {
     let (header, body) = split_header(source).map_err(|reason| PromptError::InvalidHeader {
         id: id.to_owned(),
         reason,

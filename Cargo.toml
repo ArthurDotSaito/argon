@@ -43,5 +43,6 @@ tracing-appender = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = "2.6"
 minijinja = "2"
+getrandom = "0.4"
 agent-client-protocol = { version = "5", features = ["process"] }
 which = "8"

@@ -303,6 +303,7 @@ dependencies = [
  "bitflags 2.13.2",
  "chrono",
  "dirs 7.0.0",
+ "getrandom 0.4.3",
  "minijinja",
  "serde",
  "serde_json",

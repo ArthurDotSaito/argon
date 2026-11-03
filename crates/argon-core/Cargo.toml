@@ -17,4 +17,5 @@ toml.workspace = true
 dirs.workspace = true
 thiserror.workspace = true
 minijinja.workspace = true
+getrandom.workspace = true
 tracing.workspace = true
