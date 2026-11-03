@@ -10,6 +10,7 @@ use gpui_kit::{
 use super::ActionsTab;
 use super::labels;
 use crate::bottom::{duration_label, is_running, run_status_icon};
+use crate::theme::density;
 
 const ROW_HEIGHT: f32 = 30.;
 const JOB_INDENT: f32 = 30.;
@@ -77,7 +78,7 @@ impl ActionsTab {
         let run_id = run.id;
         h_flex()
             .id(("actions-run", run.id))
-            .h(px(ROW_HEIGHT))
+            .h(px(density::scaled(ROW_HEIGHT, cx)))
             .px_2()
             .gap_2()
             .items_center()
@@ -129,7 +130,7 @@ impl ActionsTab {
         let job_id = job.id;
         let row = h_flex()
             .id(("actions-job", job_id))
-            .h(px(ROW_HEIGHT - 4.))
+            .h(px(density::scaled(ROW_HEIGHT - 4., cx)))
             .pl(px(JOB_INDENT))
             .pr_3()
             .gap_2()

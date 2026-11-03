@@ -4,10 +4,6 @@ mod assets;
 mod bottom;
 mod center;
 mod config_load;
-#[expect(
-    dead_code,
-    reason = "consumed by settings, notifications and theme in phase 5"
-)]
 mod config_watch;
 mod content;
 mod dock_items;
@@ -68,7 +64,6 @@ fn main() {
             .detach();
             gpui_kit::init(cx);
             gpui_kit::component::set_locale(UI_LOCALE);
-            theme::apply_one_dark(cx);
             keymap::bind(cx);
             let sessions = AgentSessions::init(paths.clone(), cx);
             let (services, events) = Services::start(paths, config);
@@ -77,6 +72,7 @@ fn main() {
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));
             config_watch::init(cx);
+            theme::init(cx);
             cx.set_global(InboxHandle(inbox.clone()));
             open_main_window(sync_status, inbox, cx);
             cx.activate(true);
@@ -94,6 +90,7 @@ fn open_main_window(sync_status: Entity<SyncStatus>, inbox: Entity<InboxModel>, 
         ..TitleBar::window_options()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
+        theme::follow_system_appearance(window);
         cx.new(|cx| {
             Workspace::new(
                 content::content_factory(inbox.clone()),

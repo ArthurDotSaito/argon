@@ -11,6 +11,7 @@ use gpui_kit::{
 use super::items::{AccountEntry, OrgEntry};
 use super::model::InboxModel;
 use super::{InboxView, labels};
+use crate::theme::density;
 use crate::ui::avatar;
 
 pub const VIEWS_PANEL: &str = "argon.views";
@@ -152,7 +153,7 @@ fn nav_item(id: (&'static str, usize), selected: bool, cx: &App) -> Stateful<Div
     let theme = cx.theme();
     h_flex()
         .id(id)
-        .h(px(ITEM_HEIGHT))
+        .h(px(density::scaled(ITEM_HEIGHT, cx)))
         .px_2()
         .gap_2()
         .items_center()

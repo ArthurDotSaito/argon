@@ -15,12 +15,13 @@ use gpui_kit::{
 
 use super::labels;
 use super::model::InboxModel;
-use super::row::{self, PR_ROW_HEIGHT};
+use super::row;
 use super::sections::InboxRow;
 use crate::actions::{
     ArchiveSelected, ClearFilter, FocusFilter, OpenSelected, SelectNext, SelectPrevious, ToggleRead,
 };
 use crate::keymap::{INBOX_CONTEXT, INBOX_LIST_CONTEXT};
+use crate::theme::density;
 
 const LIST_OVERDRAW: f32 = 260.;
 const FILTER_WIDTH: f32 = 320.;
@@ -35,7 +36,7 @@ pub struct InboxPane {
     rows_revision: u64,
     selected_row: Option<usize>,
     pending_click: Option<Task<()>>,
-    _subscriptions: [Subscription; 2],
+    _subscriptions: [Subscription; 3],
 }
 
 impl InboxPane {
@@ -44,6 +45,7 @@ impl InboxPane {
             cx.new(|cx| InputState::new(window, cx).placeholder(labels::FILTER_PLACEHOLDER));
         let filter_subscription = cx.subscribe_in(&filter, window, Self::on_filter_event);
         let model_subscription = cx.observe(&model, |this, _, cx| this.sync_list(cx));
+        let density_subscription = density::observe(cx, Self::on_density_change);
         let (rows, scroll_generation, rows_revision, selected_row) = {
             let model = model.read(cx);
             (
@@ -54,7 +56,7 @@ impl InboxPane {
             )
         };
         let list_state = ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW));
-        list_state.reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
+        list_state.reset_with_uniform_height(rows, px(row::pr_row_height(cx)));
         Self {
             model,
             filter,
@@ -64,7 +66,11 @@ impl InboxPane {
             rows_revision,
             selected_row,
             pending_click: None,
-            _subscriptions: [filter_subscription, model_subscription],
+            _subscriptions: [
+                filter_subscription,
+                model_subscription,
+                density_subscription,
+            ],
         }
     }
 
@@ -77,11 +83,11 @@ impl InboxPane {
         if reset {
             self.pending_click = None;
             self.list_state
-                .reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
+                .reset_with_uniform_height(rows, px(row::pr_row_height(cx)));
         } else if rows_revision != self.rows_revision {
             let top = self.list_state.logical_scroll_top();
             self.list_state
-                .reset_with_uniform_height(rows, px(PR_ROW_HEIGHT));
+                .reset_with_uniform_height(rows, px(row::pr_row_height(cx)));
             self.list_state.scroll_to(ListOffset {
                 item_ix: top.item_ix.min(rows.saturating_sub(1)),
                 offset_in_item: top.offset_in_item,
@@ -99,6 +105,18 @@ impl InboxPane {
         self.scroll_generation = scroll_generation;
         self.rows_revision = rows_revision;
         self.selected_row = selected_row;
+        cx.notify();
+    }
+
+    fn on_density_change(&mut self, cx: &mut Context<Self>) {
+        let rows = self.model.read(cx).rows().len();
+        let top = self.list_state.logical_scroll_top();
+        self.list_state
+            .reset_with_uniform_height(rows, px(row::pr_row_height(cx)));
+        self.list_state.scroll_to(ListOffset {
+            item_ix: top.item_ix.min(rows.saturating_sub(1)),
+            offset_in_item: px(0.),
+        });
         cx.notify();
     }
 

@@ -9,9 +9,10 @@ use gpui_kit::{
 
 use super::items::InboxItem;
 use super::labels;
+use crate::theme::density;
 use crate::ui::{self, avatar, state_icon};
 
-pub const PR_ROW_HEIGHT: f32 = 52.;
+const PR_ROW_HEIGHT: f32 = 52.;
 const HEADER_HEIGHT: f32 = 28.;
 const AVATAR_SIZE: f32 = 18.;
 const REVIEWER_SIZE: f32 = 16.;
@@ -27,11 +28,15 @@ const DIFF_WIDTH: f32 = 104.;
 const COMMENTS_WIDTH: f32 = 40.;
 const AGE_WIDTH: f32 = 52.;
 
+pub fn pr_row_height(cx: &App) -> f32 {
+    density::scaled(PR_ROW_HEIGHT, cx)
+}
+
 pub fn header(title: SharedString, count: usize, cx: &App) -> Div {
     let theme = cx.theme();
     h_flex()
         .w_full()
-        .h(px(HEADER_HEIGHT))
+        .h(px(density::scaled(HEADER_HEIGHT, cx)))
         .px_3()
         .gap_1p5()
         .items_center()
@@ -109,7 +114,7 @@ pub fn pr_row(
         .id(("inbox-row", position))
         .w_full()
         .overflow_hidden()
-        .h(px(PR_ROW_HEIGHT))
+        .h(px(pr_row_height(cx)))
         .flex()
         .flex_col()
         .justify_center()

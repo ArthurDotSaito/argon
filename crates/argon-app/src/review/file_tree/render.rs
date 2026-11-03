@@ -15,6 +15,7 @@ use super::model::TreeRow;
 use super::{FileTree, FileTreeEvent, TreeFile};
 use crate::review::labels;
 use crate::review::status_badge::status_badge;
+use crate::theme::density;
 use crate::ui;
 
 const ROW_HEIGHT: f32 = 26.;
@@ -115,7 +116,7 @@ impl FileTree {
         h_flex()
             .id(("review-tree-dir", ix))
             .w_full()
-            .h(px(ROW_HEIGHT))
+            .h(px(density::scaled(ROW_HEIGHT, cx)))
             .pl(px(ROW_PADDING + depth as f32 * INDENT))
             .pr_2()
             .gap_1()
@@ -172,7 +173,7 @@ impl FileTree {
         let row = h_flex()
             .id(("review-tree-file", ix))
             .w_full()
-            .h(px(ROW_HEIGHT))
+            .h(px(density::scaled(ROW_HEIGHT, cx)))
             .pl(px(ROW_PADDING + depth as f32 * INDENT))
             .pr_2()
             .gap_1p5()

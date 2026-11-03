@@ -5,7 +5,7 @@ use gpui_kit::{Action, SharedString};
 use super::ranking::Candidate;
 use crate::actions::{
     CloseActiveItem, GoToView, OpenSettings, ReviewWithAi, StartReview, SyncNow, ToggleBottomDock,
-    ToggleLeftDock, ToggleRightDock,
+    ToggleLeftDock, ToggleRightDock, ToggleTheme,
 };
 use crate::inbox::InboxView;
 
@@ -111,6 +111,7 @@ pub fn command_specs() -> Vec<CommandSpec> {
             CommandSpec::new("Enviar review", IconName::Send, StartReview),
             CommandSpec::new(REVIEW_WITH_AI_TITLE, IconName::Sparkles, ReviewWithAi),
             CommandSpec::new("Abrir configurações", IconName::Settings, OpenSettings),
+            CommandSpec::new("Alternar tema", IconName::Palette, ToggleTheme),
         ])
         .collect()
 }

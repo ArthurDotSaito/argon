@@ -20,7 +20,8 @@ gpui_kit::actions!(
         ToggleDiffMode,
         CancelComment,
         StartReview,
-        ReviewWithAi
+        ReviewWithAi,
+        ToggleTheme
     ]
 );
 

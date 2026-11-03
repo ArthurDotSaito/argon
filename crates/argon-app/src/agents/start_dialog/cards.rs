@@ -7,7 +7,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    ClickEvent, Context, Div, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
+    App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, div, hsla, prelude::FluentBuilder as _,
     px,
 };
@@ -55,18 +55,26 @@ fn card_view(option: &AgentOption) -> CardView {
     }
 }
 
-fn glyph_color(kind: AgentKind) -> Hsla {
-    match kind {
-        AgentKind::ClaudeCode => hsla(18. / 360., 0.62, 0.56, 1.),
-        AgentKind::Codex => hsla(0., 0., 0.72, 1.),
-        AgentKind::OpenCode => hsla(205. / 360., 0.6, 0.58, 1.),
-        AgentKind::CommandCode => hsla(272. / 360., 0.5, 0.64, 1.),
-        AgentKind::Antigravity => hsla(145. / 360., 0.45, 0.5, 1.),
-    }
+const LIGHT_THEME_LIGHTNESS_SHIFT: f32 = 0.22;
+
+fn glyph_color(kind: AgentKind, cx: &App) -> Hsla {
+    let (hue, saturation, lightness) = match kind {
+        AgentKind::ClaudeCode => (18. / 360., 0.62, 0.56),
+        AgentKind::Codex => (0., 0., 0.72),
+        AgentKind::OpenCode => (205. / 360., 0.6, 0.58),
+        AgentKind::CommandCode => (272. / 360., 0.5, 0.64),
+        AgentKind::Antigravity => (145. / 360., 0.45, 0.5),
+    };
+    let shift = if cx.theme().is_dark() {
+        0.
+    } else {
+        LIGHT_THEME_LIGHTNESS_SHIFT
+    };
+    hsla(hue, saturation, lightness - shift, 1.)
 }
 
-fn glyph(kind: AgentKind, label: &str) -> Div {
-    let color = glyph_color(kind);
+fn glyph(kind: AgentKind, label: &str, cx: &App) -> Div {
+    let color = glyph_color(kind, cx);
     div()
         .flex_none()
         .size(px(GLYPH_SIZE))
@@ -149,7 +157,7 @@ impl StartDialog {
             .gap_2()
             .items_center()
             .when(!view.selectable, |body| body.opacity(DISABLED_OPACITY))
-            .child(glyph(view.kind, view.label))
+            .child(glyph(view.kind, view.label, cx))
             .child(
                 v_flex()
                     .flex_1()
