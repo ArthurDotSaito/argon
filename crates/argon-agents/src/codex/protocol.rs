@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use argon_core::PermissionMode;
 use serde_json::{Map, Value, json};
@@ -33,6 +33,9 @@ const PERMISSIONS_APPROVAL_METHOD: &str = "item/permissions/requestApproval";
 const USER_INPUT_METHODS: [&str; 2] = ["item/tool/requestUserInput", "requestUserInput"];
 const ELICITATION_METHOD: &str = "mcpServer/elicitation/request";
 const DYNAMIC_TOOL_METHOD: &str = "item/tool/call";
+const STDIN_TITLE: &str = "Escrita no stdin de um processo";
+const COMMAND_KIND: &str = "command";
+const READ_ONLY_ACTIONS: [&str; 4] = ["read", "listFiles", "list_files", "search"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CodexEvent {
@@ -82,11 +85,28 @@ pub(crate) struct Decoder {
     reasoning: HashMap<String, ReasoningKind>,
     files: HashMap<String, FileTargets>,
     commands: HashMap<String, String>,
+    workspace: Option<PathBuf>,
 }
 
 impl Decoder {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn for_workspace(workspace: PathBuf) -> Self {
+        Self {
+            workspace: Some(workspace),
+            ..Self::default()
+        }
+    }
+
+    fn foreign_cwd(&self, params: &Value) -> Option<String> {
+        let cwd = text_field(params, "cwd")?;
+        match &self.workspace {
+            Some(workspace) if same_dir(&cwd, workspace) => None,
+            _ => Some(cwd),
+        }
     }
 
     pub fn notification(&mut self, method: &str, params: &Value) -> CodexEvent {
@@ -221,14 +241,25 @@ impl Decoder {
                 .as_ref()
                 .and_then(|id| self.commands.get(id).cloned())
         });
-        let mut title = match command {
-            Some(command) => format!("Bash: {}", truncated(&command, FULL_TITLE_LIMIT)),
-            None => "Bash".to_owned(),
+        let prefix = if writes_stdin(params) {
+            STDIN_TITLE
+        } else {
+            "Bash"
         };
+        let mut title = match command {
+            Some(command) => format!("{prefix}: {}", truncated(&command, FULL_TITLE_LIMIT)),
+            None => prefix.to_owned(),
+        };
+        if let Some(cwd) = self.foreign_cwd(params) {
+            title.push_str(&format!(
+                "{DETAIL_SEPARATOR}pasta: {}",
+                truncated(&cwd, FULL_TITLE_LIMIT)
+            ));
+        }
         let Some(details) = grant_details(params) else {
             return deny(method, params);
         };
-        let options = if details.is_empty() {
+        let options = if session_grantable(params) {
             native_options_with_session()
         } else {
             native_options_for("execute")
@@ -736,10 +767,52 @@ fn is_allowed(answer: &PermissionAnswer) -> bool {
     matches!(answer, PermissionAnswer::Selected(id) if id == ALLOW_ONCE || id == ALLOW_ALWAYS)
 }
 
+fn writes_stdin(params: &Value) -> bool {
+    params
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind != COMMAND_KIND)
+}
+
+fn only_reads(params: &Value) -> bool {
+    let actions = params
+        .get("commandActions")
+        .filter(|actions| !actions.is_null())
+        .or_else(|| params.get("parsedCmd"))
+        .and_then(Value::as_array);
+    actions.is_some_and(|actions| {
+        !actions.is_empty()
+            && actions.iter().all(|action| {
+                action
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| READ_ONLY_ACTIONS.contains(&kind))
+            })
+    })
+}
+
+fn session_grantable(params: &Value) -> bool {
+    !writes_stdin(params)
+        && only_reads(params)
+        && grant_details(params).is_some_and(|details| details.is_empty())
+}
+
+fn same_dir(cwd: &str, workspace: &Path) -> bool {
+    let normalize = |path: &str| {
+        let path = path.trim_end_matches(['/', '\\']);
+        if cfg!(windows) {
+            path.replace('/', "\\").to_lowercase()
+        } else {
+            path.to_owned()
+        }
+    };
+    normalize(cwd) == normalize(&workspace.to_string_lossy())
+}
+
 fn command_session_grant(method: &str, params: &Value, answer: &PermissionAnswer) -> bool {
     COMMAND_APPROVAL_METHODS.contains(&method)
         && matches!(answer, PermissionAnswer::Selected(id) if id == ALLOW_ALWAYS)
-        && grant_details(params).is_some_and(|details| details.is_empty())
+        && session_grantable(params)
 }
 
 fn decision(answer: &PermissionAnswer, for_session: bool) -> &'static str {

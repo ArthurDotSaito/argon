@@ -259,7 +259,7 @@ impl Session {
                 self.sandbox = started.sandbox;
                 self.sync_started_mode(started.mode);
                 self.codex = Some(codex);
-                self.decoder = Decoder::new();
+                self.decoder = Decoder::for_workspace(self.agent_cwd.clone());
                 Ok(())
             }
             Err(error) => {
@@ -556,6 +556,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             return Ok(false);
         }
         let (answers, answered) = mpsc::unbounded_channel();
+        let decoder = Decoder::for_workspace(opened.agent_cwd.clone());
         let mut session = Session {
             shared: Arc::clone(&run.shared),
             spec: run.spec.clone(),
@@ -571,7 +572,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             sandbox: opened.sandbox,
             generation: opened.codex.generation,
             codex: Some(opened.codex),
-            decoder: Decoder::new(),
+            decoder,
             feed,
             turns: Turns::default(),
             grants: HashSet::new(),

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -500,9 +500,12 @@ fn command_approval_uses_params_command_and_reason() {
     );
     assert_eq!(ask.tool_call_id.as_deref(), Some("c1"));
     assert_eq!(ask.kind, "execute");
-    assert_eq!(ask.title, "Bash: rm -rf build — needs network");
+    assert_eq!(
+        ask.title,
+        "Bash: rm -rf build — pasta: /repo — needs network"
+    );
     assert!(ask.paths.is_empty());
-    assert_eq!(ask.options, native_options_with_session());
+    assert_eq!(ask.options, native_options_for("execute"));
 }
 
 #[test]
@@ -1039,7 +1042,8 @@ fn legacy_approvals_use_review_decision_values() {
         ("execCommandApproval", "approved_for_session"),
         ("applyPatchApproval", "approved"),
     ] {
-        let respond = |answer: PermissionAnswer| approval_response(method, &json!({}), &answer);
+        let params = legacy_reads();
+        let respond = |answer: PermissionAnswer| approval_response(method, &params, &answer);
         assert_eq!(
             respond(selected("allow_once")),
             json!({"decision": "approved"})
@@ -1067,7 +1071,8 @@ fn command_and_file_approvals_map_answers_to_decisions() {
         ("item/fileChange/requestApproval", "accept"),
     ];
     for (method, always) in methods {
-        let respond = |answer: PermissionAnswer| approval_response(method, &json!({}), &answer);
+        let params = reads();
+        let respond = |answer: PermissionAnswer| approval_response(method, &params, &answer);
         assert_eq!(
             respond(selected("allow_once")),
             json!({"decision": "accept"})
@@ -1133,9 +1138,10 @@ fn approval_response_never_persists_rules_or_grants_global_scope() {
 }
 
 #[test]
-fn only_allow_always_on_a_plain_command_approves_it_for_the_session() {
+fn only_allow_always_on_a_read_only_command_approves_it_for_the_session() {
     let command = "item/commandExecution/requestApproval";
-    let plain = json!({"command": "git diff", "proposedExecpolicyAmendment": ["git", "diff"]});
+    let mut plain = reads();
+    plain["proposedExecpolicyAmendment"] = json!(["git", "diff"]);
     assert_eq!(
         approval_response(command, &plain, &selected("allow_always")),
         json!({"decision": "acceptForSession"})
@@ -1151,11 +1157,19 @@ fn only_allow_always_on_a_plain_command_approves_it_for_the_session() {
             "{other:?}"
         );
     }
-    for escalated in [
+    for extra in [
         json!({"networkApprovalContext": {"host": "example.com", "protocol": "https"}}),
         json!({"additionalPermissions": {"network": {"enabled": true}}}),
         json!({"additionalPermissions": {"fileSystem": {"write": ["x".repeat(3000)]}}}),
+        json!({"kind": "writeStdin"}),
+        json!({"commandActions": [{"type": "read", "command": "cat a", "name": "a", "path": "a"}, {"type": "unknown", "command": "npm test"}]}),
+        json!({"commandActions": []}),
+        json!({"commandActions": null}),
     ] {
+        let mut escalated = reads();
+        for (key, value) in extra.as_object().unwrap() {
+            escalated[key] = value.clone();
+        }
         assert_eq!(
             approval_response(command, &escalated, &selected("allow_always")),
             json!({"decision": "accept"}),
@@ -1169,23 +1183,133 @@ fn only_allow_always_on_a_plain_command_approves_it_for_the_session() {
     }
 }
 
-#[test]
-fn plain_command_cards_offer_permitting_for_the_session() {
-    for method in [
+fn reads() -> Value {
+    json!({
+        "itemId": "c1",
+        "command": "rg foo && git diff",
+        "commandActions": [
+            {"type": "search", "command": "rg foo", "query": "foo", "path": null},
+            {"type": "read", "command": "cat a.rs", "name": "a.rs", "path": "a.rs"},
+            {"type": "listFiles", "command": "ls", "path": null},
+        ],
+    })
+}
+
+fn legacy_reads() -> Value {
+    json!({
+        "callId": "c1",
+        "command": ["rg", "foo"],
+        "parsedCmd": [
+            {"type": "search", "cmd": "rg foo", "query": "foo", "path": null},
+            {"type": "list_files", "cmd": "ls", "path": null},
+        ],
+    })
+}
+
+fn ask_of(params: Value) -> PermissionAsk {
+    ask(
+        &mut Decoder::new(),
         "item/commandExecution/requestApproval",
-        "execCommandApproval",
+        params,
+    )
+}
+
+#[test]
+fn read_only_command_cards_offer_permitting_for_the_session() {
+    for (method, params) in [
+        ("item/commandExecution/requestApproval", reads()),
+        ("execCommandApproval", legacy_reads()),
     ] {
-        let ask = ask(
-            &mut Decoder::new(),
-            method,
-            json!({"itemId": "c1", "command": "rg foo"}),
-        );
+        let ask = ask(&mut Decoder::new(), method, params);
         assert_eq!(
             option_ids(&ask),
             vec!["allow_once", "allow_always", "reject_once"],
             "{method}"
         );
     }
+}
+
+#[test]
+fn commands_that_may_change_anything_never_offer_the_session_option() {
+    let unknown = json!({"type": "unknown", "command": "npm test"});
+    let cases = [
+        json!({"itemId": "c1", "command": "npm test"}),
+        json!({"itemId": "c1", "command": "npm test", "commandActions": []}),
+        json!({"itemId": "c1", "command": "npm test", "commandActions": [unknown]}),
+        json!({"itemId": "c1", "command": "cat a && npm test", "commandActions": [
+            {"type": "read", "command": "cat a", "name": "a", "path": "a"},
+            {"type": "unknown", "command": "npm test"},
+        ]}),
+        json!({"itemId": "c1", "command": "cat a", "commandActions": [{"type": "write"}]}),
+    ];
+    for params in cases {
+        let ask = ask_of(params.clone());
+        assert_eq!(
+            option_ids(&ask),
+            vec!["allow_once", "reject_once"],
+            "{params}"
+        );
+    }
+    let legacy = ask(
+        &mut Decoder::new(),
+        "execCommandApproval",
+        json!({"callId": "c1", "command": ["npm", "test"], "parsedCmd": [{"type": "unknown", "cmd": "npm test"}]}),
+    );
+    assert_eq!(option_ids(&legacy), vec!["allow_once", "reject_once"]);
+}
+
+#[test]
+fn stdin_writes_say_so_and_never_offer_the_session_option() {
+    let mut params = reads();
+    params["kind"] = json!("writeStdin");
+    params["command"] = json!("y\n");
+    let ask = ask_of(params.clone());
+    assert_eq!(ask.title, "Escrita no stdin de um processo: y ");
+    assert_eq!(ask.kind, "execute");
+    assert_eq!(option_ids(&ask), vec!["allow_once", "reject_once"]);
+    assert_eq!(
+        approval_response(
+            "item/commandExecution/requestApproval",
+            &params,
+            &selected("allow_always")
+        ),
+        json!({"decision": "accept"})
+    );
+    params.as_object_mut().unwrap().remove("command");
+    assert_eq!(ask_of(params).title, "Escrita no stdin de um processo");
+    let mut command = reads();
+    command["kind"] = json!("command");
+    assert_eq!(
+        option_ids(&ask_of(command)),
+        vec!["allow_once", "allow_always", "reject_once"]
+    );
+}
+
+#[test]
+fn command_card_shows_a_cwd_outside_the_worktree() {
+    let (workspace, elsewhere, same) = if cfg!(windows) {
+        (r"C:\work\repo", r"C:\Users\me", r"c:/work/repo/")
+    } else {
+        ("/work/repo", "/home/me", "/work/repo/")
+    };
+    let mut decoder = Decoder::for_workspace(PathBuf::from(workspace));
+    let mut title =
+        |params: Value| match decoder.request("item/commandExecution/requestApproval", &params) {
+            CodexRequest::Ask(ask) => ask.title,
+            other => panic!("expected ask, got {other:?}"),
+        };
+    assert_eq!(
+        title(json!({"itemId": "c1", "command": "ls", "cwd": elsewhere})),
+        format!("Bash: ls — pasta: {elsewhere}")
+    );
+    for cwd in [workspace, same] {
+        assert_eq!(
+            title(json!({"itemId": "c1", "command": "ls", "cwd": cwd})),
+            "Bash: ls",
+            "{cwd}"
+        );
+    }
+    assert_eq!(title(json!({"itemId": "c1", "command": "ls"})), "Bash: ls");
 }
 
 #[test]
