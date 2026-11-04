@@ -1,5 +1,7 @@
 mod claude;
 pub mod defaults;
+#[allow(dead_code)]
+mod http;
 pub mod process;
 pub mod redact;
 mod registry;
