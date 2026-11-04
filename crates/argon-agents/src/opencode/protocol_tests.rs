@@ -41,7 +41,14 @@ fn turn_end(kind: &str, data: Value) -> (String, Option<String>) {
 
 fn permission(data: Value) -> (String, PermissionAsk) {
     match decoded("permission.asked", data) {
-        OpencodeEvent::Permission { id, ask } => (id, ask),
+        OpencodeEvent::Permission {
+            id,
+            session_id,
+            ask,
+        } => {
+            assert_eq!(session_id, SESSION);
+            (id, ask)
+        }
         other => panic!("expected permission, got {other:?}"),
     }
 }
@@ -635,7 +642,10 @@ fn child_session_events_are_decoded_like_the_root() {
         OpencodeEvent::Events(vec![AgentEvent::MessageChunk("oi".to_owned())])
     );
     assert!(matches!(tool, OpencodeEvent::Events(_)));
-    assert!(matches!(asked, OpencodeEvent::Permission { .. }));
+    assert!(matches!(
+        asked,
+        OpencodeEvent::Permission { session_id, .. } if session_id == CHILD
+    ));
 }
 
 #[test]

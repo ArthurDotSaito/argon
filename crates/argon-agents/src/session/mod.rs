@@ -55,6 +55,8 @@ pub enum SessionError {
     NeedsLogin { hint: String },
     #[error("erro ACP: {0}")]
     Acp(String),
+    #[error("erro do agente: {0}")]
+    Agent(String),
     #[error("o agente não suporta retomar sessões (session/load)")]
     LoadUnsupported,
     #[error("o modelo `{model}` não está disponível neste agente")]
@@ -255,6 +257,17 @@ async fn launch_with(
         Transport::Acp => bootstrap::launch(spec, ctx, writer, load, options, acp::run).await,
         Transport::ClaudeStream => {
             bootstrap::launch(spec, ctx, writer, load, options, crate::claude::driver::run).await
+        }
+        Transport::OpencodeServe => {
+            bootstrap::launch(
+                spec,
+                ctx,
+                writer,
+                load,
+                options,
+                crate::opencode::driver::run,
+            )
+            .await
         }
         other => Err(SessionError::Unsupported(other)),
     }

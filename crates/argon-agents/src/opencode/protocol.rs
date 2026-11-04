@@ -32,6 +32,7 @@ pub(crate) enum OpencodeEvent {
     Events(Vec<AgentEvent>),
     Permission {
         id: String,
+        session_id: String,
         ask: PermissionAsk,
     },
     TurnEnd {
@@ -74,7 +75,7 @@ pub(crate) fn decode(
         Some("session.execution.succeeded") => turn_end("end_turn", None),
         Some("session.execution.failed") => execution_failed(data),
         Some("session.execution.interrupted") => turn_end("cancelled", None),
-        Some("permission.asked") => permission_asked(data),
+        Some("permission.asked") => permission_asked(data, session_id),
         _ => OpencodeEvent::Ignore,
     }
 }
@@ -369,7 +370,7 @@ fn permission_title(action: &str, resources: &[String], kind: &str) -> String {
     title
 }
 
-fn permission_asked(data: &Value) -> OpencodeEvent {
+fn permission_asked(data: &Value, session_id: String) -> OpencodeEvent {
     let Some(id) = first_text(data, &PERMISSION_ID_KEYS) else {
         return OpencodeEvent::Ignore;
     };
@@ -380,6 +381,7 @@ fn permission_asked(data: &Value) -> OpencodeEvent {
     let texts: Vec<String> = resources.iter().map(resource_text).collect();
     OpencodeEvent::Permission {
         id,
+        session_id,
         ask: PermissionAsk {
             tool_call_id: permission_tool_call_id(data),
             kind: kind.to_owned(),

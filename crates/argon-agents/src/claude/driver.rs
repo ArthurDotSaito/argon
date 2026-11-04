@@ -506,7 +506,7 @@ fn check_command(spec: &AgentSpec) -> Result<()> {
         Resolved::Missing => Err(SessionError::CommandNotFound(
             spec.command.display().to_string(),
         )),
-        Resolved::Failed(message) => Err(SessionError::Acp(message)),
+        Resolved::Failed(message) => Err(SessionError::Agent(message)),
     }
 }
 
