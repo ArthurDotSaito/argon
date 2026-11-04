@@ -205,14 +205,14 @@ fn update_text(notification: &SessionNotification, kind: &str) -> Option<String>
 }
 
 async fn run_acp(options: Options, defaults: &'static AgentDefaults) -> Result<(), BoxError> {
-    let command = which::which(defaults.command)?;
-    let raw_log_path = log_path(defaults.command, "log");
+    let command = which::which(defaults.launch.command)?;
+    let raw_log_path = log_path(defaults.launch.command, "log");
     let raw_log = Arc::new(Mutex::new(File::create(&raw_log_path)?));
     println!("agent      : {}", defaults.label);
     println!(
         "command    : {} {}",
         command.display(),
-        defaults.args.join(" ")
+        defaults.launch.args.join(" ")
     );
     println!("cwd        : {}", options.cwd.display());
     println!("raw log    : {}", raw_log_path.display());
@@ -221,7 +221,7 @@ async fn run_acp(options: Options, defaults: &'static AgentDefaults) -> Result<(
     let log_for_debug = Arc::clone(&raw_log);
     let agent = AcpAgent::new(
         AcpAgentConfig::new(&command)
-            .args(defaults.args.iter().copied())
+            .args(defaults.launch.args.iter().copied())
             .envs(defaults.env.iter().copied()),
     )
     .with_debug(move |line, direction| {
@@ -433,7 +433,7 @@ async fn run_acp(options: Options, defaults: &'static AgentDefaults) -> Result<(
 }
 
 async fn run_headless(options: Options, defaults: &'static AgentDefaults) -> Result<(), BoxError> {
-    let command = which::which(defaults.command)?;
+    let command = which::which(defaults.launch.command)?;
     let flags = defaults.headless.ok_or("agent has no headless mode")?;
     let mut args: Vec<String> = Vec::new();
     if let (Some(model), ModelSelection::CliFlag { flag }) =
@@ -451,7 +451,7 @@ async fn run_headless(options: Options, defaults: &'static AgentDefaults) -> Res
         args.push(id.clone());
     }
     args.extend(options.extra.iter().cloned());
-    args.extend(defaults.args.iter().map(|arg| arg.to_string()));
+    args.extend(defaults.launch.args.iter().map(|arg| arg.to_string()));
     args.push(PROMPT.to_string());
     let output_path = log_path("agy-headless", "jsonl");
     let mut output = File::create(&output_path)?;
@@ -508,7 +508,7 @@ async fn run_headless(options: Options, defaults: &'static AgentDefaults) -> Res
 async fn main() -> Result<(), BoxError> {
     let options = parse_options()?;
     let defaults = agent_defaults(options.kind);
-    if options.headless || defaults.transport == Transport::Headless {
+    if options.headless || defaults.launch.transport == Transport::Headless {
         run_headless(options, defaults).await
     } else {
         run_acp(options, defaults).await

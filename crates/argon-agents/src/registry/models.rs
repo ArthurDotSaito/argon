@@ -1,21 +1,44 @@
 use std::time::Duration;
 
-use argon_core::AgentKind;
+use argon_core::{AgentKind, Config};
 
-use super::probe::capture;
+use super::probe::capture_with_env;
+use super::spec::agent_spec;
 use super::{AgentSpec, ModelInfo};
+use crate::defaults::Transport;
+use crate::util::{Resolved, resolve_command};
+use crate::{codex, opencode};
 
-const LIST_TIMEOUT: Duration = Duration::from_secs(5);
-const LIST_ATTEMPTS: usize = 2;
-const OPENCODE_ARGS: &[&str] = &["models"];
-const COMMAND_CODE_ARGS: &[&str] = &["--list-models"];
+const COMMAND_CODE_TIMEOUT: Duration = Duration::from_secs(30);
+const COMMAND_CODE_ATTEMPTS: usize = 2;
+const COMMAND_CODE_ARGS: &[&str] = &["--list-models", "--no-auto-update"];
 const COMMAND_CODE_FOOTER: [&str; 2] = ["Pass the full id", "Decision models"];
 
-pub fn listing_args(kind: AgentKind) -> Option<&'static [&'static str]> {
-    match kind {
-        AgentKind::OpenCode => Some(OPENCODE_ARGS),
-        AgentKind::CommandCode => Some(COMMAND_CODE_ARGS),
-        AgentKind::ClaudeCode | AgentKind::Codex | AgentKind::Antigravity => None,
+pub fn lists_models(kind: AgentKind) -> bool {
+    matches!(
+        kind,
+        AgentKind::OpenCode | AgentKind::CommandCode | AgentKind::Codex
+    )
+}
+
+pub fn spec_lists_models(spec: &AgentSpec) -> bool {
+    match spec.kind {
+        AgentKind::Codex => spec.transport == Transport::CodexAppServer,
+        kind => lists_models(kind),
+    }
+}
+
+pub fn listing_spec(kind: AgentKind, cfg: &Config) -> Option<AgentSpec> {
+    let mut spec = agent_spec(kind, cfg);
+    if !spec_lists_models(&spec) {
+        return None;
+    }
+    match resolve_command(&spec.command) {
+        Resolved::Path(path) => {
+            spec.command = path;
+            Some(spec)
+        }
+        Resolved::Missing | Resolved::Failed(_) => None,
     }
 }
 
@@ -35,14 +58,6 @@ fn model(id: &str) -> ModelInfo {
     }
 }
 
-pub fn parse_opencode_models(text: &str) -> Vec<ModelInfo> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| line.contains('/') && is_model_id(line))
-        .map(model)
-        .collect()
-}
-
 pub fn parse_command_code_models(text: &str) -> Vec<ModelInfo> {
     text.lines()
         .take_while(|line| {
@@ -57,45 +72,40 @@ pub fn parse_command_code_models(text: &str) -> Vec<ModelInfo> {
         .collect()
 }
 
-fn parse(kind: AgentKind, text: &str) -> Vec<ModelInfo> {
-    match kind {
-        AgentKind::CommandCode => parse_command_code_models(text),
-        _ => parse_opencode_models(text),
+pub async fn list_models(spec: &AgentSpec) -> Option<Result<Vec<ModelInfo>, String>> {
+    match spec.kind {
+        AgentKind::OpenCode => Some(opencode::list_models(spec).await),
+        AgentKind::CommandCode => Some(list_command_code_models(spec).await),
+        AgentKind::Codex if spec_lists_models(spec) => Some(codex::driver::list_models(spec).await),
+        AgentKind::ClaudeCode | AgentKind::Codex | AgentKind::Antigravity => None,
     }
 }
 
-pub async fn list_models(spec: &AgentSpec) -> Option<Result<Vec<ModelInfo>, String>> {
-    let args = listing_args(spec.kind)?;
+async fn list_command_code_models(spec: &AgentSpec) -> Result<Vec<ModelInfo>, String> {
     let mut last_error = String::new();
-    for _ in 0..LIST_ATTEMPTS {
-        match capture(&spec.command, args, LIST_TIMEOUT).await {
-            Ok(captured) if captured.success => return Some(Ok(parse(spec.kind, &captured.text))),
+    for _ in 0..COMMAND_CODE_ATTEMPTS {
+        match capture_with_env(
+            &spec.command,
+            COMMAND_CODE_ARGS,
+            &spec.env,
+            COMMAND_CODE_TIMEOUT,
+        )
+        .await
+        {
+            Ok(captured) if captured.success => {
+                return Ok(parse_command_code_models(&captured.text));
+            }
             Ok(captured) => last_error = captured.text.trim().to_owned(),
             Err(error) => last_error = error,
         }
     }
-    Some(Err(last_error))
-}
-
-pub fn apply_listed_models(spec: &mut AgentSpec, models: Vec<ModelInfo>) {
-    if !models.iter().any(|model| model.id == spec.default_model) {
-        spec.default_model = models
-            .first()
-            .map(|model| model.id.clone())
-            .unwrap_or_default();
-    }
-    spec.models = models;
+    Err(last_error)
 }
 
 #[cfg(test)]
 mod tests {
-    use argon_core::Config;
-
     use super::*;
-    use crate::registry::agent_spec;
 
-    const OPENCODE_OUTPUT: &str = "claude-agent/claude-opus-5\ncommandcode/deepseek/deepseek-v4-pro\n\
-                                   opencode-go/glm-5.3\n\nServiceUnavailableError: oops\n";
     const COMMAND_CODE_OUTPUT: &str = "Available models  · 3 models\n\nOpen Source\n\n\
         deepseek/deepseek-v4-flash             fast hybrid-attention reasoning (default)\n\
         reflection/beam:free                   FREE reasoning model\n\nAnthropic\n\n\
@@ -103,22 +113,6 @@ mod tests {
         Pass the full id, or just the short name after the last \"/\":\n\
         cmdc --model moonshotai/kimi-k2.5\n\nDecision models (headless only)\n\
         typesafe/jev  typed questions in\n";
-
-    #[test]
-    fn parses_opencode_model_list() {
-        let ids: Vec<String> = parse_opencode_models(OPENCODE_OUTPUT)
-            .into_iter()
-            .map(|model| model.id)
-            .collect();
-        assert_eq!(
-            ids,
-            [
-                "claude-agent/claude-opus-5",
-                "commandcode/deepseek/deepseek-v4-pro",
-                "opencode-go/glm-5.3"
-            ]
-        );
-    }
 
     #[test]
     fn parses_command_code_model_table() {
@@ -137,23 +131,94 @@ mod tests {
     }
 
     #[test]
-    fn only_opencode_and_command_code_list_models() {
-        assert!(listing_args(AgentKind::OpenCode).is_some());
-        assert!(listing_args(AgentKind::CommandCode).is_some());
-        assert!(listing_args(AgentKind::ClaudeCode).is_none());
+    fn opencode_command_code_and_codex_list_models() {
+        assert!(lists_models(AgentKind::OpenCode));
+        assert!(lists_models(AgentKind::CommandCode));
+        assert!(lists_models(AgentKind::Codex));
+        assert!(!lists_models(AgentKind::ClaudeCode));
+        assert!(!lists_models(AgentKind::Antigravity));
+    }
+
+    fn codex_on(transport: Transport) -> AgentSpec {
+        let mut spec = agent_spec(AgentKind::Codex, &Config::default());
+        spec.transport = transport;
+        spec
     }
 
     #[test]
-    fn listed_models_keep_configured_default_or_pick_first() {
-        let mut spec = agent_spec(AgentKind::OpenCode, &Config::default());
-        spec.default_model = "opencode-go/glm-5.3".into();
-        apply_listed_models(&mut spec, parse_opencode_models(OPENCODE_OUTPUT));
-        assert_eq!(spec.default_model, "opencode-go/glm-5.3");
-        spec.default_model = "missing/model".into();
-        apply_listed_models(&mut spec, parse_opencode_models(OPENCODE_OUTPUT));
-        assert_eq!(spec.default_model, "claude-agent/claude-opus-5");
-        apply_listed_models(&mut spec, Vec::new());
-        assert!(spec.default_model.is_empty());
-        assert!(spec.models.is_empty());
+    fn codex_lists_models_only_through_the_app_server() {
+        assert!(spec_lists_models(&codex_on(Transport::CodexAppServer)));
+        assert!(!spec_lists_models(&codex_on(Transport::Acp)));
+        for kind in [AgentKind::OpenCode, AgentKind::CommandCode] {
+            assert!(spec_lists_models(&agent_spec(kind, &Config::default())));
+        }
+        assert!(!spec_lists_models(&agent_spec(
+            AgentKind::ClaudeCode,
+            &Config::default()
+        )));
+    }
+
+    #[test]
+    fn listing_spec_is_only_offered_to_listing_agents() {
+        assert!(listing_spec(AgentKind::ClaudeCode, &Config::default()).is_none());
+        let codex = agent_spec(AgentKind::Codex, &Config::default());
+        if codex.transport != Transport::CodexAppServer {
+            assert!(listing_spec(AgentKind::Codex, &Config::default()).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn agents_without_listing_return_none() {
+        let spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
+        assert!(list_models(&spec).await.is_none());
+        assert!(list_models(&codex_on(Transport::Acp)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn codex_listing_reports_a_missing_command() {
+        let mut spec = codex_on(Transport::CodexAppServer);
+        spec.command = std::path::PathBuf::from("argon-missing-codex-binary");
+        let error = list_models(&spec).await.unwrap().unwrap_err();
+        assert!(error.contains("argon-missing-codex-binary"), "{error}");
+    }
+
+    #[tokio::test]
+    #[ignore = "runs the installed codex app-server (initialize + model/list only)"]
+    async fn smoke_codex_listing_against_the_installed_cli() {
+        let mut spec = codex_on(Transport::CodexAppServer);
+        spec.command = std::path::PathBuf::from("codex");
+        spec.args.clear();
+        let started = std::time::Instant::now();
+        let models = list_models(&spec).await.unwrap().unwrap();
+        println!(
+            "Codex: {} models in {:.1}s: {:?}",
+            models.len(),
+            started.elapsed().as_secs_f32(),
+            models
+                .iter()
+                .map(|model| format!("{} ({})", model.id, model.label))
+                .collect::<Vec<_>>()
+        );
+        assert!(!models.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "runs the installed opencode and command-code listings"]
+    async fn smoke_listings_against_the_installed_agents() {
+        for kind in [AgentKind::OpenCode, AgentKind::CommandCode] {
+            let spec = listing_spec(kind, &Config::default()).expect("agent not installed");
+            let started = std::time::Instant::now();
+            let models = list_models(&spec).await.unwrap().unwrap();
+            let opencode_go = models
+                .iter()
+                .filter(|model| model.id.starts_with("opencode-go/"))
+                .count();
+            println!(
+                "{kind:?}: {} models, {opencode_go} opencode-go, {:.1}s",
+                models.len(),
+                started.elapsed().as_secs_f32()
+            );
+            assert!(!models.is_empty());
+        }
     }
 }

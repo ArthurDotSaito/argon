@@ -1,5 +1,14 @@
+use argon_core::PermissionMode;
 use gpui_kit::SharedString;
 use gpui_kit::component::select::SelectItem;
+
+use super::labels;
+
+const PERMISSION_MODES: [PermissionMode; 3] = [
+    PermissionMode::Supervised,
+    PermissionMode::AcceptEdits,
+    PermissionMode::FullAccess,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
@@ -14,6 +23,13 @@ impl Choice {
             label: label.into(),
         }
     }
+}
+
+pub fn permission_choices() -> Vec<Choice> {
+    PERMISSION_MODES
+        .into_iter()
+        .map(|mode| Choice::new(mode.as_str(), labels::permission_mode(mode)))
+        .collect()
 }
 
 impl SelectItem for Choice {

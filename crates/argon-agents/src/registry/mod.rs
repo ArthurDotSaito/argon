@@ -1,6 +1,7 @@
 mod detect;
 mod login;
 mod models;
+mod models_cache;
 mod probe;
 mod spec;
 mod version;
@@ -11,8 +12,13 @@ use futures::future::join_all;
 
 use crate::defaults::AGENT_DEFAULTS;
 
+pub use models::{list_models, listing_spec, lists_models, spec_lists_models};
+pub use models_cache::{ModelsCache, spec_fingerprint};
 pub(crate) use spec::login_hint;
-pub use spec::{AgentSpec, ModelInfo, Support, agent_spec, support_for};
+pub use spec::{
+    AgentSpec, ModelInfo, Support, agent_spec, agent_spec_for, effective_transport,
+    override_applies_to, support_for,
+};
 pub use warmup::warm_up_agents;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

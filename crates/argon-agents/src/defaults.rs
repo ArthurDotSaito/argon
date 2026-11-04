@@ -1,9 +1,44 @@
 use argon_core::AgentKind;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Transport {
     Acp,
+    ClaudeStream,
+    CodexAppServer,
+    OpencodeServe,
     Headless,
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Acp => "acp",
+            Self::ClaudeStream => "claude-stream",
+            Self::CodexAppServer => "codex-app-server",
+            Self::OpencodeServe => "opencode-serve",
+            Self::Headless => "headless",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [
+            Self::Acp,
+            Self::ClaudeStream,
+            Self::CodexAppServer,
+            Self::OpencodeServe,
+            Self::Headless,
+        ]
+        .into_iter()
+        .find(|transport| transport.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Launch {
+    pub transport: Transport,
+    pub command: &'static str,
+    pub args: &'static [&'static str],
+    pub warmup_args: Option<&'static [&'static str]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,9 +66,8 @@ pub struct HeadlessFlags {
 pub struct AgentDefaults {
     pub kind: AgentKind,
     pub label: &'static str,
-    pub transport: Transport,
-    pub command: &'static str,
-    pub args: &'static [&'static str],
+    pub launch: Launch,
+    pub acp_fallback: Option<Launch>,
     pub env: &'static [(&'static str, &'static str)],
     pub cli_command: &'static str,
     pub version_args: &'static [&'static str],
@@ -44,12 +78,10 @@ pub struct AgentDefaults {
     pub models_from_session: bool,
     pub models: &'static [KnownModel],
     pub default_model: &'static str,
-    pub permission_mode: Option<&'static str>,
     pub load_session: bool,
     pub headless: Option<HeadlessFlags>,
     pub tested_version: &'static str,
     pub turn_verified: bool,
-    pub warmup_args: Option<&'static [&'static str]>,
 }
 
 const MODEL_OPTION: ModelSelection = ModelSelection::AcpConfigOption { config_id: "model" };
@@ -219,55 +251,78 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
     AgentDefaults {
         kind: AgentKind::ClaudeCode,
         label: "Claude Code",
-        transport: Transport::Acp,
-        command: "npx",
-        args: &["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"],
+        launch: Launch {
+            transport: Transport::ClaudeStream,
+            command: "claude",
+            args: &[],
+            warmup_args: None,
+        },
+        acp_fallback: Some(Launch {
+            transport: Transport::Acp,
+            command: "npx",
+            args: &["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"],
+            warmup_args: Some(&["--cli", "--version"]),
+        }),
         env: &[],
         cli_command: "claude",
         version_args: &["--version"],
-        install_hint: "Claude Code native installer (claude.exe in %USERPROFILE%\\.local\\bin); adapter runs through npx",
+        install_hint: "Claude Code native installer (claude.exe in %USERPROFILE%\\.local\\bin); the ACP fallback runs through npx",
         login_command: "claude auth login",
         login_check: "claude auth status",
         model_selection: MODEL_OPTION,
         models_from_session: true,
         models: CLAUDE_MODELS,
         default_model: "default",
-        permission_mode: None,
         load_session: true,
         headless: None,
-        tested_version: "claude-agent-acp 0.100.0 / claude 2.1.316",
+        tested_version: "claude 2.1.316 / claude-agent-acp 0.100.0",
         turn_verified: true,
-        warmup_args: Some(&["--cli", "--version"]),
     },
     AgentDefaults {
         kind: AgentKind::Codex,
         label: "Codex",
-        transport: Transport::Acp,
-        command: "npx",
-        args: &["-y", "@agentclientprotocol/codex-acp@2.5.0"],
+        launch: Launch {
+            transport: Transport::CodexAppServer,
+            command: "codex",
+            args: &[],
+            warmup_args: None,
+        },
+        acp_fallback: Some(Launch {
+            transport: Transport::Acp,
+            command: "npx",
+            args: &["-y", "@agentclientprotocol/codex-acp@2.5.0"],
+            warmup_args: Some(&["--version"]),
+        }),
         env: &[],
         cli_command: "codex",
         version_args: &["--version"],
-        install_hint: "npm i -g @openai/codex; adapter runs through npx and bundles its own codex",
+        install_hint: "npm i -g @openai/codex; the ACP fallback runs through npx and bundles its own codex",
         login_command: "codex login",
         login_check: "codex login status",
         model_selection: MODEL_OPTION,
         models_from_session: true,
         models: &[],
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: None,
-        tested_version: "codex-acp 2.5.0 / codex 0.160.0",
-        turn_verified: false,
-        warmup_args: Some(&["--version"]),
+        tested_version: "codex 0.157.0 / codex-acp 2.5.0",
+        turn_verified: true,
     },
     AgentDefaults {
         kind: AgentKind::OpenCode,
         label: "OpenCode",
-        transport: Transport::Acp,
-        command: "opencode",
-        args: &["acp"],
+        launch: Launch {
+            transport: Transport::OpencodeServe,
+            command: "opencode",
+            args: &[],
+            warmup_args: None,
+        },
+        acp_fallback: Some(Launch {
+            transport: Transport::Acp,
+            command: "opencode",
+            args: &["acp"],
+            warmup_args: None,
+        }),
         env: &[],
         cli_command: "opencode",
         version_args: &["--version"],
@@ -278,19 +333,21 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: &[],
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "opencode 2.2.5",
         turn_verified: true,
-        warmup_args: None,
     },
     AgentDefaults {
         kind: AgentKind::CommandCode,
         label: "Command Code",
-        transport: Transport::Acp,
-        command: "command-code",
-        args: &["acp"],
+        launch: Launch {
+            transport: Transport::Acp,
+            command: "command-code",
+            args: &["acp"],
+            warmup_args: None,
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "command-code",
         version_args: &["--version"],
@@ -301,19 +358,21 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: COMMAND_CODE_MODELS,
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "command-code 1.88.2",
         turn_verified: false,
-        warmup_args: None,
     },
     AgentDefaults {
         kind: AgentKind::Antigravity,
         label: "Antigravity",
-        transport: Transport::Headless,
-        command: "agy",
-        args: &["--output-format", "stream-json", "--print"],
+        launch: Launch {
+            transport: Transport::Headless,
+            command: "agy",
+            args: &["--output-format", "stream-json", "--print"],
+            warmup_args: None,
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "agy",
         version_args: &["--version"],
@@ -324,7 +383,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: false,
         models: ANTIGRAVITY_MODELS,
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: Some(HeadlessFlags {
             output: &["--output-format", "stream-json"],
@@ -335,7 +393,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         }),
         tested_version: "agy 1.4.7",
         turn_verified: false,
-        warmup_args: None,
     },
 ];
 
@@ -355,9 +412,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agents_inherit_the_user_permission_mode() {
+    fn transport_text_round_trips() {
+        for transport in [
+            Transport::Acp,
+            Transport::ClaudeStream,
+            Transport::CodexAppServer,
+            Transport::OpencodeServe,
+            Transport::Headless,
+        ] {
+            assert_eq!(Transport::parse(transport.as_str()), Some(transport));
+        }
+        assert_eq!(Transport::parse("bogus"), None);
+    }
+
+    #[test]
+    fn acp_fallbacks_always_use_the_acp_transport() {
         for defaults in &AGENT_DEFAULTS {
-            assert_eq!(defaults.permission_mode, None, "{:?}", defaults.kind);
+            if let Some(fallback) = defaults.acp_fallback {
+                assert_eq!(fallback.transport, Transport::Acp, "{:?}", defaults.kind);
+            }
         }
     }
 }

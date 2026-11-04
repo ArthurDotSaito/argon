@@ -2,14 +2,18 @@ mod cards;
 mod fields;
 mod launch;
 mod loaders;
+mod models;
 mod preview;
 mod render;
 mod selection;
+mod usage;
 
 use std::sync::Arc;
 
 use argon_agents::new_session_id;
-use argon_core::{AgentKind, Config, InvalidTemplate, PromptTemplate, PullRequest, RenderedPrompt};
+use argon_core::{
+    AgentKind, Config, InvalidTemplate, PermissionMode, PromptTemplate, PullRequest, RenderedPrompt,
+};
 use argon_github::PrDetail;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::select::{SelectEvent, SelectState};
@@ -23,7 +27,7 @@ use super::detection::AgentOption;
 use super::launcher::LaunchStage;
 use super::sessions::AgentSessions;
 use crate::actions::OpenSettings;
-use crate::agents::choice::Choice;
+use crate::agents::choice::{Choice, permission_choices};
 use crate::services::{AppServices, Services};
 
 const DIALOG_WIDTH: f32 = 980.;
@@ -71,10 +75,12 @@ pub struct StartDialog {
     agents: Load<Vec<AgentOption>>,
     agent: Option<AgentKind>,
     model: Option<String>,
+    permission_mode: PermissionMode,
     templates: Load<Vec<PromptTemplate>>,
     invalid_templates: Vec<InvalidTemplate>,
     template: Option<String>,
     model_select: ChoiceSelect,
+    permission_select: ChoiceSelect,
     template_select: ChoiceSelect,
     include_reviews: bool,
     include_ci: bool,
@@ -82,6 +88,7 @@ pub struct StartDialog {
     ci: Option<Load<String>>,
     preview: Option<Preview>,
     render_epoch: u64,
+    usage_revision: u64,
     render_task: Option<Task<()>>,
     preview_scroll: UniformListScrollHandle,
     session_id: Result<String, SharedString>,
@@ -132,6 +139,8 @@ impl StartDialog {
             .unwrap_or_default();
         let model_select = choice_select(window, cx);
         let template_select = choice_select(window, cx);
+        let permission_select =
+            cx.new(|cx| SelectState::new(permission_choices(), None, window, cx));
         let mut subscriptions = vec![
             cx.subscribe_in(
                 &model_select,
@@ -139,6 +148,17 @@ impl StartDialog {
                 |this, _, event: &SelectEvent<Vec<Choice>>, _, cx| {
                     if let SelectEvent::Confirm(Some(id)) = event {
                         this.set_model(id.clone(), cx);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &permission_select,
+                window,
+                |this, _, event: &SelectEvent<Vec<Choice>>, _, cx| {
+                    if let SelectEvent::Confirm(Some(id)) = event
+                        && let Some(mode) = PermissionMode::parse(id)
+                    {
+                        this.set_permission_mode(mode, cx);
                     }
                 },
             ),
@@ -165,15 +185,18 @@ impl StartDialog {
             agents: Load::Loading,
             agent: None,
             model: None,
+            permission_mode: PermissionMode::default(),
             templates: Load::Loading,
             invalid_templates: Vec::new(),
             template: None,
             model_select,
+            permission_select,
             template_select,
             context: Load::Loading,
             ci: None,
             preview: None,
             render_epoch: 0,
+            usage_revision: 0,
             render_task: None,
             preview_scroll: UniformListScrollHandle::new(),
             session_id: fresh_session_id(),

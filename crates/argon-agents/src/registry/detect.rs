@@ -4,9 +4,8 @@ use std::time::Duration;
 use argon_core::{AgentKind, Config};
 
 use super::login::{LoginState, login_probe, parse_login};
-use super::models::{apply_listed_models, list_models};
 use super::probe::capture;
-use super::spec::{agent_spec, is_command_overridden, login_hint, support_for};
+use super::spec::{agent_spec, effective_launch, is_command_overridden, login_hint, support_for};
 use super::version::parse_version;
 use super::{AgentSpec, Detection, Support};
 use crate::defaults::{AgentDefaults, agent_defaults};
@@ -17,27 +16,15 @@ const UNKNOWN_VERSION: &str = "unknown";
 
 pub(super) async fn detect_agent(kind: AgentKind, cfg: &Config) -> (AgentSpec, Support, Detection) {
     let mut spec = agent_spec(kind, cfg);
-    let overridden = is_command_overridden(kind, cfg);
-    let detection = detect(&mut spec, overridden).await;
-    if matches!(detection, Detection::Found { .. }) {
-        refresh_models(&mut spec).await;
-    }
+    let launch = effective_launch(agent_defaults(kind), cfg);
+    let overridden = is_command_overridden(kind, launch, cfg);
+    let detection = detect(&mut spec, overridden, launch.command).await;
     (spec, support_for(kind), detection)
 }
 
-async fn refresh_models(spec: &mut AgentSpec) {
-    match list_models(spec).await {
-        Some(Ok(models)) => apply_listed_models(spec, models),
-        Some(Err(error)) => {
-            tracing::warn!(agent = spec.label, %error, "failed to list agent models");
-        }
-        None => {}
-    }
-}
-
-async fn detect(spec: &mut AgentSpec, overridden: bool) -> Detection {
+async fn detect(spec: &mut AgentSpec, overridden: bool, launch_command: &str) -> Detection {
     let defaults = agent_defaults(spec.kind);
-    let base_cli = if overridden || defaults.cli_command == defaults.command {
+    let base_cli = if overridden || defaults.cli_command == launch_command {
         None
     } else {
         match resolve(Path::new(defaults.cli_command)) {

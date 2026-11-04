@@ -1,4 +1,5 @@
 use argon_agents::SessionError;
+use argon_core::PermissionMode;
 use argon_store::FindingState;
 use gpui_kit::{Context, SharedString};
 
@@ -102,6 +103,31 @@ impl ThreadModel {
                     }
                 }
                 cx.emit(ThreadEvent::Activity);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn change_permission_mode(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        let (Some(handle), Some(services)) = (self.handle.clone(), self.services.clone()) else {
+            return;
+        };
+        if self.changing_permission_mode || self.permission_mode() == Some(mode) {
+            return;
+        }
+        self.changing_permission_mode = true;
+        cx.notify();
+        let job = services.spawn_runtime(async move { handle.set_permission_mode(mode).await });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            _ = this.update(cx, |this, cx| {
+                this.changing_permission_mode = false;
+                this.action_error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(labels::action_failed(&error.to_string()).into()),
+                    Err(error) => Some(labels::action_failed(&error.to_string()).into()),
+                };
                 cx.notify();
             });
         })

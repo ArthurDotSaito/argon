@@ -1,9 +1,13 @@
+use argon_core::PermissionMode;
+
 pub const DIALOG_TITLE: &str = "Revisar com IA";
 pub const AGENT: &str = "Agente";
 pub const GENERIC_AGENT: &str = "agente";
 pub const MODEL: &str = "Modelo";
 pub const TEMPLATE: &str = "Template";
 pub const OPTIONS: &str = "Opções";
+pub const PERMISSIONS: &str = "Permissões";
+pub const FULL_ACCESS_RISK: &str = "Acesso total aprova automaticamente todo pedido de permissão do agente — comandos, edições e rede — sem mostrar o card. O agente lê código de PRs de terceiros: escolha este modo só se aceitar esse risco.";
 pub const EDIT_IN_SETTINGS: &str = "Editar em Configurações";
 pub const DETECTING: &str = "detectando…";
 pub const NOT_FOUND: &str = "não encontrado no PATH";
@@ -33,6 +37,7 @@ pub const STARTING_AGENT: &str = "iniciando o agente…";
 pub const PICK_AGENT: &str = "escolha um agente disponível";
 pub const START: &str = "Iniciar review";
 pub const CANCEL: &str = "Cancelar";
+pub const COPY_ERROR: &str = "Copiar";
 pub const CANCEL_START: &str = "Cancelar início";
 pub const CANCELLING: &str = "cancelando o início…";
 pub const START_CANCELLED: &str = "Início cancelado — o worktree foi removido";
@@ -43,6 +48,71 @@ pub const CI_HEADING: &str = "Jobs com falha:";
 pub const NO_CI_LOG: &str = "(log vazio)";
 pub const BUTTON_TOOLTIP: &str = "Revisar este PR com um agente de IA (a)";
 pub const CLOSED_TOOLTIP: &str = "Disponível só para PRs abertos";
+
+pub const LOADING_USAGE: &str = "carregando uso…";
+pub const USAGE_LINK: &str = "ver uso";
+pub const USAGE_CONSENT_HINT: &str = "Autorize a leitura do login em Configurações para ver o uso";
+pub const NO_USAGE_WINDOWS: &str = "sem dados de uso";
+pub const LIMIT_REACHED: &str = "Limite atingido";
+pub const RESETS_SOON: &str = "em instantes";
+
+pub fn in_minutes(minutes: u64) -> String {
+    format!("em {minutes} min")
+}
+
+pub fn in_hours(hours: u64) -> String {
+    format!("em {hours} h")
+}
+
+pub fn in_days(days: u64) -> String {
+    if days == 1 {
+        "em 1 dia".to_owned()
+    } else {
+        format!("em {days} dias")
+    }
+}
+
+pub fn renews(relative: &str) -> String {
+    format!("renova {relative}")
+}
+
+pub fn limit_reached_renews(relative: &str) -> String {
+    format!("{LIMIT_REACHED} — {}", renews(relative))
+}
+
+pub fn usage_summary(plan: &str, percent: u32, window: &str) -> String {
+    let window = window.to_lowercase();
+    let spoken = if window.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("{percent}% em {window}")
+    } else {
+        format!("{percent}% {window}")
+    };
+    if plan.is_empty() {
+        spoken
+    } else {
+        format!("{plan} · {spoken}")
+    }
+}
+
+pub fn permission_mode(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Supervised => "Supervisionado",
+        PermissionMode::AcceptEdits => "Aceitar edições",
+        PermissionMode::FullAccess => "Acesso total",
+    }
+}
+
+pub fn permission_mode_hint(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Supervised => {
+            "O Argon aprova sozinho só leituras e buscas dentro do worktree do PR; todo o resto pede confirmação."
+        }
+        PermissionMode::AcceptEdits => {
+            "O Argon aprova sozinho leituras, buscas e edições dentro do worktree do PR; comandos, rede e qualquer caminho fora dele pedem confirmação."
+        }
+        PermissionMode::FullAccess => "Aprova todo pedido de permissão do agente sem perguntar.",
+    }
+}
 
 pub fn permissions_warning(agent: &str) -> String {
     format!(

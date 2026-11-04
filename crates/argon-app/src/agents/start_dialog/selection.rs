@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, PromptTemplate, render_prompt};
+use argon_core::{AgentCfg, AgentKind, PermissionMode, PromptTemplate, render_prompt};
 use gpui_kit::{AppContext as _, Context, SharedString, Window};
 
 use super::{Load, Preview, StartDialog};
@@ -42,20 +42,48 @@ impl StartDialog {
         if self.is_launching() || self.agent == Some(kind) {
             return;
         }
-        let Some(option) = self
+        let selectable = self.agents.ready().is_some_and(|options| {
+            options
+                .iter()
+                .any(|option| option.spec.kind == kind && option.state.is_selectable())
+        });
+        if !selectable {
+            return;
+        }
+        let permission_mode = self
+            .config
             .agents
-            .ready()
-            .and_then(|options| options.iter().find(|option| option.spec.kind == kind))
-            .filter(|option| option.state.is_selectable())
-        else {
+            .get(&kind)
+            .map(AgentCfg::permission_mode)
+            .unwrap_or_default();
+        self.agent = Some(kind);
+        self.set_model_choices(None, window, cx);
+        self.permission_mode = permission_mode;
+        let mode = permission_mode.as_str().to_owned();
+        self.permission_select.update(cx, |select, cx| {
+            select.set_selected_value(&mode, window, cx)
+        });
+        self.clear_failure();
+        cx.notify();
+    }
+
+    pub(super) fn set_model_choices(
+        &mut self,
+        preferred: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(option) = self.selected_option() else {
             return;
         };
-        let model = default_model(&option.spec);
-        let choices: Vec<Choice> = model_choices(&option.spec)
+        let listed = model_choices(&option.spec);
+        let model = preferred
+            .filter(|id| listed.iter().any(|model| &model.id == id))
+            .or_else(|| default_model(&option.spec));
+        let choices: Vec<Choice> = listed
             .into_iter()
             .map(|model| Choice::new(model.id, model.label))
             .collect();
-        self.agent = Some(kind);
         self.model = model.clone();
         self.model_select.update(cx, |select, cx| {
             select.set_items(choices, window, cx);
@@ -63,8 +91,6 @@ impl StartDialog {
                 select.set_selected_value(model, window, cx);
             }
         });
-        self.clear_failure();
-        cx.notify();
     }
 
     pub(super) fn model_label(&self) -> Option<String> {
@@ -81,6 +107,13 @@ impl StartDialog {
     pub(super) fn set_model(&mut self, id: String, cx: &mut Context<Self>) {
         if self.model.as_ref() != Some(&id) {
             self.model = Some(id);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_permission_mode(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        if self.permission_mode != mode {
+            self.permission_mode = mode;
             cx.notify();
         }
     }

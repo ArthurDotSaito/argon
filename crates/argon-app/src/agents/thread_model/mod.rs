@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use argon_agents::{AgentSessionHandle, ModelInfo};
-use argon_core::PrKey;
+use argon_core::{PermissionMode, PrKey};
 use argon_store::SessionStatus;
 use chrono::{DateTime, TimeDelta, Utc};
 use gpui_kit::{App, Context, EventEmitter, SharedString, Subscription, Task};
@@ -55,6 +55,7 @@ pub struct ThreadModel {
     action_error: Option<SharedString>,
     busy_findings: HashSet<i64>,
     changing_model: bool,
+    changing_permission_mode: bool,
     services: Option<Services>,
     feed: Option<Task<()>>,
     notice: Option<SharedString>,
@@ -99,6 +100,7 @@ impl ThreadModel {
             action_error: None,
             busy_findings: HashSet::new(),
             changing_model: false,
+            changing_permission_mode: false,
             services: cx
                 .try_global::<AppServices>()
                 .map(|global| global.0.clone()),
@@ -144,6 +146,14 @@ impl ThreadModel {
 
     pub fn is_changing_model(&self) -> bool {
         self.changing_model
+    }
+
+    pub fn is_changing_permission_mode(&self) -> bool {
+        self.changing_permission_mode
+    }
+
+    pub fn permission_mode(&self) -> Option<PermissionMode> {
+        self.transcript.permission_mode()
     }
 
     pub fn is_live(&self) -> bool {

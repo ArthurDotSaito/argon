@@ -8,8 +8,8 @@ use argon_core::{AgentKind, Config};
 use futures::future::join_all;
 use tokio::process::Command;
 
-use super::spec::{agent_spec, is_command_overridden};
-use crate::defaults::{AGENT_DEFAULTS, agent_defaults};
+use super::spec::{effective_launch, is_command_overridden, spec_from_defaults};
+use crate::defaults::{AGENT_DEFAULTS, AgentDefaults, Transport, agent_defaults};
 use crate::process::spawn_in_job;
 use crate::util::{Resolved, lock, resolve_command};
 
@@ -64,10 +64,18 @@ struct Warmup {
 }
 
 fn warmup_for(kind: AgentKind, cfg: &Config) -> Option<Warmup> {
-    let defaults = agent_defaults(kind);
-    let extra = defaults.warmup_args?;
-    let spec = agent_spec(kind, cfg);
-    if is_command_overridden(kind, cfg) || spec.args != defaults.args {
+    warmup_from_defaults(agent_defaults(kind), cfg)
+}
+
+fn warmup_from_defaults(defaults: &AgentDefaults, cfg: &Config) -> Option<Warmup> {
+    let kind = defaults.kind;
+    let launch = effective_launch(defaults, cfg);
+    if launch.transport != Transport::Acp {
+        return None;
+    }
+    let extra = launch.warmup_args?;
+    let spec = spec_from_defaults(defaults, cfg);
+    if is_command_overridden(kind, launch, cfg) || spec.args != launch.args {
         return None;
     }
     let mut args = spec.args;
@@ -146,6 +154,7 @@ mod tests {
     use argon_core::AgentCfg;
 
     use super::*;
+    use crate::defaults::Launch;
 
     fn config_with(kind: AgentKind, agent: AgentCfg) -> Config {
         Config {
@@ -160,16 +169,119 @@ mod tests {
             (AgentKind::ClaudeCode, &["--cli", "--version"][..]),
             (AgentKind::Codex, &["--version"][..]),
         ] {
-            let warmup = warmup_for(kind, &Config::default()).unwrap();
-            let defaults = agent_defaults(kind);
-            assert_eq!(warmup.command, PathBuf::from(defaults.command), "{kind:?}");
-            assert_eq!(
-                &warmup.args[..defaults.args.len()],
-                defaults.args,
-                "{kind:?}"
+            let cfg = config_with(
+                kind,
+                AgentCfg {
+                    use_acp: true,
+                    ..AgentCfg::default()
+                },
             );
-            assert_eq!(&warmup.args[defaults.args.len()..], extra, "{kind:?}");
+            let warmup = warmup_for(kind, &cfg).unwrap();
+            let defaults = agent_defaults(kind);
+            let launch = defaults.acp_fallback.unwrap_or(defaults.launch);
+            assert_eq!(warmup.command, PathBuf::from(launch.command), "{kind:?}");
+            assert_eq!(&warmup.args[..launch.args.len()], launch.args, "{kind:?}");
+            assert_eq!(&warmup.args[launch.args.len()..], extra, "{kind:?}");
         }
+    }
+
+    const NATIVE_LAUNCH: Launch = Launch {
+        transport: Transport::ClaudeStream,
+        command: "claude",
+        args: &["--stream"],
+        warmup_args: Some(&["--native-warmup"]),
+    };
+    const ACP_LAUNCH: Launch = Launch {
+        transport: Transport::Acp,
+        command: "npx",
+        args: &["-y", "adapter"],
+        warmup_args: Some(&["--version"]),
+    };
+
+    fn defaults_with(launch: Launch, acp_fallback: Option<Launch>) -> AgentDefaults {
+        AgentDefaults {
+            launch,
+            acp_fallback,
+            ..*agent_defaults(AgentKind::ClaudeCode)
+        }
+    }
+
+    fn use_acp_config(use_acp: bool) -> Config {
+        config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp,
+                ..AgentCfg::default()
+            },
+        )
+    }
+
+    #[test]
+    fn non_acp_default_launch_is_not_warmed_up() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        assert_eq!(
+            warmup_from_defaults(&defaults, &use_acp_config(false)),
+            None
+        );
+        let without_fallback = defaults_with(NATIVE_LAUNCH, None);
+        assert_eq!(
+            warmup_from_defaults(&without_fallback, &use_acp_config(true)),
+            None
+        );
+    }
+
+    #[test]
+    fn acp_fallback_warms_up_with_its_own_args() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let warmup = warmup_from_defaults(&defaults, &use_acp_config(true)).unwrap();
+        assert_eq!(warmup.command, PathBuf::from("npx"));
+        assert_eq!(warmup.args, ["-y", "adapter", "--version"]);
+    }
+
+    #[test]
+    fn overridden_args_skip_the_fallback_warmup() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp: true,
+                args: vec!["--verbose".into()],
+                ..AgentCfg::default()
+            },
+        );
+        assert_eq!(warmup_from_defaults(&defaults, &cfg), None);
+    }
+
+    #[test]
+    fn override_written_for_another_transport_does_not_disable_the_acp_warmup() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp: true,
+                command: Some(PathBuf::from("claude")),
+                args: vec!["--stream".into()],
+                override_transport: Some("claude-stream".into()),
+                ..AgentCfg::default()
+            },
+        );
+        let warmup = warmup_from_defaults(&defaults, &cfg).unwrap();
+        assert_eq!(warmup.command, PathBuf::from("npx"));
+        assert_eq!(warmup.args, ["-y", "adapter", "--version"]);
+    }
+
+    #[test]
+    fn unmarked_override_skips_the_acp_fallback_warmup() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp: true,
+                command: Some(PathBuf::from("custom")),
+                ..AgentCfg::default()
+            },
+        );
+        assert_eq!(warmup_from_defaults(&defaults, &cfg), None);
     }
 
     #[test]
@@ -209,6 +321,7 @@ mod tests {
             AgentKind::ClaudeCode,
             AgentCfg {
                 env: BTreeMap::from([("CLAUDE_CODE_EXECUTABLE".into(), "claude.exe".into())]),
+                use_acp: true,
                 ..AgentCfg::default()
             },
         );

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use argon_agents::{AgentEvent, PermissionOption, SavedFinding, ToolStatus};
-use argon_core::{Finding, Severity, Side};
+use argon_core::{Finding, PermissionMode, Severity, Side};
 use argon_store::SessionStatus;
 
 use super::*;
@@ -294,4 +294,89 @@ fn long_tool_output_is_clipped_when_applied() {
     let output = tool.output.as_deref().unwrap();
     assert!(output.len() <= 16 * 1024 + 32);
     assert!(output.ends_with("… saída truncada"));
+}
+
+fn resolved(id: &str) -> AgentEvent {
+    AgentEvent::PermissionResolved {
+        request_id: id.into(),
+    }
+}
+
+#[test]
+fn permission_resolved_closes_only_the_matching_pending_card() {
+    let mut transcript = replay(&[
+        user("go"),
+        permission("perm-1"),
+        permission("perm-2"),
+        resolved("perm-1"),
+    ]);
+    let states: Vec<_> = transcript
+        .items()
+        .iter()
+        .filter_map(|item| match item {
+            Item::Permission(item) => Some(item.state.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(states, [PermissionState::Expired, PermissionState::Pending]);
+    assert_eq!(transcript.pending_count(), 1);
+    transcript.apply(&resolved("perm-2"), None);
+    assert_eq!(transcript.pending_count(), 0);
+    assert_eq!(transcript.status(), SessionStatus::Running);
+}
+
+#[test]
+fn permission_resolved_keeps_the_answer_given_by_the_user() {
+    let mut transcript = replay(&[user("go"), permission("perm-1")]);
+    transcript.resolve("perm-1", PermissionState::Answered("Recusar".into()));
+    transcript.apply(&resolved("perm-1"), None);
+    transcript.apply(&resolved("unknown"), None);
+    assert!(matches!(
+        &transcript.items()[1],
+        Item::Permission(item) if item.state == PermissionState::Answered("Recusar".into())
+    ));
+}
+
+#[test]
+fn replaying_stored_permission_events_leaves_no_pending_card() {
+    let transcript = replay(&[
+        user("go"),
+        permission("perm-1"),
+        AgentEvent::PermissionModeChanged(PermissionMode::AcceptEdits),
+        resolved("perm-1"),
+        ended("end_turn"),
+    ]);
+    assert_eq!(transcript.pending_count(), 0);
+    assert_eq!(transcript.items().len(), 2);
+    assert_eq!(
+        transcript.permission_mode(),
+        Some(PermissionMode::AcceptEdits)
+    );
+}
+
+#[test]
+fn permission_mode_changes_follow_the_latest_event() {
+    let mut transcript = Transcript::default();
+    assert_eq!(transcript.permission_mode(), None);
+    transcript.apply(
+        &AgentEvent::PermissionModeChanged(PermissionMode::FullAccess),
+        None,
+    );
+    assert_eq!(
+        transcript.permission_mode(),
+        Some(PermissionMode::FullAccess)
+    );
+    transcript.apply(
+        &AgentEvent::PermissionModeChanged(PermissionMode::Supervised),
+        None,
+    );
+    assert_eq!(
+        transcript.permission_mode(),
+        Some(PermissionMode::Supervised)
+    );
+    transcript.set_permission_mode(PermissionMode::AcceptEdits);
+    assert_eq!(
+        transcript.permission_mode(),
+        Some(PermissionMode::AcceptEdits)
+    );
 }

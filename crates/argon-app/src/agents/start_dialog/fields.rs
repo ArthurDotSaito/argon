@@ -1,3 +1,4 @@
+use argon_core::PermissionMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::select::Select;
@@ -62,6 +63,14 @@ impl StartDialog {
             .small()
             .placeholder(model_placeholder)
             .disabled(!has_models || self.is_launching());
+        let permissions = Select::new(&self.permission_select)
+            .small()
+            .disabled(self.selected_option().is_none() || self.is_launching());
+        let risk_note = (self.permission_mode == PermissionMode::FullAccess).then(|| {
+            note(labels::FULL_ACCESS_RISK, theme.warning)
+                .w_full()
+                .min_w_0()
+        });
         let template_placeholder = match &self.templates {
             Load::Loading => labels::LOADING_TEMPLATES,
             Load::Ready(_) | Load::Failed(_) => labels::NO_TEMPLATES,
@@ -97,28 +106,39 @@ impl StartDialog {
             Some(Err(error)) => notes.push(note(error.clone(), theme.danger)),
             None => {}
         }
-        h_flex()
+        let fields = h_flex()
             .w_full()
             .gap_4()
             .items_start()
             .child(
                 h_flex()
                     .flex_1()
+                    .min_w_0()
                     .gap_2()
                     .items_center()
                     .child(section_label(labels::MODEL, cx))
-                    .child(div().flex_1().child(model)),
+                    .child(div().flex_1().min_w_0().child(model)),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(section_label(labels::PERMISSIONS, cx))
+                    .child(div().flex_1().min_w_0().child(permissions)),
             )
             .child(
                 v_flex()
                     .flex_1()
+                    .min_w_0()
                     .gap_1()
                     .child(
                         h_flex()
                             .gap_2()
                             .items_center()
                             .child(section_label(labels::TEMPLATE, cx))
-                            .child(div().flex_1().child(template))
+                            .child(div().flex_1().min_w_0().child(template))
                             .child(edit),
                     )
                     .child(
@@ -127,7 +147,8 @@ impl StartDialog {
                             .gap_0p5()
                             .children(notes),
                     ),
-            )
+            );
+        v_flex().w_full().gap_1().child(fields).children(risk_note)
     }
 
     pub(super) fn options(&self, cx: &mut Context<Self>) -> Div {

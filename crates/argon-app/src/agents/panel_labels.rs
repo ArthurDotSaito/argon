@@ -37,6 +37,10 @@ pub const REFERENCE: &str = "Referenciar a linha selecionada no diff";
 pub const NO_LINE_SELECTED: &str = "Selecione uma linha no diff do PR para referenciar";
 pub const DRAFTS_ONLY: &str = "só rascunhos";
 pub const BUSY: &str = "Aguarde o turno atual terminar";
+pub const PERMISSION_MODE_TOOLTIP: &str = "Modo de permissão desta sessão";
+pub const PERMISSION_MODE_TURN_HINT: &str = "Ampliar permissões pode valer só a partir da próxima pergunta. No Codex, sair do Acesso total interrompe o turno.";
+pub const FULL_ACCESS_TITLE: &str = "Ativar acesso total?";
+pub const FULL_ACCESS_CONFIRM: &str = "Ativar acesso total";
 pub use super::labels::SERVICES_UNAVAILABLE;
 pub const UNKNOWN_PR: &str = "PR fora da inbox";
 pub const YOU: &str = "você";
@@ -94,7 +98,7 @@ pub fn severity_short(severity: Severity) -> &'static str {
 pub fn permission_option(kind: &str, fallback: &str) -> String {
     match kind {
         "allow_once" => "Permitir uma vez".into(),
-        "allow_always" => "Permitir sempre".into(),
+        "allow_always" => "Permitir nesta sessão".into(),
         "reject_once" => "Recusar".into(),
         "reject_always" => "Recusar sempre".into(),
         _ => fallback.into(),
@@ -178,6 +182,14 @@ pub fn reference(path: &str, line: u32) -> String {
 
 pub fn worktree_invalid(error: &str) -> String {
     format!("worktree inválido: {error}")
+}
+
+pub fn unknown_transport(transport: &str) -> String {
+    format!("transporte desconhecido nesta sessão: {transport}")
+}
+
+pub fn transport_unavailable(transport: &str) -> String {
+    format!("este agente não roda mais pelo transporte `{transport}`")
 }
 
 pub fn resume_failed(error: &str) -> String {

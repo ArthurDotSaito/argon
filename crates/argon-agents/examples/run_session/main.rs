@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 
 use argon_agents::{
     AgentEvent, AgentSessionHandle, AgentSpec, SessionContext, SessionOptions, SessionWriter,
-    Support, WorktreeManager, agent_spec, new_session_id, start_session_with, support_for,
+    Support, Transport, WorktreeManager, agent_spec, agent_spec_for, list_models, lists_models,
+    new_session_id, start_session_with, support_for,
 };
-use argon_core::{AgentKind, Config, Paths, PrKey};
+use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey};
 use argon_github::{GithubClient, discover_accounts, token_for};
 use argon_store::Store;
 use futures::StreamExt;
@@ -30,29 +31,57 @@ struct Args {
     model: Option<String>,
     cancel_after: Option<Duration>,
     startup_timeout: Option<Duration>,
+    transport: Option<Transport>,
+    prompt: Option<String>,
+    mode: Option<PermissionMode>,
     command: Option<Vec<String>>,
 }
 
 fn usage() -> String {
     "usage: run_session <claude|codex|opencode|command-code> <owner/repo#n> [model] \
-     [--cancel-after secs] [--startup-timeout secs] [--command program args...]"
+     [--cancel-after secs] [--startup-timeout secs] \
+     [--transport acp|claude-stream|codex-app-server|opencode-serve] \
+     [--prompt text] [--mode supervised|accept-edits|full-access] [--command program args...]"
         .to_owned()
+}
+
+fn parse_mode(value: Option<String>) -> Result<PermissionMode, BoxError> {
+    match value.as_deref() {
+        Some("supervised") => Ok(PermissionMode::Supervised),
+        Some("accept-edits") => Ok(PermissionMode::AcceptEdits),
+        Some("full-access") => Ok(PermissionMode::FullAccess),
+        _ => Err(usage().into()),
+    }
 }
 
 fn seconds(value: Option<String>) -> Result<Duration, BoxError> {
     Ok(Duration::from_secs(value.ok_or_else(usage)?.parse()?))
 }
 
+fn parse_transport(value: Option<String>) -> Result<Transport, BoxError> {
+    value
+        .as_deref()
+        .and_then(Transport::parse)
+        .filter(|transport| *transport != Transport::Headless)
+        .ok_or_else(|| usage().into())
+}
+
 fn parse_args() -> Result<Args, BoxError> {
     let mut positional = Vec::new();
     let mut cancel_after = None;
     let mut startup_timeout = None;
+    let mut transport = None;
+    let mut prompt = None;
+    let mut mode = None;
     let mut command = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cancel-after" => cancel_after = Some(seconds(args.next())?),
             "--startup-timeout" => startup_timeout = Some(seconds(args.next())?),
+            "--transport" => transport = Some(parse_transport(args.next())?),
+            "--prompt" => prompt = Some(args.next().ok_or_else(usage)?),
+            "--mode" => mode = Some(parse_mode(args.next())?),
             "--command" => command = Some(args.by_ref().collect()),
             _ => positional.push(arg),
         }
@@ -73,6 +102,9 @@ fn parse_args() -> Result<Args, BoxError> {
         model: positional.get(2).cloned(),
         cancel_after,
         startup_timeout,
+        transport,
+        prompt,
+        mode,
         command,
     })
 }
@@ -205,6 +237,35 @@ fn summarize(paths: &Paths, id: &str, transactions: u64) -> Result<(), BoxError>
     Ok(())
 }
 
+fn native_command(transport: Transport) -> Option<&'static str> {
+    match transport {
+        Transport::ClaudeStream => Some("claude"),
+        Transport::CodexAppServer => Some("codex"),
+        Transport::OpencodeServe => Some("opencode"),
+        Transport::Acp | Transport::Headless => None,
+    }
+}
+
+fn with_transport(mut spec: AgentSpec, args: &Args, config: &Config) -> AgentSpec {
+    let Some(transport) = args
+        .transport
+        .filter(|transport| *transport != spec.transport)
+    else {
+        return spec;
+    };
+    if let Some(declared) = agent_spec_for(args.kind, config, transport) {
+        return declared;
+    }
+    spec.transport = transport;
+    if args.command.is_none()
+        && let Some(program) = native_command(transport)
+    {
+        spec.command = PathBuf::from(program);
+        spec.args = Vec::new();
+    }
+    spec
+}
+
 fn options(args: &Args) -> SessionOptions {
     let mut options = SessionOptions::default();
     if let Some(timeout) = args.startup_timeout {
@@ -233,6 +294,7 @@ async fn startup_probe(
         allowed_files: Vec::new(),
         cwd,
         model: String::new(),
+        permission_mode: PermissionMode::Supervised,
     };
     let started = Instant::now();
     let result = start_session_with(&spec, ctx, writer, options(args)).await;
@@ -244,6 +306,23 @@ async fn startup_probe(
     Ok(())
 }
 
+async fn first_listed_model(spec: &AgentSpec) -> Option<String> {
+    if !lists_models(spec.kind) {
+        return None;
+    }
+    match list_models(spec).await? {
+        Ok(models) => {
+            let first = models.into_iter().next()?;
+            println!("model: {} (first listed)", first.id);
+            Some(first.id)
+        }
+        Err(error) => {
+            println!("model listing failed: {error}");
+            None
+        }
+    }
+}
+
 async fn run() -> Result<(), BoxError> {
     let args = parse_args()?;
     if let Support::NotYet { reason } = support_for(args.kind) {
@@ -252,7 +331,7 @@ async fn run() -> Result<(), BoxError> {
     let paths = Paths::resolve();
     std::fs::create_dir_all(&paths.data_dir)?;
     let config = Config::load(&paths.config_file()).unwrap_or_default();
-    let spec = agent_spec(args.kind, &config);
+    let spec = with_transport(agent_spec(args.kind, &config), &args, &config);
     if let Some(command) = &args.command {
         return startup_probe(&args, spec, &paths, command).await;
     }
@@ -272,6 +351,12 @@ async fn run() -> Result<(), BoxError> {
         println!("prompt warning: {warning}");
     }
 
+    let model = match args.model.clone() {
+        Some(model) => model,
+        None => first_listed_model(&spec)
+            .await
+            .unwrap_or_else(|| spec.default_model.clone()),
+    };
     let id = new_session_id()?;
     let manager = WorktreeManager::new(&paths);
     let worktree: PathBuf = manager.prepare(HOST, &args.repo, args.number, &id).await?;
@@ -284,17 +369,22 @@ async fn run() -> Result<(), BoxError> {
         nonce: rendered.nonce.clone(),
         allowed_files: files.iter().map(|file| file.path.clone()).collect(),
         cwd: worktree.clone(),
-        model: args
-            .model
-            .clone()
-            .unwrap_or_else(|| spec.default_model.clone()),
+        model,
+        permission_mode: args.mode.unwrap_or_else(|| {
+            config
+                .agents
+                .get(&args.kind)
+                .map(|agent| agent.permission_mode())
+                .unwrap_or_default()
+        }),
     };
+    let prompt = args.prompt.clone().unwrap_or(rendered.text);
 
     let outcome = match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {
         Ok((session, handle)) => {
-            println!("session: {} (acp {})", session.id, session.acp_session_id);
+            println!("session: {} (acp {})", session.id, session.agent_session_id);
             let before = writer.transactions();
-            let driven = drive(&handle, rendered.text, args.cancel_after).await;
+            let driven = drive(&handle, prompt, args.cancel_after).await;
             writer.flush().await;
             let transactions = writer.transactions() - before;
             handle.shutdown().await;

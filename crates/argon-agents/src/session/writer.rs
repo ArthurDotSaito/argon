@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use argon_core::Finding;
+use argon_core::{Finding, PermissionMode};
 use argon_store::{NewAgentSession, SessionStatus, SessionWrite, Store, StoredFinding};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
@@ -32,6 +32,14 @@ pub(crate) enum Op {
     Model {
         session: String,
         model: String,
+    },
+    PermissionMode {
+        session: String,
+        mode: PermissionMode,
+    },
+    AgentSessionId {
+        session: String,
+        id: String,
     },
     SaveFindings {
         session: String,
@@ -173,6 +181,30 @@ impl Worker {
                             .collect()
                     });
                 let _ = reply.send(text(events));
+            }
+            Op::PermissionMode { session, mode } => {
+                self.count();
+                if let Err(error) = self
+                    .store
+                    .set_session_permission_mode(&session, mode.as_str())
+                {
+                    tracing::error!(%error, "failed to persist permission mode");
+                    if let Some(errors) = self.errors.get(&session) {
+                        let _ = errors.send(format!(
+                            "falha ao gravar o modo de permissão da sessão: {error}"
+                        ));
+                    }
+                }
+            }
+            Op::AgentSessionId { session, id } => {
+                self.count();
+                if let Err(error) = self.store.set_session_acp_id(&session, &id) {
+                    tracing::error!(%error, "failed to persist agent session id");
+                    if let Some(errors) = self.errors.get(&session) {
+                        let _ = errors
+                            .send(format!("falha ao gravar o id da sessão do agente: {error}"));
+                    }
+                }
             }
             Op::LastSeq { session, reply } => {
                 let _ = reply.send(text(self.store.last_event_seq(&session)).map(|seq| seq as u64));

@@ -1,3 +1,5 @@
+pub(super) use crate::agents::permission_mode_hint;
+
 pub const ACCOUNTS: &str = "Contas";
 pub const ORGS: &str = "Orgs rastreadas";
 pub const AGENTS: &str = "Agentes";
@@ -34,8 +36,17 @@ pub const ARGS: &str = "Args";
 pub const ENV: &str = "Env";
 pub const DEFAULT_MODEL: &str = "Modelo padrão";
 pub const AGENT_DEFAULT_MODEL: &str = "Padrão do agente";
-pub const FULL_ACCESS: &str = "Acesso total";
-pub const FULL_ACCESS_NOTE: &str = "Aprova automaticamente todo pedido de permissão do agente — comandos, edições e rede — sem mostrar o card. O agente lê código de PRs de terceiros: ligue só se aceitar esse risco. Vale a partir da próxima sessão.";
+pub const PERMISSION_MODE: &str = "Modo de permissão";
+pub const USE_ACP: &str = "Usar adapter ACP (legado)";
+pub const USE_ACP_NOTE: &str =
+    "Roda este agente pelo adapter ACP em vez do driver nativo. Vale a partir da próxima sessão.";
+pub const OVERRIDE_SAVED_FOR_ACP: &str = "Este comando foi salvo para o modo ACP e não vale para o driver nativo. Edite para usar no modo atual.";
+pub const OVERRIDE_SAVED_FOR_NATIVE: &str = "Este comando foi salvo para o driver nativo e não vale para o modo ACP. Edite para usar no modo atual.";
+pub const PLAN_AND_USAGE: &str = "Plano e uso";
+pub const USAGE_NEEDS_AGENT: &str = "Uso disponível depois que o agente estiver instalado e logado";
+pub const REFRESH_USAGE: &str = "Atualizar";
+pub const READ_OPENCODE_LOGIN: &str = "Ler meu login do OpenCode para mostrar o uso do OpenCode Go";
+pub const READ_OPENCODE_LOGIN_NOTE: &str = "O Argon lê o token salvo pelo OpenCode neste computador e consulta opencode.ai. O token não é salvo nem exibido.";
 pub const ADD_ENV: &str = "Adicionar variável";
 pub const ENV_KEY: &str = "CHAVE";
 pub const ENV_VALUE: &str = "valor";

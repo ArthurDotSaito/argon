@@ -1,22 +1,35 @@
 use argon_agents::Support;
+use argon_agents::defaults::agent_defaults;
+use std::time::SystemTime;
+
+use argon_agents::AccountUsage;
+use argon_core::PermissionMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    Context, Div, Hsla, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window,
-    div,
+    App, Context, Div, Hsla, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::fields::env_summary;
 use super::form::{AgentForm, Status};
-use crate::agents::CardState;
+use crate::agents::{
+    AgentSessions, CardState, FULL_ACCESS_RISK, Tone, UsageDetail, UsageLine, UsageState,
+    WindowRow, detail, needs_consent, open_usage_url, tone_color,
+};
 use crate::settings::labels;
 use crate::settings::ui::{card, field, indented, mono, note};
+
+const BAR_WIDTH: f32 = 160.;
+const LABEL_COLUMN: f32 = 72.;
+const PERCENT_COLUMN: f32 = 36.;
 
 impl AgentForm {
     fn status_line(&self, cx: &Context<Self>) -> (SharedString, Hsla) {
@@ -104,18 +117,168 @@ impl AgentForm {
         v_flex().gap_1().children(rows).child(h_flex().child(add))
     }
 
-    fn full_access_control(&self, cx: &mut Context<Self>) -> Div {
-        let toggle = Switch::new(("settings-agent-full-access", self.kind as usize))
-            .checked(self.full_access)
+    fn permission_mode_control(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let risk = (self.permission_mode == PermissionMode::FullAccess)
+            .then(|| note(FULL_ACCESS_RISK, theme.warning));
+        v_flex()
+            .gap_1()
+            .child(
+                div()
+                    .w_64()
+                    .child(Select::new(&self.permission_select).small()),
+            )
+            .child(note(
+                labels::permission_mode_hint(self.permission_mode),
+                theme.muted_foreground,
+            ))
+            .children(risk)
+    }
+
+    fn use_acp_control(&self, cx: &mut Context<Self>) -> Div {
+        let toggle = Switch::new(("settings-agent-use-acp", self.kind as usize))
+            .checked(self.use_acp)
             .small()
             .on_click(cx.listener(|this, on: &bool, _, cx| {
-                this.full_access = *on;
+                this.use_acp = *on;
                 cx.notify();
             }));
         v_flex()
             .gap_1()
             .child(h_flex().child(toggle))
-            .child(note(labels::FULL_ACCESS_NOTE, cx.theme().muted_foreground))
+            .child(note(labels::USE_ACP_NOTE, cx.theme().muted_foreground))
+    }
+
+    fn usage_rows(&self, rows: Vec<WindowRow>, cx: &App) -> Div {
+        let theme = cx.theme();
+        let kind = self.kind as usize;
+        let rows: Vec<Div> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(ix, row)| {
+                let color = tone_color(row.tone, cx);
+                let bar = Progress::new(SharedString::from(format!("usage-bar-{kind}-{ix}")))
+                    .value(row.fraction * 100.)
+                    .xsmall()
+                    .w(px(BAR_WIDTH))
+                    .when(row.tone != Tone::Muted, |bar| bar.color(color));
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(LABEL_COLUMN))
+                            .text_xs()
+                            .text_color(theme.foreground)
+                            .child(row.label),
+                    )
+                    .child(bar)
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(PERCENT_COLUMN))
+                            .text_xs()
+                            .text_color(color)
+                            .child(format!("{}%", row.percent)),
+                    )
+                    .children(
+                        row.renews
+                            .map(|renews| note(renews, theme.muted_foreground)),
+                    )
+            })
+            .collect();
+        v_flex().gap_1().children(rows)
+    }
+
+    fn usage_status(&self, line: UsageLine, cx: &App) -> Div {
+        match line.link {
+            Some(url) => h_flex().child(
+                Button::new(("settings-agent-usage-link", self.kind as usize))
+                    .label(line.text)
+                    .xsmall()
+                    .link()
+                    .on_click(move |_, _, _| open_usage_url(&url)),
+            ),
+            None => div().child(note(line.text, tone_color(line.tone, cx))),
+        }
+    }
+
+    fn plan_consent_control(&self, cx: &mut Context<Self>) -> Div {
+        let toggle = Switch::new(("settings-agent-read-plan-usage", self.kind as usize))
+            .checked(self.read_plan_usage)
+            .small()
+            .on_click(cx.listener(|this, on: &bool, _, cx| this.set_plan_usage_consent(*on, cx)));
+        v_flex()
+            .gap_1()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(toggle)
+                    .child(div().text_sm().child(labels::READ_OPENCODE_LOGIN)),
+            )
+            .child(note(
+                labels::READ_OPENCODE_LOGIN_NOTE,
+                cx.theme().muted_foreground,
+            ))
+    }
+
+    fn usage_block(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let consent = needs_consent(self.kind).then(|| self.plan_consent_control(cx));
+        let details = match &self.status {
+            Status::Done(CardState::Ready { .. }) => self.usage_details(cx),
+            Status::Detecting => None,
+            Status::Done(_) | Status::Failed(_) => {
+                Some(note(labels::USAGE_NEEDS_AGENT, cx.theme().muted_foreground))
+            }
+        };
+        if details.is_none() && consent.is_none() {
+            return None;
+        }
+        Some(v_flex().gap_2().children(details).children(consent))
+    }
+
+    fn usage_details(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let sessions = AgentSessions::global(cx)?;
+        let (shown, refreshing, refreshable) = {
+            let sessions = sessions.read(cx);
+            let state = sessions.usage_state(self.kind, self.read_plan_usage);
+            let refreshable = matches!(
+                state,
+                UsageState::Loading
+                    | UsageState::Shown(AccountUsage::Ok { .. } | AccountUsage::Unavailable(_))
+            );
+            (
+                detail(state, SystemTime::now()),
+                sessions.usage_refreshing(self.kind),
+                refreshable,
+            )
+        };
+        let body = match shown? {
+            UsageDetail::Windows { plan, rows } => v_flex()
+                .gap_1()
+                .child(div().text_sm().font_semibold().child(plan))
+                .child(self.usage_rows(rows, cx)),
+            UsageDetail::Line(line) => self.usage_status(line, cx),
+        };
+        let refresh = refreshable.then(|| {
+            Button::new(("settings-agent-usage-refresh", self.kind as usize))
+                .icon(Icon::new(IconName::RefreshCw))
+                .label(labels::REFRESH_USAGE)
+                .xsmall()
+                .ghost()
+                .loading(refreshing)
+                .disabled(refreshing)
+                .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
+        });
+        Some(
+            h_flex()
+                .gap_2()
+                .items_start()
+                .child(div().flex_1().min_w_0().child(body))
+                .children(refresh),
+        )
     }
 
     fn actions(&self, cx: &mut Context<Self>) -> Div {
@@ -173,6 +336,13 @@ impl Render for AgentForm {
                 .children(env)
         });
         let model = Select::new(&self.model_select).small();
+        let usage = self.usage_block(cx);
+        let override_warning = self.override_warning(cx);
+        let warning_color = cx.theme().warning;
+        let use_acp = agent_defaults(self.kind)
+            .acp_fallback
+            .is_some()
+            .then(|| field(labels::USE_ACP, self.use_acp_control(cx), cx));
         card(cx)
             .child(header)
             .child(field(
@@ -182,9 +352,16 @@ impl Render for AgentForm {
             ))
             .children(detected.map(indented))
             .child(field(labels::ARGS, Input::new(&self.args).small(), cx))
+            .children(override_warning.map(|text| indented(note(text, warning_color))))
             .child(field(labels::ENV, self.env_rows(cx), cx))
             .child(field(labels::DEFAULT_MODEL, model, cx))
-            .child(field(labels::FULL_ACCESS, self.full_access_control(cx), cx))
+            .child(field(
+                labels::PERMISSION_MODE,
+                self.permission_mode_control(cx),
+                cx,
+            ))
+            .children(use_acp)
+            .children(usage.map(|usage| field(labels::PLAN_AND_USAGE, usage, cx)))
             .child(self.actions(cx))
     }
 }

@@ -176,12 +176,20 @@ ALTER TABLE agent_sessions ADD COLUMN failure_reason TEXT;
 ALTER TABLE draft_comments ADD COLUMN finding_id INTEGER;
 ";
 
+const SESSION_TRANSPORT: &str =
+    "ALTER TABLE agent_sessions ADD COLUMN transport TEXT NOT NULL DEFAULT 'acp';";
+
+const SESSION_PERMISSION_MODE: &str =
+    "ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'supervised';";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
     M::up(DRAFT_HEAD_OID),
     M::up(AGENT_SESSION_CONTEXT),
     M::up(SESSION_LIFECYCLE),
+    M::up(SESSION_TRANSPORT),
+    M::up(SESSION_PERMISSION_MODE),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -371,5 +379,45 @@ mod tests {
         assert_eq!(session.failure_reason, None);
         let drafts = store.drafts(&PrKey::new(DEFAULT_HOST, "PR_1")).unwrap();
         assert_eq!(drafts[0].body, "keep");
+    }
+
+    #[test]
+    fn migration_six_defaults_existing_sessions_to_acp() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 5).unwrap();
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert_eq!(session.transport, "acp");
+        assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
+    }
+
+    #[test]
+    fn migration_seven_defaults_existing_sessions_to_supervised() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 6).unwrap();
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert_eq!(session.permission_mode, "supervised");
+        assert_eq!(session.transport, "acp");
     }
 }

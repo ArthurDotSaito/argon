@@ -10,8 +10,10 @@ use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subs
 use super::card_status::CardStatus;
 use super::detection::DetectionCache;
 use super::launches::PendingLaunch;
+use super::model_listing::ModelListings;
 use super::sink::SessionStore;
 use super::thread_model::{SessionInfo, ThreadEvent, ThreadModel};
+use super::usage_cache::UsageCache;
 
 pub struct ActiveSession {
     pub session_id: String,
@@ -62,6 +64,8 @@ pub struct AgentSessions {
     sessions: Vec<ActiveSession>,
     last_agent: Option<AgentKind>,
     detection: DetectionCache,
+    listings: ModelListings,
+    usage: UsageCache,
     paths: Paths,
     store: SessionStore,
     worktrees: WorktreeManager,
@@ -100,6 +104,8 @@ impl AgentSessions {
             sessions: Vec::new(),
             last_agent: None,
             detection: DetectionCache::default(),
+            listings: ModelListings::load(&paths),
+            usage: UsageCache::default(),
             store: SessionStore::new(paths.db_file()),
             worktrees: WorktreeManager::new(&paths),
             launches: HashMap::new(),
@@ -162,6 +168,18 @@ impl AgentSessions {
 
     pub fn detection_mut(&mut self) -> &mut DetectionCache {
         &mut self.detection
+    }
+
+    pub(super) fn listings_mut(&mut self) -> &mut ModelListings {
+        &mut self.listings
+    }
+
+    pub(super) fn usage(&self) -> &UsageCache {
+        &self.usage
+    }
+
+    pub(super) fn usage_mut(&mut self) -> &mut UsageCache {
+        &mut self.usage
     }
 
     pub(super) fn launches(&self) -> &HashMap<String, PendingLaunch> {

@@ -38,6 +38,34 @@ pub enum AgentKind {
     Antigravity,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionMode {
+    #[default]
+    Supervised,
+    AcceptEdits,
+    FullAccess,
+}
+
+impl PermissionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Supervised => "supervised",
+            Self::AcceptEdits => "accept-edits",
+            Self::FullAccess => "full-access",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<PermissionMode> {
+        match value {
+            "supervised" => Some(Self::Supervised),
+            "accept-edits" => Some(Self::AcceptEdits),
+            "full-access" => Some(Self::FullAccess),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeChoice {
@@ -83,9 +111,41 @@ pub struct OrgsCfg {
 pub struct AgentCfg {
     pub command: Option<PathBuf>,
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_transport: Option<String>,
     pub env: BTreeMap<String, String>,
     pub default_model: Option<String>,
+    #[serde(
+        deserialize_with = "lenient_enum",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permission_mode: Option<PermissionMode>,
+    #[serde(skip_serializing_if = "is_false")]
     pub full_access: bool,
+    #[serde(default)]
+    pub use_acp: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_plan_usage: bool,
+}
+
+impl AgentCfg {
+    pub fn permission_mode(&self) -> PermissionMode {
+        match self.permission_mode {
+            Some(mode) => mode,
+            None if self.full_access => PermissionMode::FullAccess,
+            None => PermissionMode::Supervised,
+        }
+    }
+
+    pub fn with_permission_mode(mut self, mode: PermissionMode) -> AgentCfg {
+        self.permission_mode = Some(mode);
+        self.full_access = false;
+        self
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,9 +307,13 @@ mod tests {
             AgentCfg {
                 command: Some(PathBuf::from("claude-agent-acp")),
                 args: vec!["--verbose".into()],
+                override_transport: Some("acp".into()),
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
-                full_access: true,
+                permission_mode: Some(PermissionMode::AcceptEdits),
+                full_access: false,
+                use_acp: true,
+                read_plan_usage: false,
             },
         );
         agents.insert(AgentKind::Antigravity, AgentCfg::default());
@@ -361,6 +425,117 @@ mod tests {
             parsed.agents[&AgentKind::Codex].default_model.as_deref(),
             Some("m")
         );
+    }
+
+    #[test]
+    fn agent_without_use_acp_defaults_to_false() {
+        let text = "[agents.claude-code]\nfull_access = true\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        let agent = &parsed.agents[&AgentKind::ClaudeCode];
+        assert!(agent.full_access);
+        assert!(!agent.use_acp);
+    }
+
+    #[test]
+    fn override_transport_is_absent_by_default_and_only_written_when_set() {
+        assert_eq!(agent("").override_transport, None);
+        let marked = agent("override_transport = \"claude-stream\"\n");
+        assert_eq!(marked.override_transport.as_deref(), Some("claude-stream"));
+        let text = toml::to_string_pretty(&AgentCfg::default()).unwrap();
+        assert!(!text.contains("override_transport"), "{text}");
+        let text = toml::to_string_pretty(&marked).unwrap();
+        assert!(
+            text.contains("override_transport = \"claude-stream\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn plan_usage_consent_is_off_by_default_and_only_written_when_on() {
+        assert!(!agent("").read_plan_usage);
+        assert!(agent("read_plan_usage = true\n").read_plan_usage);
+        let text = toml::to_string_pretty(&AgentCfg::default()).unwrap();
+        assert!(!text.contains("read_plan_usage"), "{text}");
+        let granted = AgentCfg {
+            read_plan_usage: true,
+            ..AgentCfg::default()
+        };
+        let text = toml::to_string_pretty(&granted).unwrap();
+        assert!(text.contains("read_plan_usage = true"), "{text}");
+    }
+
+    fn agent(text: &str) -> AgentCfg {
+        let parsed: Config = toml::from_str(&format!("[agents.codex]\n{text}")).unwrap();
+        parsed.agents[&AgentKind::Codex].clone()
+    }
+
+    #[test]
+    fn legacy_full_access_maps_to_a_permission_mode() {
+        let legacy_on = agent("full_access = true\n");
+        assert_eq!(legacy_on.permission_mode(), PermissionMode::FullAccess);
+        let legacy_off = agent("full_access = false\n");
+        assert_eq!(legacy_off.permission_mode(), PermissionMode::Supervised);
+        assert_eq!(agent("").permission_mode(), PermissionMode::Supervised);
+    }
+
+    #[test]
+    fn explicit_permission_mode_wins_over_legacy_full_access() {
+        let cfg = agent("full_access = true\npermission_mode = \"accept-edits\"\n");
+        assert_eq!(cfg.permission_mode(), PermissionMode::AcceptEdits);
+        let cfg = agent("full_access = false\npermission_mode = \"full-access\"\n");
+        assert_eq!(cfg.permission_mode(), PermissionMode::FullAccess);
+    }
+
+    #[test]
+    fn with_permission_mode_replaces_the_legacy_flag() {
+        let legacy = agent("full_access = true\n");
+        let migrated = legacy
+            .clone()
+            .with_permission_mode(legacy.permission_mode());
+        assert_eq!(migrated.permission_mode, Some(PermissionMode::FullAccess));
+        assert!(!migrated.full_access);
+        let text = toml::to_string_pretty(&migrated).unwrap();
+        assert!(text.contains("permission_mode = \"full-access\""), "{text}");
+        assert!(!text.contains("full_access"), "{text}");
+    }
+
+    #[test]
+    fn unknown_permission_mode_falls_back_to_legacy_rule() {
+        let cfg = agent("permission_mode = \"yolo\"\nfull_access = true\n");
+        assert_eq!(cfg.permission_mode, None);
+        assert_eq!(cfg.permission_mode(), PermissionMode::FullAccess);
+    }
+
+    #[test]
+    fn serialization_writes_permission_mode_and_not_full_access() {
+        let cfg = AgentCfg {
+            permission_mode: Some(PermissionMode::AcceptEdits),
+            ..AgentCfg::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert!(
+            text.contains("permission_mode = \"accept-edits\""),
+            "{text}"
+        );
+        assert!(!text.contains("full_access"), "{text}");
+        let text = toml::to_string_pretty(&AgentCfg::default()).unwrap();
+        assert!(!text.contains("full_access"), "{text}");
+        assert!(!text.contains("permission_mode"), "{text}");
+    }
+
+    #[test]
+    fn permission_mode_text_round_trips() {
+        for mode in [
+            PermissionMode::Supervised,
+            PermissionMode::AcceptEdits,
+            PermissionMode::FullAccess,
+        ] {
+            assert_eq!(PermissionMode::parse(mode.as_str()), Some(mode));
+            let value = toml::Value::try_from(mode).unwrap();
+            assert_eq!(value.as_str(), Some(mode.as_str()));
+        }
+        assert_eq!(PermissionMode::parse("bogus"), None);
+        assert_eq!(PermissionMode::default(), PermissionMode::Supervised);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use argon_agents::{AgentSessionHandle, AgentSpec, SessionContext, WorktreeManager, start_session};
-use argon_core::{PrKey, RenderedPrompt};
+use argon_core::{PermissionMode, PrKey, RenderedPrompt};
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
@@ -31,6 +31,7 @@ pub struct LaunchRequest {
     pub prompt: RenderedPrompt,
     pub allowed_files: Vec<String>,
     pub model: String,
+    pub permission_mode: PermissionMode,
     pub store: SessionStore,
     pub worktrees: WorktreeManager,
 }
@@ -155,6 +156,7 @@ async fn start(request: &LaunchRequest, cwd: PathBuf) -> Result<AgentSessionHand
         allowed_files: request.allowed_files.clone(),
         cwd,
         model: request.model.clone(),
+        permission_mode: request.permission_mode,
     };
     start_session(&request.spec, ctx, writer)
         .await

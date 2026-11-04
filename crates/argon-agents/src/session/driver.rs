@@ -3,17 +3,19 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use argon_core::PermissionMode;
 use argon_store::SessionStatus;
-use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 
-use super::events::{AgentEvent, PendingPermission, SavedFinding, map_update};
+use super::events::{AgentEvent, PendingPermission, SavedFinding};
 use super::record::Recorder;
 use super::stderr::StderrTail;
 use super::turn::{TurnBuffer, TurnOutcome, finish_turn};
 use super::writer::{Op, SessionWriter};
 use crate::registry::ModelInfo;
 use crate::util::lock;
+
+pub(super) const ENDED_BEFORE_ACTIVATION: &str = "o agente encerrou antes de abrir a sessão";
 
 #[path = "driver_permissions.rs"]
 mod permission_flow;
@@ -28,12 +30,14 @@ pub struct Snapshot {
     pub model: String,
     pub models: Vec<ModelInfo>,
     pub pending_permissions: Vec<PendingPermission>,
+    pub permission_mode: PermissionMode,
     pub last_seq: u64,
     pub open_record: Option<(u64, AgentEvent)>,
 }
 
 struct State {
     active: bool,
+    early_failure: Option<String>,
     in_turn: bool,
     status: SessionStatus,
     model: String,
@@ -43,6 +47,7 @@ struct State {
     pending: Vec<Pending>,
     tool_kinds: HashMap<String, String>,
     next_permission: u64,
+    permission_mode: PermissionMode,
 }
 
 pub(super) struct SharedConfig {
@@ -52,10 +57,9 @@ pub(super) struct SharedConfig {
     pub allowed_files: Vec<String>,
     pub writer: SessionWriter,
     pub stderr: Arc<StderrTail>,
-    pub full_access: bool,
 }
 
-pub(super) struct Shared {
+pub(crate) struct Shared {
     config: SharedConfig,
     events: broadcast::Sender<(u64, AgentEvent)>,
     busy: AtomicBool,
@@ -64,7 +68,11 @@ pub(super) struct Shared {
 }
 
 impl Shared {
-    pub fn new(config: SharedConfig, events: broadcast::Sender<(u64, AgentEvent)>) -> Shared {
+    pub(super) fn new(
+        config: SharedConfig,
+        permission_mode: PermissionMode,
+        events: broadcast::Sender<(u64, AgentEvent)>,
+    ) -> Shared {
         Shared {
             config,
             events,
@@ -72,6 +80,7 @@ impl Shared {
             awaiting: watch::channel(false).0,
             state: Mutex::new(State {
                 active: false,
+                early_failure: None,
                 in_turn: false,
                 status: SessionStatus::Running,
                 model: String::new(),
@@ -81,8 +90,30 @@ impl Shared {
                 pending: Vec::new(),
                 tool_kinds: HashMap::new(),
                 next_permission: 0,
+                permission_mode,
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        id: &str,
+        cwd: PathBuf,
+        writer: SessionWriter,
+        stderr: Arc<StderrTail>,
+    ) -> Shared {
+        Shared::new(
+            SharedConfig {
+                id: id.to_owned(),
+                cwd,
+                nonce: String::new(),
+                allowed_files: Vec::new(),
+                writer,
+                stderr,
+            },
+            PermissionMode::Supervised,
+            broadcast::channel(64).0,
+        )
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -190,6 +221,15 @@ impl Shared {
             session: self.config.id.clone(),
             status,
         });
+        if let Some(message) = state.early_failure.take() {
+            self.fail_locked(&mut state, message);
+            drop(state);
+            self.release();
+        }
+    }
+
+    pub(super) fn start_in_mode(&self, mode: PermissionMode) {
+        self.lock().permission_mode = mode;
     }
 
     pub fn emit(&self, event: AgentEvent) {
@@ -209,6 +249,7 @@ impl Shared {
             model: state.model.clone(),
             models: state.models.clone(),
             pending_permissions: state.pending.iter().map(|p| p.permission.clone()).collect(),
+            permission_mode: state.permission_mode,
             last_seq: state.recorder.last_closed(),
             open_record: state.recorder.open_record(),
         };
@@ -224,6 +265,13 @@ impl Shared {
         });
     }
 
+    pub fn set_agent_session_id(&self, id: &str) {
+        self.config.writer.push(Op::AgentSessionId {
+            session: self.config.id.clone(),
+            id: id.to_owned(),
+        });
+    }
+
     pub fn in_turn(&self) -> bool {
         self.lock().in_turn
     }
@@ -232,9 +280,9 @@ impl Shared {
         self.lock().status
     }
 
-    pub fn on_update(&self, update: &Value) {
+    pub fn emit_all(&self, events: Vec<AgentEvent>) {
         let mut state = self.lock();
-        for event in map_update(update) {
+        for event in events {
             self.emit_locked(&mut state, event);
         }
     }
@@ -305,21 +353,35 @@ impl Shared {
         self.release();
     }
 
-    pub fn fail(&self, message: String) {
-        let mut state = self.lock();
-        self.cancel_pending_locked(&mut state);
+    fn fail_locked(&self, state: &mut State, message: String) {
+        self.cancel_pending_locked(state);
         state.in_turn = false;
         state.buffer.take();
-        self.emit_locked(&mut state, AgentEvent::Error(message));
-        self.close_record(&mut state);
-        self.status_locked(&mut state, SessionStatus::Failed);
+        self.emit_locked(state, AgentEvent::Error(message));
+        self.close_record(state);
+        self.status_locked(state, SessionStatus::Failed);
+    }
+
+    pub fn fail(&self, message: String) {
+        let mut state = self.lock();
+        if state.active {
+            self.fail_locked(&mut state, message);
+        } else {
+            state.early_failure = Some(message);
+        }
         drop(state);
         self.release();
     }
 
     pub fn close(&self) {
         let mut state = self.lock();
-        self.close_record(&mut state);
+        if state.active {
+            self.close_record(&mut state);
+        } else {
+            state
+                .early_failure
+                .get_or_insert_with(|| ENDED_BEFORE_ACTIVATION.to_owned());
+        }
     }
 }
 

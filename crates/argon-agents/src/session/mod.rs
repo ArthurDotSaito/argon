@@ -1,4 +1,7 @@
 mod acp;
+mod acp_mode;
+mod acp_permissions;
+mod bootstrap;
 mod driver;
 mod events;
 mod failure;
@@ -13,16 +16,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use argon_core::PrKey;
+use argon_core::{PermissionMode, PrKey};
 use argon_store::SessionStatus;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
+use crate::Transport;
 use crate::registry::AgentSpec;
 
+pub(crate) use acp::{Started, start as start_agent, start_tracked, terminate};
+pub(crate) use bootstrap::{DriverFuture, DriverRun, Ready};
+pub(crate) use driver::Shared;
 pub use driver::Snapshot;
 pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, ToolStatus};
-pub use permissions::{PermissionDecision, PermissionPrompt, decide as decide_permission};
+pub(crate) use failure::{STDERR_LINES, explain_failure, with_stderr};
+#[cfg(test)]
+pub(crate) use permissions::prompt_title;
+pub(crate) use permissions::{
+    ALLOW_ALWAYS, ALLOW_ONCE, PermissionAnswer, PermissionReply, REJECT_ONCE, input_paths,
+    native_options_for, native_options_with_session, session_grant_applies,
+};
+pub use permissions::{
+    PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,
+};
+pub(crate) use stderr::StderrTail;
 pub use turn::{TurnOutcome, finish_turn};
 pub use writer::SessionWriter;
 
@@ -35,20 +52,26 @@ pub enum SessionError {
     CommandNotFound(String),
     #[error("falha ao iniciar o agente: {0}")]
     Spawn(#[from] std::io::Error),
-    #[error("o agente não respondeu ao handshake ACP em {0:?}")]
+    #[error("o agente não respondeu em {0:?}")]
     StartupTimeout(Duration),
     #[error("o agente precisa de login: {hint}")]
     NeedsLogin { hint: String },
     #[error("erro ACP: {0}")]
     Acp(String),
+    #[error("erro do agente: {0}")]
+    Agent(String),
     #[error("o agente não suporta retomar sessões (session/load)")]
     LoadUnsupported,
     #[error("o modelo `{model}` não está disponível neste agente")]
     ModelUnavailable { model: String },
     #[error("não consegui trocar o modelo para `{model}`: {reason}")]
     SetModel { model: String, reason: String },
+    #[error("não consegui trocar o modo de permissão do agente para `{mode}`: {reason}")]
+    SetPermissionMode { mode: String, reason: String },
     #[error("este agente não roda via ACP")]
     NotAcp,
+    #[error("o transporte `{}` ainda não é suportado", .0.as_str())]
+    Unsupported(Transport),
     #[error("já existe um turno ou troca de modelo em andamento")]
     Busy,
     #[error("pedido de permissão `{0}` não está pendente")]
@@ -77,6 +100,7 @@ pub struct SessionContext {
     pub allowed_files: Vec<String>,
     pub cwd: PathBuf,
     pub model: String,
+    pub permission_mode: PermissionMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +123,7 @@ impl Default for SessionOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHandle {
     pub id: String,
-    pub acp_session_id: String,
+    pub agent_session_id: String,
 }
 
 pub fn new_session_id() -> Result<String> {
@@ -114,6 +138,10 @@ pub(crate) enum Command {
     Cancel,
     SetModel {
         model: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    SetPermissionMode {
+        mode: PermissionMode,
         reply: oneshot::Sender<Result<()>>,
     },
     Shutdown,
@@ -180,6 +208,12 @@ impl AgentSessionHandle {
         response.await.map_err(|_| SessionError::Closed)?
     }
 
+    pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::SetPermissionMode { mode, reply })?;
+        response.await.map_err(|_| SessionError::Closed)?
+    }
+
     pub fn subscribe(
         &self,
     ) -> (
@@ -214,6 +248,37 @@ impl AgentSessionHandle {
     }
 }
 
+async fn launch_with(
+    transport: Transport,
+    spec: &AgentSpec,
+    ctx: SessionContext,
+    writer: SessionWriter,
+    load: Option<String>,
+    options: SessionOptions,
+) -> Result<(SessionHandle, AgentSessionHandle)> {
+    match transport {
+        Transport::Acp => bootstrap::launch(spec, ctx, writer, load, options, acp::run).await,
+        Transport::ClaudeStream => {
+            bootstrap::launch(spec, ctx, writer, load, options, crate::claude::driver::run).await
+        }
+        Transport::CodexAppServer => {
+            bootstrap::launch(spec, ctx, writer, load, options, crate::codex::driver::run).await
+        }
+        Transport::OpencodeServe => {
+            bootstrap::launch(
+                spec,
+                ctx,
+                writer,
+                load,
+                options,
+                crate::opencode::driver::run,
+            )
+            .await
+        }
+        other => Err(SessionError::Unsupported(other)),
+    }
+}
+
 pub async fn start_session(
     spec: &AgentSpec,
     ctx: SessionContext,
@@ -228,23 +293,25 @@ pub async fn start_session_with(
     writer: SessionWriter,
     options: SessionOptions,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
-    acp::launch(spec, ctx, writer, None, options).await
+    launch_with(spec.transport, spec, ctx, writer, None, options).await
 }
 
 pub async fn resume_session(
     spec: &AgentSpec,
-    acp_session_id: &str,
+    transport: Transport,
+    agent_session_id: &str,
     ctx: SessionContext,
     writer: SessionWriter,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
     if !spec.supports_load {
         return Err(SessionError::LoadUnsupported);
     }
-    acp::launch(
+    launch_with(
+        transport,
         spec,
         ctx,
         writer,
-        Some(acp_session_id.to_owned()),
+        Some(agent_session_id.to_owned()),
         SessionOptions::default(),
     )
     .await

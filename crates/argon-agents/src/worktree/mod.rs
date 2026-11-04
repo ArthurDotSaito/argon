@@ -59,8 +59,7 @@ impl WorktreeManager {
         mirror::ensure(host, &repo, &mirror).await?;
         let reference = pr_ref(number);
         Invocation::git_authenticated(&mirror, host)
-            .args(["fetch", "origin"])
-            .arg(format!("+pull/{number}/head:{reference}"))
+            .args(pr_fetch_args(number, &reference))
             .run(FETCH_TIMEOUT)
             .await?;
         prune(&mirror).await?;
@@ -160,6 +159,15 @@ impl WorktreeManager {
     }
 }
 
+fn pr_fetch_args(number: u64, reference: &str) -> [String; 4] {
+    [
+        "fetch".to_owned(),
+        "--no-prune".to_owned(),
+        "origin".to_owned(),
+        format!("+pull/{number}/head:{reference}"),
+    ]
+}
+
 async fn canonical_root(root: &Path) -> Result<PathBuf> {
     tokio::fs::create_dir_all(root).await?;
     Ok(dunce::canonicalize(root)?)
@@ -234,6 +242,19 @@ mod tests {
         assert_eq!(
             path,
             Path::new("data/worktrees/github.com/nuria-tech/nuria-auth/pr-34-0190a3b27c11")
+        );
+    }
+
+    #[test]
+    fn pr_fetch_never_prunes_the_review_refs() {
+        assert_eq!(
+            pr_fetch_args(14, "refs/argon/pr-14"),
+            [
+                "fetch",
+                "--no-prune",
+                "origin",
+                "+pull/14/head:refs/argon/pr-14"
+            ]
         );
     }
 

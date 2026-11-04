@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -16,10 +17,20 @@ pub(super) async fn capture(
     args: &[&str],
     timeout: Duration,
 ) -> Result<Captured, String> {
+    capture_with_env(program, args, &BTreeMap::new(), timeout).await
+}
+
+pub(super) async fn capture_with_env(
+    program: &Path,
+    args: &[&str],
+    env: &BTreeMap<String, String>,
+    timeout: Duration,
+) -> Result<Captured, String> {
     let description = format!("{} {}", program.display(), args.join(" "));
     let mut command = Command::new(program);
     command
         .args(args)
+        .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -35,4 +46,36 @@ pub(super) async fn capture(
         success: output.status.success(),
         text: format!("{stdout}\n{stderr}"),
     })
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn capture_with_env_passes_the_environment() {
+        let env = BTreeMap::from([("ARGON_TEST_ENV".to_owned(), "from-the-spec".to_owned())]);
+        let captured = capture_with_env(
+            Path::new("cmd"),
+            &["/c", "echo", "%ARGON_TEST_ENV%"],
+            &env,
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        assert!(captured.success);
+        assert!(captured.text.contains("from-the-spec"), "{}", captured.text);
+    }
+
+    #[tokio::test]
+    async fn capture_leaves_the_environment_alone() {
+        let captured = capture(
+            Path::new("cmd"),
+            &["/c", "echo", "%ARGON_TEST_ENV_UNSET%"],
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        assert!(captured.text.contains("%ARGON_TEST_ENV_UNSET%"));
+    }
 }

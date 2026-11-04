@@ -9,6 +9,8 @@ pub(crate) fn new_session(id: &str) -> NewAgentSession {
         template: "review-padrao".to_owned(),
         worktree_path: Some(PathBuf::from(r"C:\work\pr-1")),
         acp_session_id: Some("ses_1".to_owned()),
+        transport: "acp".to_owned(),
+        permission_mode: "supervised".to_owned(),
         nonce: "abcd".to_owned(),
         allowed_files: vec!["src/a.rs".to_owned(), "README.md".to_owned()],
     }
@@ -51,10 +53,59 @@ fn updates_status_and_model() {
 }
 
 #[test]
+fn updates_the_agent_session_id() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.create_session(&new_session("s1")).unwrap();
+    store.set_session_acp_id("s1", "ses_2").unwrap();
+    assert_eq!(
+        store
+            .session("s1")
+            .unwrap()
+            .unwrap()
+            .acp_session_id
+            .as_deref(),
+        Some("ses_2")
+    );
+}
+
+#[test]
 fn duplicate_session_id_is_an_error() {
     let mut store = Store::open_in_memory().unwrap();
     store.create_session(&new_session("s1")).unwrap();
     assert!(store.create_session(&new_session("s1")).is_err());
+}
+
+#[test]
+fn transport_round_trips() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.transport = "claude-stream".to_owned();
+    store.create_session(&session).unwrap();
+    assert_eq!(
+        store.session("s1").unwrap().unwrap().transport,
+        "claude-stream"
+    );
+    assert_eq!(store.sessions().unwrap()[0].transport, "claude-stream");
+}
+
+#[test]
+fn permission_mode_round_trips_and_updates() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.permission_mode = "accept-edits".to_owned();
+    store.create_session(&session).unwrap();
+    assert_eq!(
+        store.session("s1").unwrap().unwrap().permission_mode,
+        "accept-edits"
+    );
+    assert_eq!(store.sessions().unwrap()[0].permission_mode, "accept-edits");
+    store
+        .set_session_permission_mode("s1", "full-access")
+        .unwrap();
+    assert_eq!(
+        store.session("s1").unwrap().unwrap().permission_mode,
+        "full-access"
+    );
 }
 
 #[test]

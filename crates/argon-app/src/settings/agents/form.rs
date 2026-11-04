@@ -1,22 +1,32 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use argon_agents::{AgentSpec, Support, agent_spec, support_for};
-use argon_core::{AgentCfg, AgentKind, Config};
+use argon_agents::{
+    AgentSpec, Detection, ModelInfo, Support, Transport, agent_spec, effective_transport,
+    list_models, override_applies_to, spec_lists_models, support_for,
+};
+use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
 
 use super::fields::{FieldError, join_args, parse_env, split_args};
 use super::{DetectionResult, run_detection, store_cache};
-use crate::agents::{CardState, Choice, card_state};
+use crate::agents::{AgentSessions, CardState, Choice, Trigger, card_state, permission_choices};
 use crate::config_watch;
 use crate::settings::labels;
+use crate::settings::ui::services;
 
 pub(super) struct EnvRow {
     pub key: Entity<InputState>,
     pub value: Entity<InputState>,
     _subscriptions: [Subscription; 2],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Source {
+    Saved(Trigger),
+    Draft,
 }
 
 pub(super) enum Status {
@@ -31,13 +41,19 @@ pub struct AgentForm {
     pub(super) support: Support,
     pub(super) status: Status,
     pub(super) detected: Option<AgentSpec>,
+    draft_models: bool,
+    draft_task: Option<Task<()>>,
     pub(super) saved: AgentCfg,
     pub(super) command: Entity<InputState>,
     pub(super) args: Entity<InputState>,
     pub(super) env: Vec<EnvRow>,
     pub(super) model_select: Entity<SelectState<Vec<Choice>>>,
     pub(super) model: Option<String>,
-    pub(super) full_access: bool,
+    pub(super) permission_select: Entity<SelectState<Vec<Choice>>>,
+    pub(super) permission_mode: PermissionMode,
+    pub(super) use_acp: bool,
+    pub(super) read_plan_usage: bool,
+    usage_revision: u64,
     pub(super) error: Option<SharedString>,
     test_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -59,6 +75,40 @@ fn text_input(
     })
 }
 
+fn override_transport_for(
+    saved: &AgentCfg,
+    effective: Transport,
+    command: Option<&PathBuf>,
+    args: &[String],
+) -> Option<String> {
+    if command.is_none() && args.is_empty() {
+        return None;
+    }
+    if command == saved.command.as_ref() && args == saved.args {
+        return saved.override_transport.clone();
+    }
+    Some(effective.as_str().to_owned())
+}
+
+fn override_warning_for(
+    has_override: bool,
+    mark: Option<&str>,
+    effective: Transport,
+) -> Option<&'static str> {
+    if !has_override || override_applies_to(mark, effective) {
+        return None;
+    }
+    Some(match mark {
+        None | Some("acp" | "headless") => labels::OVERRIDE_SAVED_FOR_ACP,
+        Some(_) => labels::OVERRIDE_SAVED_FOR_NATIVE,
+    })
+}
+
+fn normalized(cfg: AgentCfg) -> AgentCfg {
+    let mode = cfg.permission_mode();
+    cfg.with_permission_mode(mode)
+}
+
 impl AgentForm {
     pub fn new(
         kind: AgentKind,
@@ -67,7 +117,7 @@ impl AgentForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let defaults = agent_spec(kind, &Config::default());
-        let saved = config.agents.get(&kind).cloned().unwrap_or_default();
+        let saved = normalized(config.agents.get(&kind).cloned().unwrap_or_default());
         let command = text_input(
             defaults.command.display().to_string(),
             saved
@@ -87,7 +137,13 @@ impl AgentForm {
             cx,
         );
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
-        let subscriptions = vec![
+        let permission_mode = saved.permission_mode();
+        let permission_select = cx.new(|cx| {
+            let mut select = SelectState::new(permission_choices(), None, window, cx);
+            select.set_selected_value(&permission_mode.as_str().to_owned(), window, cx);
+            select
+        });
+        let mut subscriptions = vec![
             cx.observe(&command, |_, _, cx| cx.notify()),
             cx.observe(&args, |_, _, cx| cx.notify()),
             cx.subscribe_in(
@@ -100,15 +156,42 @@ impl AgentForm {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &permission_select,
+                window,
+                |this, _, event: &SelectEvent<Vec<Choice>>, _, cx| {
+                    if let SelectEvent::Confirm(Some(id)) = event
+                        && let Some(mode) = PermissionMode::parse(id)
+                    {
+                        this.permission_mode = mode;
+                        cx.notify();
+                    }
+                },
+            ),
         ];
+        if let Some(sessions) = AgentSessions::global(cx) {
+            subscriptions.push(cx.observe(&sessions, |this, sessions, cx| {
+                let revision = sessions.read(cx).usage_revision();
+                if revision != this.usage_revision {
+                    this.usage_revision = revision;
+                    cx.notify();
+                }
+            }));
+        }
         let mut this = Self {
             kind,
             label: defaults.label,
             support: support_for(kind),
             status: Status::Detecting,
             detected: None,
+            draft_models: false,
+            draft_task: None,
             model: saved.default_model.clone(),
-            full_access: saved.full_access,
+            permission_select,
+            permission_mode,
+            use_acp: saved.use_acp,
+            read_plan_usage: saved.read_plan_usage,
+            usage_revision: 0,
             command,
             args,
             env: Vec::new(),
@@ -153,6 +236,41 @@ impl AgentForm {
         }
     }
 
+    pub(super) fn refresh_usage(&mut self, cx: &mut Context<Self>) {
+        let Some(sessions) = AgentSessions::global(cx) else {
+            return;
+        };
+        let config = config_watch::current(cx);
+        let kinds = [self.kind];
+        sessions.update(cx, |sessions, cx| {
+            sessions.refresh_usage(&kinds, &config, Trigger::Manual, cx)
+        });
+    }
+
+    pub(super) fn set_plan_usage_consent(&mut self, granted: bool, cx: &mut Context<Self>) {
+        let kind = self.kind;
+        self.read_plan_usage = granted;
+        self.saved.read_plan_usage = granted;
+        let config = config_watch::update(cx, move |config| {
+            let agent = config.agents.entry(kind).or_default();
+            agent.read_plan_usage = granted;
+            let untouched = normalized(agent.clone()) == normalized(AgentCfg::default());
+            if untouched {
+                config.agents.remove(&kind);
+            }
+        });
+        if let Some(sessions) = AgentSessions::global(cx) {
+            sessions.update(cx, |sessions, cx| {
+                if granted {
+                    sessions.refresh_usage(&[kind], &config, Trigger::Manual, cx);
+                } else {
+                    sessions.forget_usage(kind, cx);
+                }
+            });
+        }
+        cx.notify();
+    }
+
     pub(super) fn is_supported(&self) -> bool {
         self.support == Support::Supported
     }
@@ -169,13 +287,38 @@ impl AgentForm {
                 )
             })
             .collect();
+        let command = (!command.is_empty()).then(|| PathBuf::from(command));
+        let args = split_args(&self.args.read(cx).value())?;
         Ok(AgentCfg {
-            command: (!command.is_empty()).then(|| PathBuf::from(command)),
-            args: split_args(&self.args.read(cx).value())?,
+            override_transport: override_transport_for(
+                &self.saved,
+                self.effective_transport(),
+                command.as_ref(),
+                &args,
+            ),
+            command,
+            args,
             env: parse_env(&rows)?,
             default_model: self.model.clone(),
-            full_access: self.full_access,
-        })
+            use_acp: self.use_acp,
+            read_plan_usage: self.read_plan_usage,
+            ..AgentCfg::default()
+        }
+        .with_permission_mode(self.permission_mode))
+    }
+
+    pub(super) fn override_warning(&self, cx: &Context<Self>) -> Option<&'static str> {
+        let draft = self.draft(cx).ok()?;
+        let has_override = draft.command.is_some() || !draft.args.is_empty();
+        override_warning_for(
+            has_override,
+            draft.override_transport.as_deref(),
+            self.effective_transport(),
+        )
+    }
+
+    fn effective_transport(&self) -> Transport {
+        effective_transport(self.kind, self.use_acp)
     }
 
     pub(super) fn is_dirty(&self, cx: &Context<Self>) -> bool {
@@ -185,6 +328,7 @@ impl AgentForm {
     pub(super) fn apply(
         &mut self,
         results: &[DetectionResult],
+        source: Source,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -194,9 +338,98 @@ impl AgentForm {
             return;
         };
         self.status = Status::Done(card_state(support, detection));
-        self.detected = Some(spec.clone());
+        let mut spec = spec.clone();
+        let found = matches!(detection, Detection::Found { .. });
+        self.draft_models = source == Source::Draft;
+        self.draft_task = None;
+        match source {
+            Source::Saved(trigger) => {
+                if let Some(sessions) = AgentSessions::global(cx) {
+                    if found {
+                        let specs = vec![spec.clone()];
+                        let config = config_watch::current(cx);
+                        let kinds = [self.kind];
+                        sessions.update(cx, |sessions, cx| {
+                            sessions.refresh_models(specs, trigger, cx);
+                            sessions.refresh_usage(&kinds, &config, trigger, cx);
+                        });
+                    }
+                    sessions.read(cx).apply_listed_models(&mut spec);
+                }
+            }
+            Source::Draft if found => self.list_draft_models(spec.clone(), window, cx),
+            Source::Draft => {}
+        }
+        self.detected = Some(spec);
         self.refresh_models(window, cx);
         cx.notify();
+    }
+
+    fn list_draft_models(&mut self, spec: AgentSpec, window: &mut Window, cx: &mut Context<Self>) {
+        if !spec_lists_models(&spec) {
+            return;
+        }
+        let Some(services) = services(cx) else {
+            return;
+        };
+        let label = spec.label;
+        let job = services.spawn_runtime(async move { list_models(&spec).await });
+        self.draft_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = job.await;
+            _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(Some(Ok(models))) if !models.is_empty() => this.set_draft_models(models, window, cx),
+                Ok(Some(Ok(_))) => {
+                    tracing::warn!(agent = label, "the draft configuration listed no models");
+                }
+                Ok(Some(Err(error))) => {
+                    tracing::warn!(agent = label, %error, "failed to list models for the draft configuration");
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(agent = label, %error, "failed to list models for the draft configuration");
+                }
+            });
+        }));
+    }
+
+    fn set_draft_models(
+        &mut self,
+        models: Vec<ModelInfo>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.draft_models {
+            return;
+        }
+        if let Some(spec) = self.detected.as_mut() {
+            spec.models = models;
+            self.refresh_models(window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn apply_listed_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft_models {
+            return;
+        }
+        let Some(sessions) = AgentSessions::global(cx) else {
+            return;
+        };
+        let Some(spec) = self.detected.as_ref() else {
+            return;
+        };
+        let listed = sessions
+            .read(cx)
+            .listed_models(spec)
+            .filter(|listed| spec.models != *listed)
+            .map(<[_]>::to_vec);
+        if let Some(models) = listed {
+            if let Some(spec) = self.detected.as_mut() {
+                spec.models = models;
+            }
+            self.refresh_models(window, cx);
+            cx.notify();
+        }
     }
 
     fn refresh_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -252,7 +485,12 @@ impl AgentForm {
                     if matches_saved {
                         store_cache(&results, Instant::now(), cx);
                     }
-                    this.apply(&results, window, cx);
+                    let source = if matches_saved {
+                        Source::Saved(Trigger::Manual)
+                    } else {
+                        Source::Draft
+                    };
+                    this.apply(&results, source, window, cx);
                 }
                 Err(error) => {
                     this.status = Status::Failed(labels::detection_failed(&error).into());
@@ -275,7 +513,7 @@ impl AgentForm {
         let kind = self.kind;
         let stored = draft.clone();
         config_watch::update(cx, move |config| {
-            if stored == AgentCfg::default() {
+            if stored == normalized(AgentCfg::default()) {
                 config.agents.remove(&kind);
             } else {
                 config.agents.insert(kind, stored);
@@ -288,6 +526,7 @@ impl AgentForm {
 
     pub(super) fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let saved = self.saved.clone();
+        self.permission_mode = saved.permission_mode();
         let command = saved
             .command
             .as_ref()
@@ -303,9 +542,103 @@ impl AgentForm {
             self.push_env(key, value, window, cx);
         }
         self.model = saved.default_model;
-        self.full_access = saved.full_access;
+        let mode = self.permission_mode.as_str().to_owned();
+        self.permission_select.update(cx, |select, cx| {
+            select.set_selected_value(&mode, window, cx)
+        });
+        self.use_acp = saved.use_acp;
         self.error = None;
         self.refresh_models(window, cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn saved(command: Option<&str>, args: &[&str], mark: Option<&str>) -> AgentCfg {
+        AgentCfg {
+            command: command.map(PathBuf::from),
+            args: args.iter().map(ToString::to_string).collect(),
+            override_transport: mark.map(Into::into),
+            ..AgentCfg::default()
+        }
+    }
+
+    fn mark_for(
+        saved: &AgentCfg,
+        effective: Transport,
+        command: Option<&str>,
+        args: &[&str],
+    ) -> Option<String> {
+        let command = command.map(PathBuf::from);
+        let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+        override_transport_for(saved, effective, command.as_ref(), &args)
+    }
+
+    #[test]
+    fn no_override_has_no_mark() {
+        let stale = saved(Some("old"), &[], Some("acp"));
+        assert_eq!(mark_for(&stale, Transport::Acp, None, &[]), None);
+        assert_eq!(mark_for(&stale, Transport::ClaudeStream, None, &[]), None);
+    }
+
+    #[test]
+    fn unchanged_override_keeps_the_saved_mark() {
+        let marked = saved(Some("claude"), &["--x"], Some("claude-stream"));
+        assert_eq!(
+            mark_for(&marked, Transport::Acp, Some("claude"), &["--x"]).as_deref(),
+            Some("claude-stream")
+        );
+        let legacy = saved(None, &["acp"], None);
+        assert_eq!(
+            mark_for(&legacy, Transport::ClaudeStream, None, &["acp"]),
+            None
+        );
+    }
+
+    #[test]
+    fn changed_override_is_marked_with_the_effective_transport() {
+        let legacy = saved(None, &["acp"], None);
+        assert_eq!(
+            mark_for(&legacy, Transport::Acp, None, &["acp", "--x"]).as_deref(),
+            Some("acp")
+        );
+        assert_eq!(
+            mark_for(&legacy, Transport::ClaudeStream, Some("claude"), &[]).as_deref(),
+            Some("claude-stream")
+        );
+        let fresh = AgentCfg::default();
+        assert_eq!(
+            mark_for(&fresh, Transport::OpencodeServe, None, &["serve"]).as_deref(),
+            Some("opencode-serve")
+        );
+    }
+
+    #[test]
+    fn warning_only_when_an_override_does_not_apply_to_the_effective_transport() {
+        assert_eq!(
+            override_warning_for(true, None, Transport::ClaudeStream),
+            Some(labels::OVERRIDE_SAVED_FOR_ACP)
+        );
+        assert_eq!(
+            override_warning_for(true, Some("acp"), Transport::OpencodeServe),
+            Some(labels::OVERRIDE_SAVED_FOR_ACP)
+        );
+        assert_eq!(
+            override_warning_for(true, Some("claude-stream"), Transport::Acp),
+            Some(labels::OVERRIDE_SAVED_FOR_NATIVE)
+        );
+        assert_eq!(override_warning_for(true, None, Transport::Acp), None);
+        assert_eq!(override_warning_for(true, None, Transport::Headless), None);
+        assert_eq!(
+            override_warning_for(true, Some("claude-stream"), Transport::ClaudeStream),
+            None
+        );
+        assert_eq!(
+            override_warning_for(false, None, Transport::ClaudeStream),
+            None
+        );
     }
 }

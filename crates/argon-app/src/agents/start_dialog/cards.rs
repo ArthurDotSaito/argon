@@ -7,14 +7,14 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, div, hsla, prelude::FluentBuilder as _,
-    px,
+    AnyElement, App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
+    hsla, prelude::FluentBuilder as _, px,
 };
 
 use super::{Load, StartDialog, open_settings};
 use crate::agents::detection::{AgentOption, CardState};
-use crate::agents::labels;
+use crate::agents::{UsageLine, labels, open_usage_url, tone_color};
 
 const CARD_HEIGHT: f32 = 64.;
 const GLYPH_SIZE: f32 = 26.;
@@ -28,9 +28,10 @@ struct CardView {
     selectable: bool,
     configurable: bool,
     warn: bool,
+    usage: Option<UsageLine>,
 }
 
-fn card_view(option: &AgentOption) -> CardView {
+fn card_view(option: &AgentOption, usage: Option<UsageLine>) -> CardView {
     let (status, tooltip, warn): (SharedString, Option<SharedString>, bool) = match &option.state {
         CardState::Ready { version } => (format!("v{version}").into(), None, false),
         CardState::NeedsLogin { hint } => (hint.clone().into(), Some(hint.clone().into()), true),
@@ -52,6 +53,7 @@ fn card_view(option: &AgentOption) -> CardView {
         selectable: option.state.is_selectable(),
         configurable: option.state == CardState::Missing,
         warn,
+        usage,
     }
 }
 
@@ -91,10 +93,39 @@ fn glyph(kind: AgentKind, label: &str, cx: &App) -> Div {
         .child(label.chars().next().unwrap_or('?').to_string())
 }
 
+fn usage_row(ix: usize, usage: UsageLine, cx: &App) -> AnyElement {
+    if let Some(url) = usage.link {
+        return h_flex()
+            .child(
+                Button::new(("agent-usage-link", ix))
+                    .label(usage.text)
+                    .xsmall()
+                    .link()
+                    .on_click(move |_, _, _| open_usage_url(&url)),
+            )
+            .into_any_element();
+    }
+    let row = div()
+        .id(("agent-usage", ix))
+        .text_xs()
+        .text_color(tone_color(usage.tone, cx))
+        .truncate()
+        .child(usage.text);
+    match usage.tooltip {
+        Some(tooltip) => row
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .into_any_element(),
+        None => row.into_any_element(),
+    }
+}
+
 impl StartDialog {
     pub(super) fn agent_cards(&self, cx: &mut Context<Self>) -> Div {
         let views: Vec<CardView> = match &self.agents {
-            Load::Ready(options) => options.iter().map(card_view).collect(),
+            Load::Ready(options) => options
+                .iter()
+                .map(|option| card_view(option, self.usage_line(option, cx)))
+                .collect(),
             Load::Loading | Load::Failed(_) => AGENT_DEFAULTS
                 .iter()
                 .map(|defaults| CardView {
@@ -105,6 +136,7 @@ impl StartDialog {
                     selectable: false,
                     configurable: false,
                     warn: false,
+                    usage: None,
                 })
                 .collect(),
         };
@@ -176,7 +208,8 @@ impl StartDialog {
                             .text_color(status_color)
                             .line_clamp(2)
                             .child(view.status),
-                    ),
+                    )
+                    .children(view.usage.map(|usage| usage_row(ix, usage, cx))),
             );
         let mut card = h_flex()
             .id(("agent-card", ix))

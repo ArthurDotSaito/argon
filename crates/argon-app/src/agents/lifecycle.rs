@@ -222,6 +222,8 @@ mod tests {
                 template: "review-padrao".into(),
                 worktree_path: Some(PathBuf::from(r"C:\wt\pr-1")),
                 acp_session_id: Some("acp".into()),
+                transport: "acp".into(),
+                permission_mode: "supervised".into(),
                 nonce: String::new(),
                 allowed_files: Vec::new(),
             })

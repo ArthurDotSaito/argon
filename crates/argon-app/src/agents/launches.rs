@@ -162,8 +162,14 @@ impl AgentSessions {
                 LaunchState::Started
             }
             Ok(Err(LaunchError::Cancelled)) => LaunchState::Cancelled,
-            Ok(Err(LaunchError::Failed(error))) => LaunchState::Failed(error),
-            Err(error) => LaunchState::Failed(error.to_string()),
+            Ok(Err(LaunchError::Failed(error))) => {
+                tracing::warn!(session = %id, %error, "agent review launch failed");
+                LaunchState::Failed(error)
+            }
+            Err(error) => {
+                tracing::warn!(session = %id, %error, "agent review launch task failed");
+                LaunchState::Failed(error.to_string())
+            }
         };
         self.set_launch_state(&id, state, cx);
     }
