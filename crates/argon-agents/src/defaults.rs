@@ -1,9 +1,36 @@
 use argon_core::AgentKind;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Transport {
     Acp,
+    ClaudeStream,
+    CodexAppServer,
+    OpencodeServe,
     Headless,
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Acp => "acp",
+            Self::ClaudeStream => "claude-stream",
+            Self::CodexAppServer => "codex-app-server",
+            Self::OpencodeServe => "opencode-serve",
+            Self::Headless => "headless",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [
+            Self::Acp,
+            Self::ClaudeStream,
+            Self::CodexAppServer,
+            Self::OpencodeServe,
+            Self::Headless,
+        ]
+        .into_iter()
+        .find(|transport| transport.as_str() == value)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,6 +380,20 @@ pub fn agent_defaults(kind: AgentKind) -> &'static AgentDefaults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_text_round_trips() {
+        for transport in [
+            Transport::Acp,
+            Transport::ClaudeStream,
+            Transport::CodexAppServer,
+            Transport::OpencodeServe,
+            Transport::Headless,
+        ] {
+            assert_eq!(Transport::parse(transport.as_str()), Some(transport));
+        }
+        assert_eq!(Transport::parse("bogus"), None);
+    }
 
     #[test]
     fn agents_inherit_the_user_permission_mode() {

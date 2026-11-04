@@ -180,6 +180,10 @@ pub fn worktree_invalid(error: &str) -> String {
     format!("worktree inválido: {error}")
 }
 
+pub fn unknown_transport(transport: &str) -> String {
+    format!("transporte desconhecido nesta sessão: {transport}")
+}
+
 pub fn resume_failed(error: &str) -> String {
     format!("Não consegui retomar: {error}")
 }

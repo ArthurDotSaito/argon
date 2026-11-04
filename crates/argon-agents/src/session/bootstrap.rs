@@ -169,6 +169,7 @@ pub(super) async fn launch(
                 template: ctx.template_id.clone(),
                 worktree_path: Some(ctx.cwd.clone()),
                 acp_session_id: Some(ready.agent_session_id.clone()),
+                transport: spec.transport.as_str().to_owned(),
                 nonce: ctx.nonce.clone(),
                 allowed_files: ctx.allowed_files.clone(),
             })

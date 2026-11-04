@@ -25,6 +25,7 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             template: "review-padrao".into(),
             worktree_path: None,
             acp_session_id: Some("acp".into()),
+            transport: "acp".into(),
             nonce: NONCE.into(),
             allowed_files: vec!["src/lib.rs".into()],
         })

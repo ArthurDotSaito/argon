@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use argon_agents::defaults::agent_defaults;
 use argon_agents::{
-    AgentSessionHandle, SessionContext, WorktreeManager, agent_spec, resume_session,
+    AgentSessionHandle, SessionContext, Transport, WorktreeManager, agent_spec, resume_session,
 };
 use argon_core::Config;
 use argon_store::{ARCHIVE_PENDING, SessionRow, SessionStatus};
@@ -50,6 +50,8 @@ async fn resume(
     rows: StoreHandle,
 ) -> Result<Resumed, String> {
     let (acp_session, worktree) = resume_target(&row).map_err(str::to_owned)?;
+    let transport = Transport::parse(&row.transport)
+        .ok_or_else(|| labels::unknown_transport(&row.transport))?;
     if !tokio::fs::try_exists(&worktree).await.unwrap_or(false) {
         return Err(labels::WORKTREE_GONE.to_owned());
     }
@@ -70,7 +72,7 @@ async fn resume(
         cwd: worktree.clone(),
         model: row.model.clone(),
     };
-    let (_, handle) = resume_session(&spec, &acp_session, ctx, writer)
+    let (_, handle) = resume_session(&spec, transport, &acp_session, ctx, writer)
         .await
         .map_err(|error| error.to_string())?;
     if !still_resumable(&rows, &row.id).await {
@@ -187,6 +189,7 @@ mod tests {
             status,
             worktree_path: Some(PathBuf::from(r"C:\wt\pr-1")),
             acp_session_id: Some("acp".into()),
+            transport: "acp".into(),
             nonce: String::new(),
             allowed_files: Vec::new(),
             created_at: chrono::Utc::now(),

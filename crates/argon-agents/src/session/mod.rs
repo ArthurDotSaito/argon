@@ -54,6 +54,8 @@ pub enum SessionError {
     SetModel { model: String, reason: String },
     #[error("este agente não roda via ACP")]
     NotAcp,
+    #[error("o transporte `{}` ainda não é suportado", .0.as_str())]
+    Unsupported(Transport),
     #[error("já existe um turno ou troca de modelo em andamento")]
     Busy,
     #[error("pedido de permissão `{0}` não está pendente")]
@@ -219,17 +221,18 @@ impl AgentSessionHandle {
     }
 }
 
-async fn launch_acp(
+async fn launch_with(
+    transport: Transport,
     spec: &AgentSpec,
     ctx: SessionContext,
     writer: SessionWriter,
     load: Option<String>,
     options: SessionOptions,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
-    if spec.transport != Transport::Acp {
-        return Err(SessionError::NotAcp);
+    match transport {
+        Transport::Acp => bootstrap::launch(spec, ctx, writer, load, options, acp::run).await,
+        other => Err(SessionError::Unsupported(other)),
     }
-    bootstrap::launch(spec, ctx, writer, load, options, acp::run).await
 }
 
 pub async fn start_session(
@@ -246,23 +249,25 @@ pub async fn start_session_with(
     writer: SessionWriter,
     options: SessionOptions,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
-    launch_acp(spec, ctx, writer, None, options).await
+    launch_with(spec.transport, spec, ctx, writer, None, options).await
 }
 
 pub async fn resume_session(
     spec: &AgentSpec,
-    acp_session_id: &str,
+    transport: Transport,
+    agent_session_id: &str,
     ctx: SessionContext,
     writer: SessionWriter,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
     if !spec.supports_load {
         return Err(SessionError::LoadUnsupported);
     }
-    launch_acp(
+    launch_with(
+        transport,
         spec,
         ctx,
         writer,
-        Some(acp_session_id.to_owned()),
+        Some(agent_session_id.to_owned()),
         SessionOptions::default(),
     )
     .await
