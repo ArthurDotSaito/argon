@@ -146,6 +146,23 @@ impl Route {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Intake {
+    Unanswerable,
+    Refuse,
+    Ask,
+}
+
+pub(super) fn permission_intake(route: &Route, turns: &Turns) -> Intake {
+    if route.reply_path().is_none() {
+        Intake::Unanswerable
+    } else if turns.in_turn() && !turns.is_cancelled() {
+        Intake::Ask
+    } else {
+        Intake::Refuse
+    }
+}
+
 pub(super) fn decision(answer: &PermissionAnswer) -> &str {
     match answer {
         PermissionAnswer::Selected(option) => option,

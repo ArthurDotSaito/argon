@@ -81,6 +81,47 @@ fn answers_map_to_decisions_and_never_to_always() {
 }
 
 #[test]
+fn permission_outside_a_live_turn_is_refused_without_asking() {
+    let safe = route("ses_root", "per_1");
+    let mut turns = Turns::default();
+
+    assert_eq!(permission_intake(&safe, &turns), Intake::Refuse);
+    turns.start();
+    assert_eq!(permission_intake(&safe, &turns), Intake::Ask);
+    turns.cancel();
+    assert_eq!(permission_intake(&safe, &turns), Intake::Refuse);
+    turns.clear();
+    assert_eq!(permission_intake(&safe, &turns), Intake::Refuse);
+}
+
+#[test]
+fn refusal_replies_with_a_reject_decision_on_the_asking_session() {
+    let asked = route("ses_child", "per_1");
+
+    assert_eq!(
+        asked.reply_path().as_deref(),
+        Some("/api/session/ses_child/permission/per_1/reply")
+    );
+    assert_eq!(permission_body(REJECT), json!({"decision": "reject"}));
+}
+
+#[test]
+fn unsafe_permission_route_is_unanswerable_in_any_turn_state() {
+    let unsafe_route = route("ses_root", "per/../x");
+    let mut turns = Turns::default();
+
+    assert_eq!(
+        permission_intake(&unsafe_route, &turns),
+        Intake::Unanswerable
+    );
+    turns.start();
+    assert_eq!(
+        permission_intake(&unsafe_route, &turns),
+        Intake::Unanswerable
+    );
+}
+
+#[test]
 fn only_allow_always_grants_for_the_session() {
     assert!(grants_session(&PermissionAnswer::Selected(
         "allow_always".to_owned()

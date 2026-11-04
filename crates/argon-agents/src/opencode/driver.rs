@@ -25,9 +25,9 @@ use crate::session::{
 mod state;
 
 use state::{
-    Close, Family, Reconnect, Route, Turns, check_model, created_session, decision, event_session,
-    grants_session, initial_model, is_active, is_not_found, is_path_safe, model_ref, needs_restart,
-    same_directory, session_path, within, without_child_plans,
+    Close, Family, Intake, Reconnect, Route, Turns, check_model, created_session, decision,
+    event_session, grants_session, initial_model, is_active, is_not_found, is_path_safe, model_ref,
+    needs_restart, permission_intake, same_directory, session_path, within, without_child_plans,
 };
 
 const EVENTS_PATH: &str = "/api/event";
@@ -387,13 +387,16 @@ impl Session {
                     request_id: id,
                     kind: ask.kind.clone(),
                 };
-                if route.reply_path().is_none() {
-                    tracing::warn!(request = %route.request_id, "unsafe OpenCode permission route");
-                    self.shared.emit(AgentEvent::Error(UNANSWERABLE.to_owned()));
-                } else if self.turns.is_cancelled() {
-                    self.reply(&route, REJECT).await;
-                } else {
-                    self.ask(route, ask).await;
+                match permission_intake(&route, &self.turns) {
+                    Intake::Unanswerable => {
+                        tracing::warn!(request = %route.request_id, "unsafe OpenCode permission route");
+                        self.shared.emit(AgentEvent::Error(UNANSWERABLE.to_owned()));
+                    }
+                    Intake::Refuse => {
+                        tracing::debug!(request = %route.request_id, "refused OpenCode permission request without a live turn");
+                        self.reply(&route, REJECT).await;
+                    }
+                    Intake::Ask => self.ask(route, ask).await,
                 }
             }
             OpencodeEvent::Ignore => {}
