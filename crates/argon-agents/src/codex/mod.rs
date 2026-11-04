@@ -1,2 +1,2 @@
 pub(crate) mod driver;
-mod protocol;
+pub(crate) mod protocol;

@@ -8,6 +8,7 @@ pub mod process;
 pub mod redact;
 mod registry;
 pub mod session;
+mod usage;
 mod util;
 mod worktree;
 
@@ -21,4 +22,5 @@ pub use session::{
     SessionContext, SessionError, SessionHandle, SessionOptions, SessionWriter, Snapshot,
     ToolStatus, new_session_id, resume_session, start_session, start_session_with,
 };
+pub use usage::{AccountUsage, UsageSeverity, UsageWindow, account_usage};
 pub use worktree::{FoundWorktree, WorktreeError, WorktreeManager, orphan_worktrees};
