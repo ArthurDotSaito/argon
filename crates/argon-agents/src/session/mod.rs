@@ -29,7 +29,7 @@ pub(crate) use bootstrap::{DriverFuture, DriverRun, Ready};
 pub(crate) use driver::Shared;
 pub use driver::Snapshot;
 pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, ToolStatus};
-pub(crate) use failure::with_stderr;
+pub(crate) use failure::{STDERR_LINES, explain_failure, with_stderr};
 #[cfg(test)]
 pub(crate) use permissions::prompt_title;
 pub(crate) use permissions::{

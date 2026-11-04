@@ -95,6 +95,27 @@ impl Shared {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        id: &str,
+        cwd: PathBuf,
+        writer: SessionWriter,
+        stderr: Arc<StderrTail>,
+    ) -> Shared {
+        Shared::new(
+            SharedConfig {
+                id: id.to_owned(),
+                cwd,
+                nonce: String::new(),
+                allowed_files: Vec::new(),
+                writer,
+                stderr,
+            },
+            PermissionMode::Supervised,
+            broadcast::channel(64).0,
+        )
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         lock(&self.state)
     }

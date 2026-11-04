@@ -62,6 +62,15 @@ impl Turns {
         })
     }
 
+    pub fn abort(&mut self, error: String) -> Option<Close> {
+        let turn = self.current.take()?;
+        Some(if turn.cancelled {
+            Close::Cancelled
+        } else {
+            Close::Failed(error)
+        })
+    }
+
     pub fn expire(&mut self) -> Option<Close> {
         if !self.is_cancelled() {
             return None;

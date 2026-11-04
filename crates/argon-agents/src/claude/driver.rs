@@ -15,8 +15,9 @@ use crate::process::KillOnDropChild;
 use crate::registry::AgentSpec;
 use crate::session::{
     AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk,
-    PermissionDecision, PermissionReply, Ready, Result, SessionError, Shared, StderrTail,
-    decide_permission, session_grant_applies, start_agent, terminate, with_stderr,
+    PermissionDecision, PermissionReply, Ready, Result, STDERR_LINES, SessionError, Shared,
+    StderrTail, decide_permission, explain_failure, session_grant_applies, start_agent, terminate,
+    with_stderr,
 };
 use crate::util::{Resolved, read_line_lossy, resolve_command};
 
@@ -290,7 +291,7 @@ impl Session {
                     let _ = reply.send(Ok(()));
                 }
                 Wake::Output((generation, output)) if self.is_current(generation) => {
-                    self.on_output(output).await?;
+                    self.on_output(output).await;
                 }
                 Wake::Output(_) => {}
                 Wake::Answer(answer) => self.on_answer(answer),
@@ -339,7 +340,6 @@ impl Session {
             self.generation,
             &self.outputs,
         )?);
-        self.transcript = true;
         Ok(())
     }
 
@@ -383,7 +383,7 @@ impl Session {
         if close.is_some() {
             self.stop_process().await;
         }
-        self.close_turn(close).await;
+        self.close_turn(close, &[]).await;
     }
 
     async fn change_model(&mut self, model: String, reply: oneshot::Sender<Result<()>>) {
@@ -399,18 +399,23 @@ impl Session {
         let _ = reply.send(Ok(()));
     }
 
-    async fn on_output(&mut self, output: Output) -> std::result::Result<(), String> {
-        match output {
-            Output::Line(line) => {
-                self.on_line(&line).await;
-                Ok(())
-            }
-            Output::Closed => Err(exit_message(self.stop_process().await)),
-            Output::WriteFailed(error) => {
-                let message = exit_message(self.stop_process().await);
-                Err(format!("{message}; falha ao escrever no stdin: {error}"))
-            }
+    async fn on_output(&mut self, output: Output) {
+        let write_error = match output {
+            Output::Line(line) => return self.on_line(&line).await,
+            Output::Closed => None,
+            Output::WriteFailed(error) => Some(error),
+        };
+        let mut message = exit_message(self.stop_process().await);
+        if let Some(error) = write_error {
+            message = format!("{message}; falha ao escrever no stdin: {error}");
         }
+        if !self.turns.in_turn() {
+            tracing::info!(%message, "claude exited between turns; the next prompt resumes it");
+            return;
+        }
+        let tail = self.shared.stderr_tail(STDERR_LINES);
+        let close = self.turns.abort(message);
+        self.close_turn(close, &tail).await;
     }
 
     async fn on_line(&mut self, line: &str) {
@@ -418,7 +423,7 @@ impl Session {
             ClaudeLine::Init { session_id, model } => self.on_init(session_id, model),
             ClaudeLine::TurnEnd { stop_reason, error } => {
                 let close = self.turns.finish(&stop_reason, error);
-                self.close_turn(close).await;
+                self.close_turn(close, &[]).await;
             }
             ClaudeLine::Permission { request_id, .. } if self.turns.is_cancelled() => {
                 self.send(deny(&request_id, CANCELLED));
@@ -436,6 +441,7 @@ impl Session {
     }
 
     fn on_init(&mut self, session_id: String, model: String) {
+        self.transcript = true;
         if !session_id.is_empty() && session_id != self.id {
             tracing::warn!(
                 expected = %self.id,
@@ -489,7 +495,7 @@ impl Session {
         }
     }
 
-    async fn close_turn(&mut self, close: Option<Close>) {
+    async fn close_turn(&mut self, close: Option<Close>, tail: &[String]) {
         let Some(close) = close else {
             return;
         };
@@ -498,7 +504,7 @@ impl Session {
         match close {
             Close::Completed => self.shared.end_turn(END_TURN).await,
             Close::Cancelled => self.shared.end_turn(CANCELLED_REASON).await,
-            Close::Failed(message) => self.shared.fail(message),
+            Close::Failed(message) => self.shared.fail(explain_failure(&self.spec, message, tail)),
         }
     }
 }

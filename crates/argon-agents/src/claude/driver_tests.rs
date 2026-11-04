@@ -1,7 +1,13 @@
+use argon_core::{AgentKind, Config, PrKey};
+use argon_store::{NewAgentSession, SessionStatus, Store};
+
 use super::*;
-use crate::session::native_options_for;
+use crate::Transport;
+use crate::registry::agent_spec;
+use crate::session::{SessionContext, SessionOptions, SessionWriter, native_options_for};
 
 const ID: &str = "0f8e4d2c-1b3a-4c5d-9e6f-7a8b9c0d1e2f";
+const SESSION: &str = "s1";
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_owned()).collect()
@@ -299,5 +305,274 @@ fn expire_only_closes_a_cancelled_turn() {
     assert!(turns.in_turn());
     turns.cancel();
     assert_eq!(turns.expire(), Some(Close::Cancelled));
+    assert!(!turns.in_turn());
+}
+
+const FAKE_WINDOWS: &str = r#"@echo off
+>>"%~dp0args.txt" echo %*
+if "%1"=="early" goto early
+echo {"type":"system","subtype":"init"}
+set /p line=
+if "%1"=="crash" goto crash
+if "%1"=="auth" goto auth
+echo {"type":"result","subtype":"success","is_error":false}
+exit /b 0
+:auth
+echo {"type":"result","subtype":"success","is_error":true,"result":"Invalid API key - Please run /login"}
+exit /b 0
+:crash
+echo boom 1>&2
+exit /b 3
+:early
+echo boom 1>&2
+exit /b 1
+"#;
+
+const FAKE_UNIX: &str = r#"#!/bin/sh
+echo "$*" >> "$(dirname "$0")/args.txt"
+if [ "$1" = early ]; then echo boom >&2; exit 1; fi
+echo '{"type":"system","subtype":"init"}'
+read line
+if [ "$1" = crash ]; then echo boom >&2; exit 3; fi
+if [ "$1" = auth ]; then
+  echo '{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key - Please run /login"}'
+  exit 0
+fi
+echo '{"type":"result","subtype":"success","is_error":false}'
+"#;
+
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(20);
+
+struct Fake {
+    dir: PathBuf,
+    writer: SessionWriter,
+    session: Session,
+    outputs: mpsc::UnboundedReceiver<Tagged>,
+    _answers: mpsc::UnboundedReceiver<Answer>,
+}
+
+fn write_fake(dir: &Path) -> PathBuf {
+    let (script, body) = if cfg!(windows) {
+        (dir.join("claude.cmd"), FAKE_WINDOWS)
+    } else {
+        (dir.join("claude"), FAKE_UNIX)
+    };
+    std::fs::write(&script, body).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    script
+}
+
+fn fake_run(dir: &Path, mode: &str, shared: &Arc<Shared>, tail: Arc<StderrTail>) -> DriverRun {
+    let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
+    spec.transport = Transport::ClaudeStream;
+    spec.command = write_fake(dir);
+    spec.args = vec![mode.to_owned()];
+    spec.env.clear();
+    let (_, commands) = mpsc::unbounded_channel();
+    let (ready, _) = oneshot::channel();
+    DriverRun {
+        shared: Arc::clone(shared),
+        spec,
+        ctx: SessionContext {
+            id: SESSION.to_owned(),
+            pr: PrKey::new("github.com", "PR_1"),
+            template_id: "review-padrao".to_owned(),
+            nonce: String::new(),
+            allowed_files: Vec::new(),
+            cwd: dir.to_path_buf(),
+            model: String::new(),
+            permission_mode: PermissionMode::Supervised,
+        },
+        load: None,
+        options: SessionOptions::default(),
+        commands,
+        ready,
+        stderr: tail,
+    }
+}
+
+async fn fake(mode: &str) -> Fake {
+    let dir = std::env::temp_dir().join(format!("argon-claude-{mode}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let writer = SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
+    let tail = Arc::new(StderrTail::default());
+    let shared = Arc::new(Shared::for_tests(
+        SESSION,
+        dir.clone(),
+        writer.clone(),
+        Arc::clone(&tail),
+    ));
+    let run = fake_run(&dir, mode, &shared, tail);
+    let (answers, answered) = mpsc::unbounded_channel();
+    let (outputs_tx, outputs) = mpsc::unbounded_channel();
+    let session = open(&run, answers, outputs_tx).unwrap();
+    writer
+        .create_session(NewAgentSession {
+            id: SESSION.to_owned(),
+            pr: run.ctx.pr.clone(),
+            agent: AgentKind::ClaudeCode,
+            model: session.model.clone(),
+            template: run.ctx.template_id.clone(),
+            worktree_path: Some(dir.clone()),
+            acp_session_id: Some(session.id.clone()),
+            transport: Transport::ClaudeStream.as_str().to_owned(),
+            permission_mode: PermissionMode::Supervised.as_str().to_owned(),
+            nonce: String::new(),
+            allowed_files: Vec::new(),
+        })
+        .await
+        .unwrap();
+    shared.activate(SessionStatus::Running, 0, session.model.clone(), Vec::new());
+    Fake {
+        dir,
+        writer,
+        session,
+        outputs,
+        _answers: answered,
+    }
+}
+
+impl Fake {
+    async fn turn(&mut self, text: &str) {
+        self.session.prompt(text.to_owned(), false);
+        while self.session.claude.is_some() {
+            let (generation, output) = tokio::time::timeout(SETTLE_TIMEOUT, self.outputs.recv())
+                .await
+                .expect("the fake Claude never exited")
+                .expect("output channel closed");
+            if self.session.is_current(generation) {
+                self.session.on_output(output).await;
+            }
+        }
+    }
+
+    fn launches(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join("args.txt"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn status(&self) -> SessionStatus {
+        self.session.shared.status()
+    }
+
+    async fn errors(&self) -> Vec<String> {
+        self.writer
+            .events_since(SESSION, 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|(_, event)| match event {
+                AgentEvent::Error(message) => Some(message),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Drop for Fake {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn started_with(launch: &str, flag: &str, id: &str) -> bool {
+    launch.ends_with(&format!("{flag} {id}"))
+}
+
+#[tokio::test]
+async fn exit_between_turns_keeps_the_session_and_resumes_on_the_next_prompt() {
+    let mut fake = fake("idle").await;
+    let id = fake.session.id.clone();
+
+    fake.turn("primeiro").await;
+    assert_eq!(fake.status(), SessionStatus::Completed);
+    assert!(fake.session.transcript);
+
+    fake.turn("segundo").await;
+    assert_eq!(fake.status(), SessionStatus::Completed);
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(
+        started_with(&launches[0], SESSION_ID_FLAG, &id),
+        "{launches:?}"
+    );
+    assert!(started_with(&launches[1], RESUME_FLAG, &id), "{launches:?}");
+    assert!(fake.errors().await.is_empty());
+}
+
+#[tokio::test]
+async fn exit_during_a_turn_fails_the_turn_and_the_next_prompt_resumes() {
+    let mut fake = fake("crash").await;
+    let id = fake.session.id.clone();
+
+    fake.turn("primeiro").await;
+    assert_eq!(fake.status(), SessionStatus::Failed);
+    assert!(!fake.session.turns.in_turn());
+    let errors = fake.errors().await;
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with("processo do Claude saiu (código 3)"),
+        "{errors:?}"
+    );
+
+    fake.turn("segundo").await;
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(started_with(&launches[1], RESUME_FLAG, &id), "{launches:?}");
+}
+
+#[tokio::test]
+async fn death_before_init_respawns_with_the_same_session_id() {
+    let mut fake = fake("early").await;
+    let id = fake.session.id.clone();
+
+    fake.turn("primeiro").await;
+    assert_eq!(fake.status(), SessionStatus::Failed);
+    assert!(!fake.session.transcript);
+
+    fake.turn("segundo").await;
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    for launch in &launches {
+        assert!(started_with(launch, SESSION_ID_FLAG, &id), "{launches:?}");
+        assert!(!launch.contains(RESUME_FLAG), "{launches:?}");
+    }
+}
+
+#[tokio::test]
+async fn first_turn_failing_on_auth_shows_the_claude_login_hint() {
+    let mut fake = fake("auth").await;
+
+    fake.turn("primeiro").await;
+    assert_eq!(fake.status(), SessionStatus::Failed);
+    assert_eq!(
+        fake.errors().await,
+        [
+            "Invalid API key - Please run /login\nrequer login: Execute `claude auth login` no terminal para entrar."
+        ]
+    );
+}
+
+#[test]
+fn abort_fails_a_live_turn_and_cancels_a_cancelled_one() {
+    let mut turns = Turns::default();
+    assert_eq!(turns.abort("gone".to_owned()), None);
+
+    turns.start();
+    assert_eq!(
+        turns.abort("gone".to_owned()),
+        Some(Close::Failed("gone".to_owned()))
+    );
+    turns.start();
+    turns.cancel();
+    assert_eq!(turns.abort("gone".to_owned()), Some(Close::Cancelled));
     assert!(!turns.in_turn());
 }
