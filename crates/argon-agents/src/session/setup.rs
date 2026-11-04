@@ -162,6 +162,7 @@ async fn open(
             model,
             models,
             warnings: Vec::new(),
+            permission_mode: None,
         },
         session,
     })

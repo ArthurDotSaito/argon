@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::state::{
-    ModelPages, Sandbox, agent_mode, common_dir, gitdir_target, is_archived, project_roots,
+    ModelPages, Sandbox, common_dir, effective_mode, gitdir_target, is_archived, project_roots,
     readiness, trust_keys,
 };
 use crate::codex::protocol::{
@@ -46,6 +46,7 @@ pub(super) struct ThreadSetup<'a> {
 pub(super) struct Started {
     pub thread: String,
     pub model: Option<String>,
+    pub mode: PermissionMode,
     pub sandbox: Sandbox,
 }
 
@@ -172,7 +173,7 @@ pub(super) async fn open_thread(
 ) -> std::result::Result<Started, String> {
     handshake(rpc).await?;
     let sandbox = sandbox_readiness(rpc).await;
-    let mode = agent_mode(setup.mode, &sandbox);
+    let mode = effective_mode(setup.mode, &sandbox);
     let (thread, result) = match open {
         Open::Start => {
             let params = thread_params(setup.cwd, setup.model, mode);
@@ -194,6 +195,7 @@ pub(super) async fn open_thread(
     Ok(Started {
         thread,
         model: thread_model(&result),
+        mode,
         sandbox,
     })
 }

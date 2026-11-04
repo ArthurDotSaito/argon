@@ -197,6 +197,10 @@ impl Shared {
         });
     }
 
+    pub(super) fn start_in_mode(&self, mode: PermissionMode) {
+        self.lock().permission_mode = mode;
+    }
+
     pub fn emit(&self, event: AgentEvent) {
         let mut state = self.lock();
         self.emit_locked(&mut state, event);

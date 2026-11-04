@@ -26,8 +26,8 @@ mod state;
 
 use launch::{Codex, Feed, Open, Tagged, ThreadSetup, list_models, open_thread, workspace};
 use state::{
-    Close, ModeSwitch, Sandbox, Turns, agent_mode, auto_allowed, check_model, exit_message,
-    grants_session, pick_model, sandbox_warning,
+    Close, ModeChange, ModeSwitch, Sandbox, Turns, auto_allowed, check_model, exit_message,
+    grants_session, mode_refusal, pick_model, sandbox_warning,
 };
 
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
@@ -90,7 +90,6 @@ struct Session {
     mode: PermissionMode,
     switch: ModeSwitch,
     sandbox: Sandbox,
-    warned: bool,
     codex: Option<Codex>,
     generation: u64,
     decoder: Decoder,
@@ -136,10 +135,7 @@ impl Session {
                     self.change_model(model, reply);
                 }
                 Wake::Command(Some(Command::SetPermissionMode { mode, reply })) => {
-                    if let Some(mode) = self.switch.request(mode, self.turns.in_turn()) {
-                        self.apply_mode(mode);
-                    }
-                    let _ = reply.send(Ok(()));
+                    let _ = reply.send(self.change_mode(mode));
                 }
                 Wake::Feed((generation, feed)) if self.is_current(generation) => {
                     self.on_feed(feed).await?;
@@ -192,20 +188,40 @@ impl Session {
         self.shared.set_permission_mode(mode);
     }
 
+    fn change_mode(&mut self, mode: PermissionMode) -> Result<()> {
+        if let Some(refusal) = mode_refusal(mode, &self.sandbox) {
+            return Err(refusal);
+        }
+        match self.switch.request(mode, self.mode, self.turns.in_turn()) {
+            ModeChange::ApplyNow(mode) => self.apply_mode(mode),
+            ModeChange::AtTurnEnd(mode) => {
+                tracing::info!(
+                    mode = mode.as_str(),
+                    "widening Codex mode after the running turn"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn apply_pending_mode(&mut self) {
-        if let Some(mode) = self.switch.take() {
-            self.apply_mode(mode);
+        let Some(mode) = self.switch.take() else {
+            return;
+        };
+        match mode_refusal(mode, &self.sandbox) {
+            Some(refusal) => self.shared.emit(AgentEvent::Error(refusal.to_string())),
+            None => self.apply_mode(mode),
         }
     }
 
-    fn agent_mode(&mut self) -> PermissionMode {
-        if !self.warned
-            && let Some(warning) = sandbox_warning(self.mode, &self.sandbox)
-        {
-            self.warned = true;
+    fn sync_started_mode(&mut self, started: PermissionMode) {
+        if started == self.mode {
+            return;
+        }
+        if let Some(warning) = sandbox_warning(self.mode, &self.sandbox) {
             self.shared.emit(AgentEvent::Error(warning));
         }
-        agent_mode(self.mode, &self.sandbox)
+        self.apply_mode(started);
     }
 
     async fn ensure_process(&mut self) -> std::result::Result<(), String> {
@@ -230,6 +246,7 @@ impl Session {
         match open_thread(&codex.rpc, Open::Resume(&self.thread), &setup).await {
             Ok(started) => {
                 self.sandbox = started.sandbox;
+                self.sync_started_mode(started.mode);
                 self.codex = Some(codex);
                 self.decoder = Decoder::new();
                 Ok(())
@@ -260,10 +277,9 @@ impl Session {
             self.shared.fail(with_stderr(message, &self.shared));
             return;
         }
-        let mode = self.agent_mode();
         let params = with_mode(
             turn_params(&self.thread, &text, self.chosen_model.as_deref(), None),
-            mode,
+            self.mode,
         );
         let started = match self.rpc() {
             Some(rpc) => rpc.call("turn/start", params).await,
@@ -434,9 +450,9 @@ struct Opened {
     models: Vec<ModelInfo>,
     model: String,
     chosen_model: Option<String>,
+    mode: PermissionMode,
     sandbox: Sandbox,
     warnings: Vec<String>,
-    warned: bool,
     agent_cwd: PathBuf,
     untrusted: Vec<String>,
 }
@@ -475,18 +491,16 @@ async fn connect(
         ),
     };
     let choice = pick_model(chosen, started.model.as_deref(), default.as_deref());
-    let warning = sandbox_warning(run.ctx.permission_mode, &started.sandbox);
-    let warned = warning.is_some();
-    warnings.extend(warning);
+    warnings.extend(sandbox_warning(run.ctx.permission_mode, &started.sandbox));
     Ok(Opened {
         codex,
         thread: started.thread,
         models,
         model: choice.shown,
         chosen_model: choice.sent,
+        mode: started.mode,
         sandbox: started.sandbox,
         warnings,
-        warned,
         agent_cwd: workspace.cwd,
         untrusted: workspace.untrusted,
     })
@@ -507,6 +521,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             model: opened.model.clone(),
             models: opened.models.clone(),
             warnings: opened.warnings,
+            permission_mode: Some(opened.mode),
         };
         if run.ready.send(Ok(ready)).is_err() {
             opened.codex.stop().await;
@@ -523,10 +538,9 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             thread: opened.thread,
             models: opened.models,
             chosen_model: opened.chosen_model,
-            mode: run.ctx.permission_mode,
+            mode: opened.mode,
             switch: ModeSwitch::default(),
             sandbox: opened.sandbox,
-            warned: opened.warned,
             generation: opened.codex.generation,
             codex: Some(opened.codex),
             decoder: Decoder::new(),

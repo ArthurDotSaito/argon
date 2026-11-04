@@ -184,20 +184,50 @@ pub(super) fn readiness(result: std::result::Result<Value, String>) -> Sandbox {
     }
 }
 
-pub(super) fn agent_mode(mode: PermissionMode, sandbox: &Sandbox) -> PermissionMode {
+pub(super) fn full_access_blocked(mode: PermissionMode, sandbox: &Sandbox) -> Option<&str> {
     match (mode, sandbox) {
-        (PermissionMode::FullAccess, Err(_)) => PermissionMode::Supervised,
-        _ => mode,
+        (PermissionMode::FullAccess, Err(status)) => Some(status),
+        _ => None,
     }
 }
 
-pub(super) fn sandbox_warning(mode: PermissionMode, sandbox: &Sandbox) -> Option<String> {
-    match (mode, sandbox) {
-        (PermissionMode::FullAccess, Err(status)) => Some(format!(
-            "a sandbox do Codex no Windows não está pronta ({status}); Acesso total vai pedir aprovação para comandos"
-        )),
-        _ => None,
+pub(super) fn effective_mode(requested: PermissionMode, sandbox: &Sandbox) -> PermissionMode {
+    if full_access_blocked(requested, sandbox).is_some() {
+        PermissionMode::Supervised
+    } else {
+        requested
     }
+}
+
+pub(super) fn sandbox_warning(requested: PermissionMode, sandbox: &Sandbox) -> Option<String> {
+    full_access_blocked(requested, sandbox).map(|status| {
+        format!(
+            "a sandbox do Codex no Windows não está pronta ({status}); a sessão abriu em Supervisionado — Acesso total fica indisponível"
+        )
+    })
+}
+
+pub(super) fn mode_refusal(mode: PermissionMode, sandbox: &Sandbox) -> Option<SessionError> {
+    full_access_blocked(mode, sandbox).map(|status| SessionError::SetPermissionMode {
+        mode: mode.as_str().to_owned(),
+        reason: format!(
+            "a sandbox do Codex no Windows não está pronta ({status}); Acesso total fica indisponível nesta sessão"
+        ),
+    })
+}
+
+fn breadth(mode: PermissionMode) -> u8 {
+    match mode {
+        PermissionMode::Supervised => 0,
+        PermissionMode::AcceptEdits => 1,
+        PermissionMode::FullAccess => 2,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ModeChange {
+    ApplyNow(PermissionMode),
+    AtTurnEnd(PermissionMode),
 }
 
 #[derive(Debug, Default)]
@@ -206,13 +236,18 @@ pub(super) struct ModeSwitch {
 }
 
 impl ModeSwitch {
-    pub fn request(&mut self, mode: PermissionMode, in_turn: bool) -> Option<PermissionMode> {
-        if in_turn {
+    pub fn request(
+        &mut self,
+        mode: PermissionMode,
+        current: PermissionMode,
+        in_turn: bool,
+    ) -> ModeChange {
+        if in_turn && breadth(mode) > breadth(current) {
             self.pending = Some(mode);
-            None
+            ModeChange::AtTurnEnd(mode)
         } else {
             self.pending = None;
-            Some(mode)
+            ModeChange::ApplyNow(mode)
         }
     }
 

@@ -589,6 +589,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             model: run.ctx.model.clone(),
             models: opened.models.clone(),
             warnings: opened.warnings,
+            permission_mode: None,
         };
         if run.ready.send(Ok(ready)).is_err() {
             opened.reader.abort();

@@ -566,6 +566,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             model: session.model.clone(),
             models: run.spec.models.clone(),
             warnings: Vec::new(),
+            permission_mode: None,
         };
         if run.ready.send(Ok(ready)).is_err() {
             return Ok(false);

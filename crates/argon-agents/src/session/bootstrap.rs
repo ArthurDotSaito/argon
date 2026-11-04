@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use argon_core::PermissionMode;
 use argon_store::{NewAgentSession, SessionStatus};
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -22,6 +23,7 @@ pub(crate) struct Ready {
     pub model: String,
     pub models: Vec<ModelInfo>,
     pub warnings: Vec<String>,
+    pub permission_mode: Option<PermissionMode>,
 }
 
 pub(crate) struct DriverRun {
@@ -157,6 +159,8 @@ pub(super) async fn launch(
         Ok(Err(_)) => return Err(startup_error(&tail, spec)),
         Err(_) => return Err(SessionError::StartupTimeout(options.startup_timeout)),
     };
+    let permission_mode = ready.permission_mode.unwrap_or(ctx.permission_mode);
+    shared.start_in_mode(permission_mode);
 
     let last_seq = match &load {
         Some(_) => writer.last_seq(&ctx.id).await,
@@ -170,7 +174,7 @@ pub(super) async fn launch(
                 worktree_path: Some(ctx.cwd.clone()),
                 acp_session_id: Some(ready.agent_session_id.clone()),
                 transport: spec.transport.as_str().to_owned(),
-                permission_mode: ctx.permission_mode.as_str().to_owned(),
+                permission_mode: permission_mode.as_str().to_owned(),
                 nonce: ctx.nonce.clone(),
                 allowed_files: ctx.allowed_files.clone(),
             })
@@ -194,6 +198,9 @@ pub(super) async fn launch(
     shared.activate(status, last_seq, ready.model.clone(), ready.models.clone());
     if load.is_some() && !ready.model.is_empty() {
         shared.set_model(&ready.model);
+    }
+    if load.is_some() && permission_mode != ctx.permission_mode {
+        shared.set_permission_mode(permission_mode);
     }
     if !ready.models.is_empty() {
         shared.emit(AgentEvent::ModelsAvailable(ready.models));

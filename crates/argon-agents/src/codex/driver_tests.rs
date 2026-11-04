@@ -362,23 +362,73 @@ fn commondir_is_resolved_against_the_gitdir() {
 }
 
 #[test]
-fn a_mode_change_waits_for_the_running_turn() {
+fn widening_the_mode_mid_turn_waits_for_the_turn_to_end() {
     let mut switch = ModeSwitch::default();
 
-    assert_eq!(switch.request(PermissionMode::FullAccess, true), None);
-    assert_eq!(switch.request(PermissionMode::AcceptEdits, true), None);
+    assert_eq!(
+        switch.request(PermissionMode::FullAccess, PermissionMode::Supervised, true),
+        ModeChange::AtTurnEnd(PermissionMode::FullAccess)
+    );
+    assert_eq!(
+        switch.request(
+            PermissionMode::AcceptEdits,
+            PermissionMode::Supervised,
+            true
+        ),
+        ModeChange::AtTurnEnd(PermissionMode::AcceptEdits)
+    );
     assert_eq!(switch.take(), Some(PermissionMode::AcceptEdits));
     assert_eq!(switch.take(), None);
 }
 
 #[test]
-fn a_mode_change_while_idle_applies_at_once_and_drops_older_pending() {
+fn restricting_or_keeping_the_mode_mid_turn_applies_at_once() {
     let mut switch = ModeSwitch::default();
 
-    switch.request(PermissionMode::FullAccess, true);
+    switch.request(
+        PermissionMode::FullAccess,
+        PermissionMode::AcceptEdits,
+        true,
+    );
     assert_eq!(
-        switch.request(PermissionMode::Supervised, false),
-        Some(PermissionMode::Supervised)
+        switch.request(
+            PermissionMode::Supervised,
+            PermissionMode::AcceptEdits,
+            true
+        ),
+        ModeChange::ApplyNow(PermissionMode::Supervised)
+    );
+    assert_eq!(switch.take(), None);
+    assert_eq!(
+        switch.request(
+            PermissionMode::AcceptEdits,
+            PermissionMode::AcceptEdits,
+            true
+        ),
+        ModeChange::ApplyNow(PermissionMode::AcceptEdits)
+    );
+    assert_eq!(
+        switch.request(
+            PermissionMode::AcceptEdits,
+            PermissionMode::FullAccess,
+            true
+        ),
+        ModeChange::ApplyNow(PermissionMode::AcceptEdits)
+    );
+}
+
+#[test]
+fn any_mode_change_while_idle_applies_at_once_and_drops_older_pending() {
+    let mut switch = ModeSwitch::default();
+
+    switch.request(PermissionMode::FullAccess, PermissionMode::Supervised, true);
+    assert_eq!(
+        switch.request(
+            PermissionMode::FullAccess,
+            PermissionMode::Supervised,
+            false
+        ),
+        ModeChange::ApplyNow(PermissionMode::FullAccess)
     );
     assert_eq!(switch.take(), None);
 }
@@ -402,29 +452,37 @@ fn sandbox_readiness_needs_the_ready_status() {
 }
 
 #[test]
-fn full_access_falls_back_to_supervised_values_without_the_sandbox() {
+fn full_access_is_unavailable_without_the_sandbox() {
     let missing: Sandbox = Err("notConfigured".to_owned());
     let ready: Sandbox = Ok(());
 
     assert_eq!(
-        agent_mode(PermissionMode::FullAccess, &missing),
+        effective_mode(PermissionMode::FullAccess, &missing),
         PermissionMode::Supervised
     );
     assert_eq!(
-        agent_mode(PermissionMode::FullAccess, &ready),
+        effective_mode(PermissionMode::FullAccess, &ready),
         PermissionMode::FullAccess
     );
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
-        assert_eq!(agent_mode(mode, &missing), mode);
-        assert_eq!(sandbox_warning(mode, &missing), None);
+        for sandbox in [&missing, &ready] {
+            assert_eq!(effective_mode(mode, sandbox), mode);
+            assert_eq!(sandbox_warning(mode, sandbox), None);
+            assert!(mode_refusal(mode, sandbox).is_none());
+        }
     }
     assert_eq!(sandbox_warning(PermissionMode::FullAccess, &ready), None);
+    assert!(mode_refusal(PermissionMode::FullAccess, &ready).is_none());
     assert_eq!(
         sandbox_warning(PermissionMode::FullAccess, &missing).as_deref(),
         Some(
-            "a sandbox do Codex no Windows não está pronta (notConfigured); Acesso total vai pedir aprovação para comandos"
+            "a sandbox do Codex no Windows não está pronta (notConfigured); a sessão abriu em Supervisionado — Acesso total fica indisponível"
         )
     );
+    assert!(matches!(
+        mode_refusal(PermissionMode::FullAccess, &missing),
+        Some(SessionError::SetPermissionMode { reason, .. }) if reason.contains("notConfigured")
+    ));
 }
 
 #[test]
