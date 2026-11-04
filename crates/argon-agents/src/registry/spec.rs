@@ -216,7 +216,7 @@ mod tests {
                 args: vec!["--verbose".into()],
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
-                use_acp: false,
+                use_acp: true,
                 ..AgentCfg::default()
             },
         );

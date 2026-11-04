@@ -179,7 +179,12 @@ fn percent_is_clamped_into_range() {
 
 #[test]
 fn the_probe_launches_the_installed_cli_not_the_acp_adapter() {
-    let acp_spec = crate::agent_spec(AgentKind::ClaudeCode, &argon_core::Config::default());
+    let acp_spec = crate::agent_spec_for(
+        AgentKind::ClaudeCode,
+        &argon_core::Config::default(),
+        crate::Transport::Acp,
+    )
+    .unwrap();
     assert_eq!(acp_spec.command, Path::new("npx"));
 
     let probe = crate::usage::probe_command(AgentKind::ClaudeCode, &acp_spec, &PROBE_ARGS);

@@ -169,9 +169,16 @@ mod tests {
             (AgentKind::ClaudeCode, &["--cli", "--version"][..]),
             (AgentKind::Codex, &["--version"][..]),
         ] {
-            let warmup = warmup_for(kind, &Config::default()).unwrap();
+            let cfg = config_with(
+                kind,
+                AgentCfg {
+                    use_acp: true,
+                    ..AgentCfg::default()
+                },
+            );
+            let warmup = warmup_for(kind, &cfg).unwrap();
             let defaults = agent_defaults(kind);
-            let launch = defaults.launch;
+            let launch = defaults.acp_fallback.unwrap_or(defaults.launch);
             assert_eq!(warmup.command, PathBuf::from(launch.command), "{kind:?}");
             assert_eq!(&warmup.args[..launch.args.len()], launch.args, "{kind:?}");
             assert_eq!(&warmup.args[launch.args.len()..], extra, "{kind:?}");
@@ -314,6 +321,7 @@ mod tests {
             AgentKind::ClaudeCode,
             AgentCfg {
                 env: BTreeMap::from([("CLAUDE_CODE_EXECUTABLE".into(), "claude.exe".into())]),
+                use_acp: true,
                 ..AgentCfg::default()
             },
         );
