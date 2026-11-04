@@ -259,6 +259,9 @@ async fn launch_with(
         Transport::ClaudeStream => {
             bootstrap::launch(spec, ctx, writer, load, options, crate::claude::driver::run).await
         }
+        Transport::CodexAppServer => {
+            bootstrap::launch(spec, ctx, writer, load, options, crate::codex::driver::run).await
+        }
         Transport::OpencodeServe => {
             bootstrap::launch(
                 spec,

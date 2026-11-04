@@ -142,6 +142,10 @@ impl RpcClient {
         self.enqueue(&json!({ "id": id, "result": result }))
     }
 
+    pub fn respond_error(&self, id: Value, code: i64, message: &str) -> Result<(), String> {
+        self.enqueue(&json!({ "id": id, "error": { "code": code, "message": message } }))
+    }
+
     fn enqueue(&self, message: &Value) -> Result<(), String> {
         let pending = lock(&self.inner.shared.pending);
         if pending.is_none() {
@@ -234,8 +238,8 @@ fn dispatch(line: &str, shared: &Shared, incoming: &mpsc::UnboundedSender<Incomi
                 return;
             };
             let outcome = match object.remove("error") {
-                Some(error) => Err(Failure::Rpc(describe_error(&error))),
-                None => Ok(object.remove("result").unwrap_or(Value::Null)),
+                Some(error) if !error.is_null() => Err(Failure::Rpc(describe_error(&error))),
+                _ => Ok(object.remove("result").unwrap_or(Value::Null)),
             };
             let _ = reply.send(outcome);
         }

@@ -129,6 +129,29 @@ async fn error_responses_carry_the_method_code_and_message() {
 }
 
 #[tokio::test]
+async fn a_null_error_next_to_a_result_is_a_success() {
+    let (client, _incoming, mut server) = connect();
+    let call = tokio::spawn(async move { client.call("model/list", json!({})).await });
+    server.read().await;
+    server
+        .send(json!({ "id": 1, "result": { "data": [] }, "error": null }))
+        .await;
+    assert_eq!(call.await.unwrap().unwrap(), json!({ "data": [] }));
+}
+
+#[tokio::test]
+async fn error_responses_to_server_requests_carry_code_and_message() {
+    let (client, _incoming, mut server) = connect();
+    client
+        .respond_error(json!(4), -32601, "unsupported: currentTime/read")
+        .unwrap();
+    assert_eq!(
+        server.read().await,
+        json!({ "id": 4, "error": { "code": -32601, "message": "unsupported: currentTime/read" } })
+    );
+}
+
+#[tokio::test]
 async fn server_requests_and_notifications_arrive_as_incoming_with_null_params_when_absent() {
     let (_client, mut incoming, mut server) = connect();
     server
@@ -219,6 +242,10 @@ async fn eof_fails_pending_calls_ends_the_receiver_and_later_calls_fail_fast() {
     assert_eq!(client.call("later", json!({})).await.unwrap_err(), CLOSED);
     assert_eq!(client.notify("later", None).unwrap_err(), CLOSED);
     assert_eq!(client.respond(json!(1), json!({})).unwrap_err(), CLOSED);
+    assert_eq!(
+        client.respond_error(json!(1), -32601, "x").unwrap_err(),
+        CLOSED
+    );
 }
 
 struct BrokenWriter;

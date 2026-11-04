@@ -51,6 +51,7 @@ pub(crate) enum CodexEvent {
 pub(crate) enum CodexRequest {
     Ask(PermissionAsk),
     Reply(Value),
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +117,7 @@ impl Decoder {
         } else if method == DYNAMIC_TOOL_METHOD {
             CodexRequest::Reply(json!({"success": false, "contentItems": []}))
         } else {
-            CodexRequest::Reply(json!({}))
+            CodexRequest::Unsupported
         }
     }
 
@@ -290,18 +291,66 @@ pub(crate) fn initialize_params(version: &str) -> Value {
     })
 }
 
+struct Policy {
+    approval: &'static str,
+    sandbox: &'static str,
+    sandbox_type: &'static str,
+}
+
+fn policy(mode: PermissionMode) -> Policy {
+    match mode {
+        PermissionMode::Supervised | PermissionMode::AcceptEdits => Policy {
+            approval: "on-request",
+            sandbox: "read-only",
+            sandbox_type: "readOnly",
+        },
+        PermissionMode::FullAccess => Policy {
+            approval: "never",
+            sandbox: "workspace-write",
+            sandbox_type: "workspaceWrite",
+        },
+    }
+}
+
 pub(crate) fn thread_params(cwd: &Path, model: Option<&str>, mode: PermissionMode) -> Value {
-    let (approval_policy, sandbox) = match mode {
-        PermissionMode::Supervised | PermissionMode::AcceptEdits => ("on-request", "read-only"),
-        PermissionMode::FullAccess => ("never", "workspace-write"),
-    };
+    let policy = policy(mode);
     let mut params = json!({
         "cwd": cwd.to_string_lossy(),
-        "approvalPolicy": approval_policy,
-        "sandbox": sandbox,
+        "approvalPolicy": policy.approval,
+        "sandbox": policy.sandbox,
     });
     set_optional(&mut params, "model", model);
     params
+}
+
+pub(crate) fn with_mode(mut params: Value, mode: PermissionMode) -> Value {
+    let policy = policy(mode);
+    params["approvalPolicy"] = json!(policy.approval);
+    params["sandboxPolicy"] = json!({"type": policy.sandbox_type});
+    params
+}
+
+pub(crate) fn with_untrusted_projects(mut params: Value, roots: &[String]) -> Value {
+    let projects: Map<String, Value> = roots
+        .iter()
+        .map(|root| (root.clone(), json!({"trust_level": "untrusted"})))
+        .collect();
+    params["config"] = json!({"projects": projects});
+    params
+}
+
+pub(crate) fn thread_id(result: &Value) -> Option<String> {
+    result
+        .get("thread")
+        .and_then(|thread| text_field(thread, "id"))
+}
+
+pub(crate) fn turn_id(result: &Value) -> Option<String> {
+    result.get("turn").and_then(|turn| text_field(turn, "id"))
+}
+
+pub(crate) fn message_turn(params: &Value) -> Option<String> {
+    text_field(params, "turnId").or_else(|| turn_id(params))
 }
 
 pub(crate) fn resume_params(
@@ -386,7 +435,7 @@ fn chunk(params: &Value, build: fn(String) -> AgentEvent) -> CodexEvent {
 }
 
 fn turn_started(params: &Value) -> CodexEvent {
-    match params.get("turn").and_then(|turn| text_field(turn, "id")) {
+    match turn_id(params) {
         Some(turn_id) => CodexEvent::TurnStarted { turn_id },
         None => CodexEvent::Ignore,
     }

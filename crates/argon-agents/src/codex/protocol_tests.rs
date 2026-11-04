@@ -990,11 +990,20 @@ fn user_input_requests_answer_every_question_with_nothing() {
 }
 
 #[test]
-fn unknown_requests_reply_with_empty_object() {
-    assert_eq!(
-        Decoder::new().request("account/chatgptAuthTokens/refresh", &json!({"x": 1})),
-        CodexRequest::Reply(json!({}))
-    );
+fn requests_without_a_schema_valid_reply_are_unsupported() {
+    let mut decoder = Decoder::new();
+    for method in [
+        "account/chatgptAuthTokens/refresh",
+        "currentTime/read",
+        "attestation/generate",
+        "something/new",
+    ] {
+        assert_eq!(
+            decoder.request(method, &json!({"x": 1})),
+            CodexRequest::Unsupported,
+            "{method}"
+        );
+    }
 }
 
 #[test]
@@ -1203,6 +1212,69 @@ fn turn_params_include_optional_model_and_effort() {
         turn_params("th_1", "revise", Some("gpt-5"), Some("high")),
         json!({"threadId": "th_1", "input": [{"type": "text", "text": "revise"}], "model": "gpt-5", "effort": "high"})
     );
+}
+
+#[test]
+fn turn_mode_overrides_follow_permission_mode() {
+    let base = || turn_params("th_1", "revise", None, None);
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        let params = with_mode(base(), mode);
+        assert_eq!(params["approvalPolicy"], json!("on-request"));
+        assert_eq!(params["sandboxPolicy"], json!({"type": "readOnly"}));
+        assert_eq!(params["threadId"], json!("th_1"));
+    }
+    let full = with_mode(base(), PermissionMode::FullAccess);
+    assert_eq!(full["approvalPolicy"], json!("never"));
+    assert_eq!(full["sandboxPolicy"], json!({"type": "workspaceWrite"}));
+}
+
+#[test]
+fn untrusted_projects_go_into_the_thread_config() {
+    let params = with_untrusted_projects(
+        thread_params(Path::new("repo"), None, PermissionMode::Supervised),
+        &["C:\\Work\\Repo".to_owned(), "c:\\work\\repo".to_owned()],
+    );
+    assert_eq!(
+        params["config"],
+        json!({"projects": {
+            "C:\\Work\\Repo": {"trust_level": "untrusted"},
+            "c:\\work\\repo": {"trust_level": "untrusted"},
+        }})
+    );
+    assert_eq!(params["sandbox"], json!("read-only"));
+}
+
+#[test]
+fn response_ids_come_from_thread_and_turn_objects() {
+    assert_eq!(
+        thread_id(&json!({"thread": {"id": "th_1"}, "model": "gpt-5"})),
+        Some("th_1".to_owned())
+    );
+    assert_eq!(
+        turn_id(&json!({"turn": {"id": "u1", "status": "inProgress"}})),
+        Some("u1".to_owned())
+    );
+    for malformed in [
+        json!({}),
+        json!({"thread": {"id": ""}}),
+        json!({"turn": "u1"}),
+    ] {
+        assert_eq!(thread_id(&malformed), None);
+        assert_eq!(turn_id(&malformed), None);
+    }
+}
+
+#[test]
+fn message_turn_reads_turn_id_or_nested_turn() {
+    assert_eq!(
+        message_turn(&json!({"threadId": "th", "turnId": "u1", "delta": "x"})),
+        Some("u1".to_owned())
+    );
+    assert_eq!(
+        message_turn(&json!({"threadId": "th", "turn": {"id": "u2"}})),
+        Some("u2".to_owned())
+    );
+    assert_eq!(message_turn(&json!({"callId": "c"})), None);
 }
 
 #[test]

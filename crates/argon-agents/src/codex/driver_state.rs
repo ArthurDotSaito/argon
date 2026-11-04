@@ -1,0 +1,197 @@
+use std::collections::HashSet;
+use std::path::Path;
+
+use argon_core::PermissionMode;
+use serde_json::{Value, json};
+
+use crate::codex::protocol::next_cursor;
+use crate::registry::ModelInfo;
+use crate::session::{
+    ALLOW_ALWAYS, PermissionAnswer, PermissionAsk, PermissionDecision, Result, SessionError,
+    decide_permission, session_grant_applies,
+};
+
+const END_TURN: &str = "end_turn";
+const CANCELLED: &str = "cancelled";
+const ARCHIVED_MARKER: &str = "archived";
+const MAX_MODELS: usize = 500;
+const MAX_MODEL_PAGES: usize = 50;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Close {
+    Completed,
+    Cancelled,
+    Failed(String),
+}
+
+#[derive(Debug)]
+struct Turn {
+    id: String,
+    cancelled: bool,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct Turns {
+    current: Option<Turn>,
+}
+
+impl Turns {
+    pub fn in_turn(&self) -> bool {
+        self.current.is_some()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.current.as_ref().is_some_and(|turn| turn.cancelled)
+    }
+
+    pub fn current_id(&self) -> Option<&str> {
+        self.current.as_ref().map(|turn| turn.id.as_str())
+    }
+
+    pub fn start(&mut self, id: String) {
+        self.current = Some(Turn {
+            id,
+            cancelled: false,
+        });
+    }
+
+    pub fn owns(&self, turn_id: Option<&str>) -> bool {
+        match (&self.current, turn_id) {
+            (Some(turn), Some(id)) => turn.id == id,
+            (Some(_), None) => true,
+            (None, _) => false,
+        }
+    }
+
+    pub fn accepts_request(&self, turn_id: Option<&str>) -> bool {
+        self.owns(turn_id) && !self.is_cancelled()
+    }
+
+    pub fn cancel(&mut self) -> bool {
+        match &mut self.current {
+            Some(turn) if !turn.cancelled => {
+                turn.cancelled = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn finish(
+        &mut self,
+        turn_id: &str,
+        stop_reason: &str,
+        error: Option<String>,
+    ) -> Option<Close> {
+        if !self.owns(Some(turn_id)) {
+            return None;
+        }
+        let turn = self.current.take()?;
+        Some(if turn.cancelled || stop_reason == CANCELLED {
+            Close::Cancelled
+        } else if stop_reason == END_TURN {
+            Close::Completed
+        } else {
+            Close::Failed(error.unwrap_or_else(|| stop_reason.to_owned()))
+        })
+    }
+
+    pub fn expire(&mut self) -> Option<Close> {
+        if !self.is_cancelled() {
+            return None;
+        }
+        self.current = None;
+        Some(Close::Cancelled)
+    }
+}
+
+pub(super) fn auto_allowed(
+    ask: &PermissionAsk,
+    cwd: &Path,
+    mode: PermissionMode,
+    grants: &HashSet<String>,
+) -> bool {
+    match decide_permission(ask, cwd, mode) {
+        PermissionDecision::Allow { .. } => true,
+        PermissionDecision::Ask(_) => grants.contains(&ask.kind) && session_grant_applies(ask, cwd),
+    }
+}
+
+pub(super) fn grants_session(answer: &PermissionAnswer) -> bool {
+    matches!(answer, PermissionAnswer::Selected(option) if option == ALLOW_ALWAYS)
+}
+
+pub(super) fn check_model(models: &[ModelInfo], model: &str) -> Result<()> {
+    if models.is_empty() || models.iter().any(|known| known.id == model) {
+        Ok(())
+    } else {
+        Err(SessionError::ModelUnavailable {
+            model: model.to_owned(),
+        })
+    }
+}
+
+pub(super) fn is_archived(error: &str) -> bool {
+    error.to_lowercase().contains(ARCHIVED_MARKER)
+}
+
+pub(super) fn exit_message(code: Option<i32>) -> String {
+    match code {
+        Some(code) => format!("o Codex encerrou: o processo saiu (código {code})"),
+        None => "o Codex encerrou: a conexão foi fechada".to_owned(),
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ModelPages {
+    items: Vec<Value>,
+    cursors: HashSet<String>,
+    pages: usize,
+}
+
+impl ModelPages {
+    pub fn add(&mut self, page: &Value) -> Option<String> {
+        self.pages += 1;
+        let room = MAX_MODELS.saturating_sub(self.items.len());
+        let items = page
+            .get("data")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        self.items.extend(items.iter().take(room).cloned());
+        let cursor = next_cursor(page)?;
+        let more = self.items.len() < MAX_MODELS
+            && self.pages < MAX_MODEL_PAGES
+            && self.cursors.insert(cursor.clone());
+        more.then_some(cursor)
+    }
+
+    pub fn result(&self) -> Value {
+        json!({"data": self.items})
+    }
+}
+
+pub(super) fn project_roots(cwd: &Path, is_root: impl Fn(&Path) -> bool) -> Vec<&Path> {
+    let mut roots = Vec::new();
+    for dir in cwd.ancestors() {
+        roots.push(dir);
+        if is_root(dir) {
+            break;
+        }
+    }
+    roots
+}
+
+pub(super) fn trust_keys(roots: &[&Path]) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for root in roots {
+        let text = root.display().to_string();
+        let lower = cfg!(windows).then(|| text.to_lowercase());
+        for key in std::iter::once(text).chain(lower) {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+    }
+    keys
+}
