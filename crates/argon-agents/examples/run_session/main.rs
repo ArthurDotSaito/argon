@@ -292,7 +292,7 @@ async fn run() -> Result<(), BoxError> {
 
     let outcome = match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {
         Ok((session, handle)) => {
-            println!("session: {} (acp {})", session.id, session.acp_session_id);
+            println!("session: {} (acp {})", session.id, session.agent_session_id);
             let before = writer.transactions();
             let driven = drive(&handle, rendered.text, args.cancel_after).await;
             writer.flush().await;

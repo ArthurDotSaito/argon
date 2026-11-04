@@ -9,26 +9,20 @@ use agent_client_protocol::v1::schema::{
 use agent_client_protocol::{Agent, UntypedMessage};
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::bootstrap::{DriverRun, Ready};
 use super::driver::Shared;
 use super::events::{AgentEvent, config_option, config_values, current_value};
 use super::failure::{STDERR_LINES, classify, turn_failure};
 use super::turn::stop_reason_name;
-use super::{Command, Result, SessionContext, SessionError, SessionOptions};
+use super::{Command, Result, SessionContext, SessionError};
 use crate::defaults::{ModelSelection, agent_defaults};
-use crate::registry::{AgentSpec, ModelInfo};
+use crate::registry::AgentSpec;
 
 const MODE_CONFIG_ID: &str = "mode";
 type Turn = BoxFuture<'static, agent_client_protocol::Result<PromptResponse>>;
-
-pub(super) struct Ready {
-    pub acp_session_id: String,
-    pub model: String,
-    pub models: Vec<ModelInfo>,
-    pub warnings: Vec<String>,
-}
 
 async fn call(
     cx: &ConnectionTo<Agent>,
@@ -148,7 +142,7 @@ async fn open(
     };
     Ok(Opened {
         ready: Ready {
-            acp_session_id,
+            agent_session_id: acp_session_id,
             model,
             models,
             warnings,
@@ -210,21 +204,11 @@ impl ModelChange {
     }
 }
 
-pub(super) struct Connection {
-    pub shared: Arc<Shared>,
-    pub spec: AgentSpec,
-    pub ctx: SessionContext,
-    pub load: Option<String>,
-    pub options: SessionOptions,
-    pub commands: mpsc::UnboundedReceiver<Command>,
-    pub ready: oneshot::Sender<Result<Ready>>,
-}
-
 pub(super) async fn run_connection(
     cx: ConnectionTo<Agent>,
-    connection: Connection,
+    run: DriverRun,
 ) -> agent_client_protocol::Result<bool> {
-    let Connection {
+    let DriverRun {
         shared,
         spec,
         ctx,
@@ -232,7 +216,8 @@ pub(super) async fn run_connection(
         options,
         mut commands,
         ready,
-    } = connection;
+        ..
+    } = run;
     let Opened {
         ready: opened,
         session,
@@ -243,7 +228,7 @@ pub(super) async fn run_connection(
             return Ok(false);
         }
     };
-    let acp_id = opened.acp_session_id.clone();
+    let acp_id = opened.agent_session_id.clone();
     let session = Arc::new(session);
     if ready.send(Ok(opened)).is_err() {
         return Ok(false);

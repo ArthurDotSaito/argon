@@ -1,5 +1,6 @@
 mod acp;
 mod acp_permissions;
+mod bootstrap;
 mod driver;
 mod events;
 mod failure;
@@ -19,6 +20,7 @@ use argon_store::SessionStatus;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
+use crate::Transport;
 use crate::registry::AgentSpec;
 
 pub use driver::Snapshot;
@@ -38,7 +40,7 @@ pub enum SessionError {
     CommandNotFound(String),
     #[error("falha ao iniciar o agente: {0}")]
     Spawn(#[from] std::io::Error),
-    #[error("o agente não respondeu ao handshake ACP em {0:?}")]
+    #[error("o agente não respondeu em {0:?}")]
     StartupTimeout(Duration),
     #[error("o agente precisa de login: {hint}")]
     NeedsLogin { hint: String },
@@ -102,7 +104,7 @@ impl Default for SessionOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHandle {
     pub id: String,
-    pub acp_session_id: String,
+    pub agent_session_id: String,
 }
 
 pub fn new_session_id() -> Result<String> {
@@ -217,6 +219,19 @@ impl AgentSessionHandle {
     }
 }
 
+async fn launch_acp(
+    spec: &AgentSpec,
+    ctx: SessionContext,
+    writer: SessionWriter,
+    load: Option<String>,
+    options: SessionOptions,
+) -> Result<(SessionHandle, AgentSessionHandle)> {
+    if spec.transport != Transport::Acp {
+        return Err(SessionError::NotAcp);
+    }
+    bootstrap::launch(spec, ctx, writer, load, options, acp::run).await
+}
+
 pub async fn start_session(
     spec: &AgentSpec,
     ctx: SessionContext,
@@ -231,7 +246,7 @@ pub async fn start_session_with(
     writer: SessionWriter,
     options: SessionOptions,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
-    acp::launch(spec, ctx, writer, None, options).await
+    launch_acp(spec, ctx, writer, None, options).await
 }
 
 pub async fn resume_session(
@@ -243,7 +258,7 @@ pub async fn resume_session(
     if !spec.supports_load {
         return Err(SessionError::LoadUnsupported);
     }
-    acp::launch(
+    launch_acp(
         spec,
         ctx,
         writer,
