@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 use argon_agents::defaults::AGENT_DEFAULTS;
 use argon_agents::{
     AgentSpec, ModelInfo, ModelsCache, list_models, listing_spec, lists_models, spec_fingerprint,
+    spec_lists_models,
 };
 use argon_core::{AgentKind, Config, Paths};
 use gpui_kit::Context;
@@ -143,7 +144,7 @@ impl AgentSessions {
             .map(|global| global.0.clone());
         let now = SystemTime::now();
         let mut changed = false;
-        for spec in specs.into_iter().filter(|spec| lists_models(spec.kind)) {
+        for spec in specs.into_iter().filter(spec_lists_models) {
             let kind = spec.kind;
             let fingerprint = spec_fingerprint(&spec);
             match self.listings_mut().adopt(kind, &fingerprint) {
@@ -285,6 +286,24 @@ mod tests {
             .finish(OPENCODE, FP_A, Err("boom".into()), now)
             .unwrap_err();
         assert!(!listings.begin(OPENCODE, FP_B, now, Trigger::Automatic));
+    }
+
+    #[test]
+    fn codex_listings_start_like_the_other_listing_agents() {
+        let mut fixture = Fixture::new("codex");
+        let listings = &mut fixture.listings;
+        let now = SystemTime::now();
+        listings.adopt(AgentKind::Codex, FP_A);
+        assert!(listings.begin(AgentKind::Codex, FP_A, now, Trigger::Automatic));
+        let models = vec![model("gpt-5.5")];
+        assert_eq!(
+            listings.finish(AgentKind::Codex, FP_A, Ok(models.clone()), now),
+            Ok(Some(models.clone()))
+        );
+        assert_eq!(
+            listings.adopt(AgentKind::Codex, FP_A),
+            Adoption::Cached(models)
+        );
     }
 
     #[test]

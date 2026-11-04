@@ -24,13 +24,16 @@ mod launch;
 #[path = "driver_state.rs"]
 mod state;
 
-use launch::{Codex, Feed, Open, Tagged, ThreadSetup, list_models, open_thread, workspace};
+use launch::{
+    Codex, Feed, Open, Tagged, ThreadSetup, fetch_models, list_model_pages, open_thread, workspace,
+};
 use state::{
     Close, LEFT_FULL_ACCESS, ModeChange, ModeSwitch, Sandbox, Turns, auto_allowed, check_model,
     exit_message, grants_session, mode_refusal, pick_model, sandbox_warning,
 };
 
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
+const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 const UNSUPPORTED_REQUEST: i64 = -32601;
 const END_TURN: &str = "end_turn";
 const CANCELLED_REASON: &str = "cancelled";
@@ -496,7 +499,7 @@ async fn connect(
             return Err(SessionError::Agent(with_stderr(message, &run.shared)));
         }
     };
-    let (models, default, mut warnings) = match list_models(&codex.rpc).await {
+    let (models, default, mut warnings) = match list_model_pages(&codex.rpc).await {
         Ok(result) => (parse_models(&result), default_model(&result), Vec::new()),
         Err(error) => (
             Vec::new(),
@@ -518,6 +521,17 @@ async fn connect(
         agent_cwd: workspace.cwd,
         untrusted: workspace.untrusted,
     })
+}
+
+pub(crate) async fn list_models(spec: &AgentSpec) -> std::result::Result<Vec<ModelInfo>, String> {
+    tokio::time::timeout(LISTING_TIMEOUT, fetch_models(spec))
+        .await
+        .map_err(|_| {
+            format!(
+                "listing Codex models timed out after {}s",
+                LISTING_TIMEOUT.as_secs()
+            )
+        })?
 }
 
 pub(crate) fn run(run: DriverRun) -> DriverFuture {

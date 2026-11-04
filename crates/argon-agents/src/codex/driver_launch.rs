@@ -10,12 +10,12 @@ use super::state::{
     readiness, trust_keys,
 };
 use crate::codex::protocol::{
-    initialize_params, resume_params, thread_id, thread_model, thread_params,
+    initialize_params, parse_models, resume_params, thread_id, thread_model, thread_params,
     with_untrusted_projects,
 };
 use crate::jsonrpc::{Incoming, RpcClient};
 use crate::process::KillOnDropChild;
-use crate::registry::AgentSpec;
+use crate::registry::{AgentSpec, ModelInfo};
 use crate::session::{Result, SessionError, StderrTail, start_agent, terminate};
 use crate::util::{Resolved, resolve_command};
 
@@ -200,7 +200,20 @@ pub(super) async fn open_thread(
     })
 }
 
-pub(super) async fn list_models(rpc: &RpcClient) -> std::result::Result<Value, String> {
+pub(super) async fn fetch_models(spec: &AgentSpec) -> std::result::Result<Vec<ModelInfo>, String> {
+    let (feed, _fed) = mpsc::unbounded_channel();
+    let tail = Arc::new(StderrTail::default());
+    let codex = Codex::spawn(spec, &std::env::temp_dir(), tail, 0, &feed)
+        .map_err(|error| error.to_string())?;
+    let listed = match handshake(&codex.rpc).await {
+        Ok(()) => list_model_pages(&codex.rpc).await,
+        Err(error) => Err(error),
+    };
+    codex.stop().await;
+    listed.map(|result| parse_models(&result))
+}
+
+pub(super) async fn list_model_pages(rpc: &RpcClient) -> std::result::Result<Value, String> {
     let mut pages = ModelPages::default();
     let mut params = json!({});
     loop {

@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use argon_agents::{
     AgentSpec, Detection, ModelInfo, Support, Transport, agent_spec, effective_transport,
-    list_models, lists_models, override_applies_to, support_for,
+    list_models, override_applies_to, spec_lists_models, support_for,
 };
 use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
@@ -366,7 +366,7 @@ impl AgentForm {
     }
 
     fn list_draft_models(&mut self, spec: AgentSpec, window: &mut Window, cx: &mut Context<Self>) {
-        if !lists_models(spec.kind) {
+        if !spec_lists_models(&spec) {
             return;
         }
         let Some(services) = services(cx) else {
