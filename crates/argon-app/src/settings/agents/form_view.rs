@@ -225,6 +225,21 @@ impl AgentForm {
     }
 
     fn usage_block(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let consent = needs_consent(self.kind).then(|| self.plan_consent_control(cx));
+        let details = match &self.status {
+            Status::Done(CardState::Ready { .. }) => self.usage_details(cx),
+            Status::Detecting => None,
+            Status::Done(_) | Status::Failed(_) => {
+                Some(note(labels::USAGE_NEEDS_AGENT, cx.theme().muted_foreground))
+            }
+        };
+        if details.is_none() && consent.is_none() {
+            return None;
+        }
+        Some(v_flex().gap_2().children(details).children(consent))
+    }
+
+    fn usage_details(&self, cx: &mut Context<Self>) -> Option<Div> {
         let sessions = AgentSessions::global(cx)?;
         let (shown, refreshing, refreshable) = {
             let sessions = sessions.read(cx);
@@ -257,18 +272,12 @@ impl AgentForm {
                 .disabled(refreshing)
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
         });
-        let consent = needs_consent(self.kind).then(|| self.plan_consent_control(cx));
         Some(
-            v_flex()
+            h_flex()
                 .gap_2()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_start()
-                        .child(div().flex_1().min_w_0().child(body))
-                        .children(refresh),
-                )
-                .children(consent),
+                .items_start()
+                .child(div().flex_1().min_w_0().child(body))
+                .children(refresh),
         )
     }
 

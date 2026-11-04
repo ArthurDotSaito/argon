@@ -1,9 +1,9 @@
 use std::time::SystemTime;
 
-use argon_core::AgentKind;
+use argon_core::{AgentKind, Config};
 use gpui_kit::{App, Context};
 
-use super::StartDialog;
+use super::{StartDialog, app_services};
 use crate::agents::detection::AgentOption;
 use crate::agents::{Trigger, UsageLine, card_line, plan_usage_consent};
 
@@ -20,10 +20,14 @@ impl StartDialog {
             .filter(|option| option.state.is_selectable())
             .map(|option| option.spec.kind)
             .collect();
-        let config = self.config.clone();
+        let config = self.live_config(cx);
         sessions.update(cx, |sessions, cx| {
             sessions.refresh_usage(&kinds, &config, Trigger::Automatic, cx)
         });
+    }
+
+    fn live_config(&self, cx: &App) -> Config {
+        app_services(cx).map_or_else(|| self.config.clone(), |services| services.config())
     }
 
     pub(super) fn usage_line(&self, option: &AgentOption, cx: &App) -> Option<UsageLine> {
@@ -33,7 +37,7 @@ impl StartDialog {
         let sessions = Self::sessions(cx)?;
         let sessions = sessions.read(cx);
         let kind = option.spec.kind;
-        let consent = plan_usage_consent(&self.config, kind);
+        let consent = plan_usage_consent(&self.live_config(cx), kind);
         card_line(sessions.usage_state(kind, consent), SystemTime::now())
     }
 

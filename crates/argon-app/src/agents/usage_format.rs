@@ -57,9 +57,19 @@ pub fn tone_for(severity: UsageSeverity) -> Tone {
     }
 }
 
+fn severity_rank(severity: UsageSeverity) -> u8 {
+    match severity {
+        UsageSeverity::Normal => 0,
+        UsageSeverity::Warning => 1,
+        UsageSeverity::Blocked => 2,
+    }
+}
+
 pub fn tightest_window(windows: &[UsageWindow]) -> Option<&UsageWindow> {
     windows.iter().reduce(|best, window| {
-        if window.percent > best.percent {
+        let rank = severity_rank(window.severity);
+        let best_rank = severity_rank(best.severity);
+        if rank > best_rank || (rank == best_rank && window.percent > best.percent) {
             window
         } else {
             best
@@ -68,22 +78,26 @@ pub fn tightest_window(windows: &[UsageWindow]) -> Option<&UsageWindow> {
 }
 
 pub fn whole_percent(percent: f64) -> u32 {
-    percent.round().clamp(0., 100.) as u32
+    if percent >= 100. {
+        100
+    } else {
+        percent.floor().max(0.) as u32
+    }
 }
 
 pub fn relative_time(resets_at: SystemTime, now: SystemTime) -> String {
     let remaining = resets_at.duration_since(now).unwrap_or(Duration::ZERO);
-    let minutes = remaining.as_secs() / SECS_PER_MINUTE;
-    let hours = minutes / MINUTES_PER_HOUR;
-    let days = hours / HOURS_PER_DAY;
-    if minutes == 0 {
+    let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
+    let minutes = seconds.div_ceil(SECS_PER_MINUTE);
+    let hours = minutes.div_ceil(MINUTES_PER_HOUR);
+    if seconds == 0 {
         labels::RESETS_SOON.to_owned()
-    } else if hours == 0 {
+    } else if minutes < MINUTES_PER_HOUR {
         labels::in_minutes(minutes)
-    } else if days == 0 {
+    } else if hours < HOURS_PER_DAY {
         labels::in_hours(hours)
     } else {
-        labels::in_days(days)
+        labels::in_days(hours.div_ceil(HOURS_PER_DAY))
     }
 }
 
@@ -138,6 +152,16 @@ fn summary_line(plan: &str, windows: &[UsageWindow], now: SystemTime) -> UsageLi
 }
 
 pub fn card_line(state: UsageState<'_>, now: SystemTime) -> Option<UsageLine> {
+    status_line(state, now).map(|line| {
+        let tooltip = line
+            .tooltip
+            .clone()
+            .or_else(|| line.link.is_none().then(|| line.text.clone()));
+        UsageLine { tooltip, ..line }
+    })
+}
+
+fn status_line(state: UsageState<'_>, now: SystemTime) -> Option<UsageLine> {
     match state {
         UsageState::Hidden => None,
         UsageState::Loading => Some(line(labels::LOADING_USAGE, Tone::Muted)),
@@ -204,20 +228,50 @@ mod tests {
     }
 
     #[test]
-    fn relative_time_picks_the_coarsest_unit_and_rounds_down() {
+    fn a_more_severe_window_wins_over_a_higher_percent_one() {
+        let windows = [
+            window("Semanal", 95., UsageSeverity::Warning),
+            window("5 horas", 70., UsageSeverity::Blocked),
+            window("Mensal", 99., UsageSeverity::Warning),
+        ];
+        assert_eq!(tightest_window(&windows).unwrap().label, "5 horas");
+        let warned = [
+            window("Semanal", 30., UsageSeverity::Normal),
+            window("Mensal", 81., UsageSeverity::Warning),
+        ];
+        assert_eq!(tightest_window(&warned).unwrap().label, "Mensal");
+    }
+
+    #[test]
+    fn whole_percent_floors_below_one_hundred() {
+        assert_eq!(whole_percent(0.), 0);
+        assert_eq!(whole_percent(48.6), 48);
+        assert_eq!(whole_percent(99.6), 99);
+        assert_eq!(whole_percent(99.999), 99);
+        assert_eq!(whole_percent(100.), 100);
+        assert_eq!(whole_percent(130.), 100);
+        assert_eq!(whole_percent(-5.), 0);
+    }
+
+    #[test]
+    fn relative_time_picks_the_coarsest_unit_and_rounds_up() {
         let now = SystemTime::now();
-        assert_eq!(relative_time(at(now, 15 * 60 + 30), now), "em 15 min");
-        assert_eq!(relative_time(at(now, 2 * 3600 + 59 * 60), now), "em 2 h");
-        assert_eq!(relative_time(at(now, 3 * 86_400 + 5), now), "em 3 dias");
-        assert_eq!(relative_time(at(now, 86_400 + 3600), now), "em 1 dia");
-        assert_eq!(relative_time(at(now, 3599), now), "em 59 min");
+        assert_eq!(relative_time(at(now, 15 * 60), now), "em 15 min");
+        assert_eq!(relative_time(at(now, 15 * 60 + 30), now), "em 16 min");
+        assert_eq!(relative_time(at(now, 2 * 3600), now), "em 2 h");
+        assert_eq!(relative_time(at(now, 2 * 3600 + 1), now), "em 3 h");
+        assert_eq!(relative_time(at(now, 2 * 3600 + 59 * 60), now), "em 3 h");
+        assert_eq!(relative_time(at(now, 3 * 86_400), now), "em 3 dias");
+        assert_eq!(relative_time(at(now, 3 * 86_400 + 5), now), "em 4 dias");
+        assert_eq!(relative_time(at(now, 86_400), now), "em 1 dia");
+        assert_eq!(relative_time(at(now, 3599), now), "em 1 h");
         assert_eq!(relative_time(at(now, 3600), now), "em 1 h");
     }
 
     #[test]
     fn relative_time_is_instant_when_due_or_already_past() {
         let now = SystemTime::now();
-        assert_eq!(relative_time(at(now, 59), now), labels::RESETS_SOON);
+        assert_eq!(relative_time(at(now, 59), now), "em 1 min");
         assert_eq!(relative_time(now, now), labels::RESETS_SOON);
         assert_eq!(
             relative_time(now - Duration::from_secs(600), now),
@@ -232,13 +286,27 @@ mod tests {
             plan: "Team".into(),
             windows: vec![
                 window("5 horas", 12., UsageSeverity::Normal),
-                window("Semanal", 48.6, UsageSeverity::Normal),
+                window("Semanal", 49.6, UsageSeverity::Normal),
             ],
         };
         let line = card_line(UsageState::Shown(&usage), now).unwrap();
         assert_eq!(line.text, "Team · 49% semanal");
         assert_eq!(line.tone, Tone::Muted);
-        assert_eq!(line.tooltip, None);
+        assert_eq!(line.tooltip.as_deref(), Some("Team · 49% semanal"));
+    }
+
+    #[test]
+    fn every_non_link_line_carries_its_full_text_as_tooltip() {
+        let now = SystemTime::now();
+        for state in [UsageState::Loading, UsageState::NeedsConsent] {
+            let line = card_line(state, now).unwrap();
+            assert_eq!(line.tooltip.as_deref(), Some(line.text.as_str()));
+        }
+        let link = AccountUsage::Link("https://example.com/usage".into());
+        assert_eq!(
+            card_line(UsageState::Shown(&link), now).unwrap().tooltip,
+            None
+        );
     }
 
     #[test]
@@ -273,7 +341,7 @@ mod tests {
         assert_eq!(line.tone, Tone::Danger);
         assert_eq!(
             line.tooltip.as_deref(),
-            Some("Limite atingido — renova em 2 h")
+            Some("Limite atingido — renova em 3 h")
         );
     }
 
@@ -361,7 +429,10 @@ mod tests {
         };
         assert_eq!(
             detail(UsageState::Shown(&usage), now),
-            Some(UsageDetail::Line(line("Team", Tone::Muted)))
+            Some(UsageDetail::Line(UsageLine {
+                tooltip: Some("Team".into()),
+                ..line("Team", Tone::Muted)
+            }))
         );
         assert_eq!(detail(UsageState::Hidden, now), None);
     }
