@@ -290,7 +290,7 @@ async fn respond_maps_reply_failure_to_session_error() {
     shared.on_permission(ask("edit", &[]), reply);
     assert!(matches!(
         shared.respond("perm-1", "allow_once"),
-        Err(SessionError::Acp(message)) if message == "gone"
+        Err(SessionError::Agent(message)) if message == "gone"
     ));
 }
 

@@ -92,7 +92,7 @@ impl Shared {
         validate_option(&state.pending[index].permission, option_id)?;
         let pending = state.pending.remove(index);
         let result = (pending.reply)(PermissionAnswer::Selected(option_id.to_owned()))
-            .map_err(SessionError::Acp);
+            .map_err(SessionError::Agent);
         self.sync_awaiting(&mut state);
         result
     }

@@ -257,3 +257,117 @@ fn clear_drops_the_running_turn() {
 
     assert!(!turns.in_turn());
 }
+
+fn family_with_child() -> Family {
+    let mut family = Family::new("ses_root".to_owned());
+    family.insert("ses_child".to_owned());
+    family
+}
+
+#[test]
+fn restart_after_grace_when_any_family_session_is_still_active() {
+    let family = family_with_child();
+
+    for active in ["ses_root", "ses_child"] {
+        let body = json!({"data": {active: {"type": "running"}}});
+        assert!(needs_restart(Some(&body), &family), "{active}");
+    }
+}
+
+#[test]
+fn no_restart_when_only_foreign_sessions_are_active() {
+    let family = family_with_child();
+
+    assert!(!needs_restart(Some(&json!({"data": {}})), &family));
+    assert!(!needs_restart(
+        Some(&json!({"data": {"ses_other": {"type": "running"}}})),
+        &family
+    ));
+}
+
+#[test]
+fn restart_when_the_active_check_fails() {
+    assert!(needs_restart(None, &family_with_child()));
+}
+
+#[test]
+fn family_reset_keeps_only_the_root() {
+    let mut family = family_with_child();
+    family.reset();
+
+    assert!(family.contains("ses_root"));
+    assert_eq!(family.children().count(), 0);
+}
+
+#[tokio::test]
+async fn bounded_wait_turns_a_hang_into_an_error() {
+    let hung = within(
+        Duration::from_millis(10),
+        std::future::pending::<std::result::Result<(), String>>(),
+    )
+    .await;
+    let quick = within(Duration::from_secs(1), async { Ok::<_, String>(7) }).await;
+
+    assert!(hung.unwrap_err().contains("sem resposta"));
+    assert_eq!(quick, Ok(7));
+}
+
+#[tokio::test]
+async fn subscription_timeouts_count_towards_giving_up() {
+    let mut reconnect = Reconnect::default();
+    let mut gave_up = false;
+    for _ in 0..3 {
+        let attempt = within(
+            Duration::from_millis(5),
+            std::future::pending::<std::result::Result<(), String>>(),
+        )
+        .await;
+        gave_up = attempt.is_err() && reconnect.failed();
+    }
+
+    assert!(gave_up);
+}
+
+#[tokio::test]
+async fn unsafe_load_id_is_rejected_before_any_request() {
+    let api = LocalApi::new("http://127.0.0.1:1".to_owned(), "secret", String::new()).unwrap();
+
+    for id in ["../model", "ses?x=1", ""] {
+        assert_eq!(
+            open_session(&api, Path::new("."), Some(id)).await,
+            Err(SESSION_NOT_FOUND.to_owned()),
+            "{id:?}"
+        );
+    }
+}
+
+#[test]
+fn permission_with_unsafe_ids_has_no_reply_route() {
+    let event = json!({
+        "type": "permission.asked",
+        "data": {"id": "per/../x", "sessionID": "ses_root", "permission": "bash"},
+    });
+    let OpencodeEvent::Permission {
+        id,
+        session_id,
+        ask,
+    } = decode(&event, "ses_root", &|id| id == "ses_root")
+    else {
+        panic!("expected a permission");
+    };
+
+    let route = Route {
+        session_id,
+        request_id: id,
+        kind: ask.kind,
+    };
+    assert_eq!(route.reply_path(), None);
+}
+
+#[test]
+fn directory_match_compares_canonical_paths_when_both_exist() {
+    let temp = std::env::temp_dir();
+    let dotted = temp.join(".").display().to_string();
+
+    assert!(same_directory(&dotted, &temp));
+}

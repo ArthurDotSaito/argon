@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -15,10 +15,10 @@ use super::protocol::{
 };
 use super::server::{OpencodeServer, start};
 use crate::http::LocalApi;
-use crate::registry::ModelInfo;
+use crate::registry::{AgentSpec, ModelInfo};
 use crate::session::{
     AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk, PermissionReply,
-    Ready, Result, SessionError, Shared, session_grant_applies,
+    Ready, Result, SessionError, Shared, StderrTail, session_grant_applies,
 };
 
 #[path = "driver_state.rs"]
@@ -26,8 +26,8 @@ mod state;
 
 use state::{
     Close, Family, Reconnect, Route, Turns, check_model, created_session, decision, event_session,
-    grants_session, initial_model, is_active, is_not_found, model_ref, same_directory,
-    session_path, without_child_plans,
+    grants_session, initial_model, is_active, is_not_found, is_path_safe, model_ref, needs_restart,
+    same_directory, session_path, within, without_child_plans,
 };
 
 const EVENTS_PATH: &str = "/api/event";
@@ -36,6 +36,7 @@ const ACTIVE_PATH: &str = "/api/session/active";
 const MODELS_PATH: &str = "/api/model";
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
+const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
 const ALLOW_ONCE: &str = "allow_once";
 const REJECT: &str = "reject_once";
 const END_TURN: &str = "end_turn";
@@ -45,8 +46,12 @@ const SESSION_NOT_FOUND: &str = "sessão do OpenCode não encontrada";
 const CONNECTION_LOST: &str = "conexão com o OpenCode perdida";
 const DROPPED_MID_TURN: &str = "a conexão com o OpenCode caiu durante o turno";
 const BUSY_TURN: &str = "já existe um turno em andamento";
+const SERVER_STOPPED: &str = "o servidor do OpenCode está parado";
+const UNANSWERABLE: &str =
+    "o OpenCode pediu uma permissão com identificador inválido; não foi possível respondê-la";
 
 type Answer = (Route, PermissionAnswer);
+type Tagged = (u64, Feed);
 
 enum Feed {
     Event(Value),
@@ -55,7 +60,7 @@ enum Feed {
 
 enum Wake {
     Command(Option<Command>),
-    Feed(Feed),
+    Feed(Tagged),
     Answer(Answer),
     Awaiting(bool),
     TurnTimeout,
@@ -81,38 +86,45 @@ async fn sleep_until(deadline: Option<Instant>) {
 
 fn spawn_feed(
     stream: impl Stream<Item = Value> + Send + 'static,
-    feed: mpsc::UnboundedSender<Feed>,
+    epoch: u64,
+    feed: mpsc::UnboundedSender<Tagged>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut stream = std::pin::pin!(stream);
         while let Some(event) = stream.next().await {
-            if feed.send(Feed::Event(event)).is_err() {
+            if feed.send((epoch, Feed::Event(event))).is_err() {
                 return;
             }
         }
-        let _ = feed.send(Feed::Ended);
+        let _ = feed.send((epoch, Feed::Ended));
     })
 }
 
 async fn subscribe(
     api: &LocalApi,
-    feed: &mpsc::UnboundedSender<Feed>,
+    epoch: u64,
+    feed: &mpsc::UnboundedSender<Tagged>,
 ) -> std::result::Result<JoinHandle<()>, String> {
-    let stream = api.events(EVENTS_PATH).await?;
-    Ok(spawn_feed(stream, feed.clone()))
+    let stream = within(SUBSCRIBE_TIMEOUT, api.events(EVENTS_PATH)).await?;
+    Ok(spawn_feed(stream, epoch, feed.clone()))
 }
 
 struct Session {
     shared: Arc<Shared>,
-    server: OpencodeServer,
+    spec: AgentSpec,
+    stderr: Arc<StderrTail>,
+    server: Option<OpencodeServer>,
+    epoch: u64,
+    verify_idle: bool,
     cwd: PathBuf,
     family: Family,
     models: Vec<ModelInfo>,
+    model: String,
     pending_model: Option<String>,
     turns: Turns,
     grants: HashSet<String>,
     answers: mpsc::UnboundedSender<Answer>,
-    feed: mpsc::UnboundedSender<Feed>,
+    feed: mpsc::UnboundedSender<Tagged>,
     reader: Option<JoinHandle<()>>,
     reconnect: Reconnect,
     resubscribe_at: Option<Instant>,
@@ -124,7 +136,7 @@ struct Session {
 
 struct Inbox {
     commands: mpsc::UnboundedReceiver<Command>,
-    feed: mpsc::UnboundedReceiver<Feed>,
+    feed: mpsc::UnboundedReceiver<Tagged>,
     answers: mpsc::UnboundedReceiver<Answer>,
 }
 
@@ -146,12 +158,7 @@ impl Session {
                 () = sleep_until(resubscribe_at) => Wake::Resubscribe,
             };
             match wake {
-                Wake::Command(None | Some(Command::Shutdown)) => {
-                    if self.turns.in_turn() {
-                        self.interrupt().await;
-                    }
-                    return Ok(true);
-                }
+                Wake::Command(None | Some(Command::Shutdown)) => return Ok(true),
                 Wake::Command(Some(Command::Prompt(text))) => {
                     let paused = *awaiting.borrow();
                     self.prompt(text, paused).await;
@@ -165,8 +172,9 @@ impl Session {
                     self.shared.set_permission_mode(mode);
                     let _ = reply.send(Ok(()));
                 }
-                Wake::Feed(Feed::Event(event)) => self.on_event(&event).await,
-                Wake::Feed(Feed::Ended) => {
+                Wake::Feed((epoch, _)) if epoch != self.epoch => {}
+                Wake::Feed((_, Feed::Event(event))) => self.on_event(&event).await,
+                Wake::Feed((_, Feed::Ended)) => {
                     self.reader = None;
                     self.resubscribe_at = Some(Instant::now() + RESUBSCRIBE_DELAY);
                 }
@@ -190,12 +198,69 @@ impl Session {
         self.family.root()
     }
 
-    fn api(&self) -> &LocalApi {
-        &self.server.api
+    fn api(&self) -> std::result::Result<&LocalApi, String> {
+        self.server
+            .as_ref()
+            .map(|server| &server.api)
+            .ok_or_else(|| SERVER_STOPPED.to_owned())
     }
 
     async fn post(&self, path: &str, body: &Value) -> std::result::Result<Value, String> {
-        self.api().post(path, body).await
+        self.api()?.post(path, body).await
+    }
+
+    async fn get(&self, path: &str) -> std::result::Result<Value, String> {
+        self.api()?.get(path).await
+    }
+
+    async fn must_restart(&self) -> bool {
+        let active = self.get(ACTIVE_PATH).await;
+        if let Err(error) = &active {
+            tracing::warn!(%error, "failed to check active OpenCode sessions");
+        }
+        needs_restart(active.as_ref().ok(), &self.family)
+    }
+
+    async fn stop_server(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            reader.abort();
+        }
+        self.resubscribe_at = None;
+        self.epoch += 1;
+        if let Some(server) = self.server.take() {
+            server.stop().await;
+        }
+    }
+
+    async fn ensure_server(&mut self) -> std::result::Result<(), String> {
+        let verify = std::mem::take(&mut self.verify_idle);
+        if verify && self.server.is_some() && self.must_restart().await {
+            self.stop_server().await;
+        }
+        if self.server.is_some() {
+            return Ok(());
+        }
+        let server = start(&self.spec, &self.cwd, Arc::clone(&self.stderr)).await?;
+        self.epoch += 1;
+        let root = self.root().to_owned();
+        let reopened = match open_session(&server.api, &self.cwd, Some(&root)).await {
+            Ok(_) => subscribe(&server.api, self.epoch, &self.feed).await,
+            Err(error) => Err(error),
+        };
+        match reopened {
+            Ok(reader) => {
+                self.server = Some(server);
+                self.reader = Some(reader);
+                self.reconnect.succeeded();
+                self.family.reset();
+                self.pending_model = initial_model(&self.model);
+                Ok(())
+            }
+            Err(error) => {
+                server.stop().await;
+                Err(error)
+            }
+        }
     }
 
     async fn prompt(&mut self, text: String, paused: bool) {
@@ -204,6 +269,11 @@ impl Session {
             return;
         }
         self.shared.begin_turn(&text);
+        if let Err(error) = self.ensure_server().await {
+            self.shared
+                .fail(format!("não consegui reiniciar o OpenCode: {error}"));
+            return;
+        }
         if let Err(error) = self.apply_model().await {
             self.shared.fail(error);
             return;
@@ -247,11 +317,15 @@ impl Session {
             .map(str::to_owned)
             .collect();
         for id in sessions {
-            if let Err(error) = self
-                .post(&session_path(&id, "interrupt"), &Value::Null)
-                .await
-            {
-                tracing::warn!(session = %id, %error, "failed to interrupt OpenCode session");
+            match self.post(&session_path(&id, "interrupt"), &json!({})).await {
+                Ok(_) => {}
+                Err(error) if is_not_found(&error) => {}
+                Err(error) => {
+                    tracing::warn!(session = %id, %error, "failed to interrupt OpenCode session");
+                    self.shared.emit(AgentEvent::Error(format!(
+                        "não consegui interromper o OpenCode: {error}"
+                    )));
+                }
             }
         }
     }
@@ -267,23 +341,25 @@ impl Session {
     async fn expire_cancel(&mut self) {
         self.cancel_deadline = None;
         let close = self.turns.expire();
+        if close.is_some() && self.must_restart().await {
+            self.stop_server().await;
+        }
         self.close_turn(close).await;
     }
 
     fn change_model(&mut self, model: String, reply: oneshot::Sender<Result<()>>) {
-        if self.turns.in_turn() {
-            let _ = reply.send(Err(SessionError::Busy));
-            return;
+        let result = if self.turns.in_turn() {
+            Err(SessionError::Busy)
+        } else {
+            check_model(&self.models, &model)
+        };
+        if result.is_ok() {
+            self.shared.set_model(&model);
+            self.pending_model = Some(model.clone());
+            self.model = model;
         }
-        if let Err(error) = check_model(&self.models, &model) {
-            self.shared.release();
-            let _ = reply.send(Err(error));
-            return;
-        }
-        self.shared.set_model(&model);
-        self.pending_model = Some(model);
         self.shared.release();
-        let _ = reply.send(Ok(()));
+        let _ = reply.send(result);
     }
 
     async fn on_event(&mut self, event: &Value) {
@@ -302,29 +378,30 @@ impl Session {
                 let close = self.turns.finish(&stop_reason, error);
                 self.close_turn(close).await;
             }
-            OpencodeEvent::Permission { id, session_id, .. } if self.turns.is_cancelled() => {
-                let route = Route {
-                    session_id,
-                    request_id: id,
-                    kind: String::new(),
-                };
-                self.reply(&route, REJECT).await;
-            }
             OpencodeEvent::Permission {
                 id,
                 session_id,
                 ask,
-            } => self.ask(id, session_id, ask).await,
+            } => {
+                let route = Route {
+                    session_id,
+                    request_id: id,
+                    kind: ask.kind.clone(),
+                };
+                if route.reply_path().is_none() {
+                    tracing::warn!(request = %route.request_id, "unsafe OpenCode permission route");
+                    self.shared.emit(AgentEvent::Error(UNANSWERABLE.to_owned()));
+                } else if self.turns.is_cancelled() {
+                    self.reply(&route, REJECT).await;
+                } else {
+                    self.ask(route, ask).await;
+                }
+            }
             OpencodeEvent::Ignore => {}
         }
     }
 
-    async fn ask(&mut self, request_id: String, session_id: String, ask: PermissionAsk) {
-        let route = Route {
-            session_id,
-            request_id,
-            kind: ask.kind.clone(),
-        };
+    async fn ask(&mut self, route: Route, ask: PermissionAsk) {
         if self.grants.contains(&ask.kind) && session_grant_applies(&ask, &self.cwd) {
             self.reply(&route, ALLOW_ONCE).await;
             return;
@@ -341,11 +418,10 @@ impl Session {
     }
 
     async fn reply(&self, route: &Route, option: &str) {
-        let Some(path) = route.reply_path() else {
-            tracing::warn!(request = %route.request_id, "unsafe OpenCode permission route");
+        let (Some(path), Ok(api)) = (route.reply_path(), self.api()) else {
             return;
         };
-        match self.post(&path, &permission_body(option)).await {
+        match api.post(&path, &permission_body(option)).await {
             Ok(_) => {}
             Err(error) if is_not_found(&error) => {}
             Err(error) => self.shared.emit(AgentEvent::Error(format!(
@@ -366,7 +442,11 @@ impl Session {
 
     async fn resubscribe(&mut self) -> std::result::Result<(), String> {
         self.resubscribe_at = None;
-        match subscribe(self.api(), &self.feed).await {
+        let subscribed = match self.api() {
+            Ok(api) => subscribe(api, self.epoch, &self.feed).await,
+            Err(error) => Err(error),
+        };
+        match subscribed {
             Ok(reader) => {
                 self.reader = Some(reader);
                 self.reconnect.succeeded();
@@ -388,7 +468,7 @@ impl Session {
     }
 
     async fn still_running(&self) -> bool {
-        match self.api().get(ACTIVE_PATH).await {
+        match self.get(ACTIVE_PATH).await {
             Ok(body) => is_active(&body, self.root()),
             Err(error) => {
                 tracing::warn!(%error, "failed to check active OpenCode sessions");
@@ -405,17 +485,16 @@ impl Session {
         self.cancel_deadline = None;
         match close {
             Close::Completed => self.shared.end_turn(END_TURN).await,
-            Close::Cancelled => self.shared.end_turn(CANCELLED_REASON).await,
+            Close::Cancelled => {
+                self.verify_idle = true;
+                self.shared.end_turn(CANCELLED_REASON).await;
+            }
             Close::Failed(message) => self.shared.fail(message),
         }
     }
 
-    async fn shutdown(self) {
-        let Session { server, reader, .. } = self;
-        if let Some(reader) = reader {
-            reader.abort();
-        }
-        server.stop().await;
+    async fn shutdown(mut self) {
+        self.stop_server().await;
     }
 }
 
@@ -425,9 +504,11 @@ async fn open_session(
     load: Option<&str>,
 ) -> std::result::Result<String, String> {
     if let Some(id) = load {
+        if !is_path_safe(id) {
+            return Err(SESSION_NOT_FOUND.to_owned());
+        }
         return match api.get(&format!("{SESSIONS_PATH}/{id}")).await {
-            Ok(_) if state::is_path_safe(id) => Ok(id.to_owned()),
-            Ok(_) => Err(SESSION_NOT_FOUND.to_owned()),
+            Ok(_) => Ok(id.to_owned()),
             Err(error) if is_not_found(&error) => Err(SESSION_NOT_FOUND.to_owned()),
             Err(error) => Err(format!("{SESSION_NOT_FOUND} ({error})")),
         };
@@ -471,10 +552,10 @@ async fn connect(
     api: &LocalApi,
     cwd: &Path,
     load: Option<&str>,
-    feed: &mpsc::UnboundedSender<Feed>,
+    feed: &mpsc::UnboundedSender<Tagged>,
 ) -> std::result::Result<Opened, String> {
     let id = open_session(api, cwd, load).await?;
-    let reader = subscribe(api, feed)
+    let reader = subscribe(api, 0, feed)
         .await
         .map_err(|error| format!("não consegui assinar os eventos do OpenCode: {error}"))?;
     let (models, warnings) = list_models(api).await;
@@ -518,10 +599,15 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
         let (answers, answered) = mpsc::unbounded_channel();
         let mut session = Session {
             shared: Arc::clone(&run.shared),
-            server,
+            spec: run.spec.clone(),
+            stderr: Arc::clone(&run.stderr),
+            server: Some(server),
+            epoch: 0,
+            verify_idle: false,
             cwd: run.ctx.cwd.clone(),
             family: Family::new(opened.id),
             models: opened.models,
+            model: run.ctx.model.clone(),
             pending_model: initial_model(&run.ctx.model),
             turns: Turns::default(),
             grants: HashSet::new(),

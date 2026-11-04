@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -99,6 +101,14 @@ impl Family {
         is_path_safe(&id) && self.members.insert(id)
     }
 
+    pub fn reset(&mut self) {
+        self.members = HashSet::from([self.root.clone()]);
+    }
+
+    pub fn members(&self) -> impl Iterator<Item = &str> {
+        self.members.iter().map(String::as_str)
+    }
+
     pub fn children(&self) -> impl Iterator<Item = &str> {
         self.members
             .iter()
@@ -189,6 +199,23 @@ pub(super) fn is_active(body: &Value, id: &str) -> bool {
     body.get("data").and_then(|data| data.get(id)).is_some()
 }
 
+pub(super) fn needs_restart(active: Option<&Value>, family: &Family) -> bool {
+    match active {
+        Some(body) => family.members().any(|id| is_active(body, id)),
+        None => true,
+    }
+}
+
+pub(super) async fn within<T>(
+    limit: Duration,
+    work: impl Future<Output = std::result::Result<T, String>>,
+) -> std::result::Result<T, String> {
+    match tokio::time::timeout(limit, work).await {
+        Ok(result) => result,
+        Err(_) => Err(format!("sem resposta em {}s", limit.as_secs())),
+    }
+}
+
 pub(super) fn created_session(body: &Value) -> Option<(String, Option<String>)> {
     let data = body.get("data")?;
     let id = json_text(data, "id").filter(|id| is_path_safe(id))?;
@@ -209,7 +236,12 @@ fn comparable(path: &str) -> String {
 }
 
 pub(super) fn same_directory(reported: &str, cwd: &Path) -> bool {
-    comparable(reported) == comparable(&cwd.display().to_string())
+    match (dunce::canonicalize(reported), dunce::canonicalize(cwd)) {
+        (Ok(reported), Ok(cwd)) => {
+            comparable(&reported.display().to_string()) == comparable(&cwd.display().to_string())
+        }
+        _ => comparable(reported) == comparable(&cwd.display().to_string()),
+    }
 }
 
 #[derive(Debug, Default)]
