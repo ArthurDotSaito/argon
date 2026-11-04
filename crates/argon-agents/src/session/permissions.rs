@@ -9,7 +9,14 @@ use crate::util::json_text;
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
 const ALLOW_ONCE: &str = "allow_once";
-const PATH_KEYS: [&str; 5] = ["path", "file_path", "filePath", "abs_path", "directory"];
+const PATH_KEYS: [&str; 6] = [
+    "path",
+    "file_path",
+    "filePath",
+    "abs_path",
+    "directory",
+    "notebook_path",
+];
 const PATTERN_KEYS: [&str; 3] = ["pattern", "glob", "include"];
 const REGEX_KEY: &str = "pattern";
 const GLOB_CHARS: [char; 4] = ['*', '?', '[', '{'];
@@ -156,6 +163,21 @@ fn is_path_like(pattern: &str) -> bool {
             .any(|component| component == Component::ParentDir)
 }
 
+pub(crate) fn input_paths(input: &Value) -> Vec<String> {
+    let mut paths: Vec<String> = PATH_KEYS
+        .iter()
+        .filter_map(|key| json_text(input, key))
+        .collect();
+    paths.extend(
+        PATTERN_KEYS
+            .iter()
+            .filter_map(|key| json_text(input, key).map(|value| (*key, value)))
+            .filter(|(key, pattern)| *key != REGEX_KEY || is_path_like(pattern))
+            .map(|(_, pattern)| scoped_prefix(&pattern)),
+    );
+    paths
+}
+
 fn touched_paths(tool_call: &Value) -> Vec<String> {
     let mut paths: Vec<String> = tool_call
         .get("locations")
@@ -168,14 +190,7 @@ fn touched_paths(tool_call: &Value) -> Vec<String> {
         })
         .unwrap_or_default();
     if let Some(input) = tool_call.get("rawInput") {
-        paths.extend(PATH_KEYS.iter().filter_map(|key| json_text(input, key)));
-        paths.extend(
-            PATTERN_KEYS
-                .iter()
-                .filter_map(|key| json_text(input, key).map(|value| (*key, value)))
-                .filter(|(key, pattern)| *key != REGEX_KEY || is_path_like(pattern))
-                .map(|(_, pattern)| scoped_prefix(&pattern)),
-        );
+        paths.extend(input_paths(input));
     }
     paths
 }

@@ -29,6 +29,7 @@ pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, 
 pub use permissions::{
     PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,
 };
+pub(crate) use permissions::{input_paths, native_options};
 pub use turn::{TurnOutcome, finish_turn};
 pub use writer::SessionWriter;
 

@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+mod claude;
 pub mod defaults;
 pub mod process;
 pub mod redact;
