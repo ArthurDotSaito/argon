@@ -502,7 +502,7 @@ fn command_approval_uses_params_command_and_reason() {
     assert_eq!(ask.kind, "execute");
     assert_eq!(ask.title, "Bash: rm -rf build — needs network");
     assert!(ask.paths.is_empty());
-    assert_eq!(ask.options, native_options_for("execute"));
+    assert_eq!(ask.options, native_options_with_session());
 }
 
 #[test]
@@ -619,6 +619,7 @@ fn command_approval_shows_network_context_and_additional_permissions() {
         r#"Bash: curl example.com — rede: https://example.com — permissões adicionais: {"fileSystem":{"write":["/tmp/x"]}} — fetch"#
     );
     assert!(ask.paths.is_empty());
+    assert_eq!(ask.options, native_options_for("execute"));
 }
 
 #[test]
@@ -1034,7 +1035,10 @@ fn reasoning_without_item_id_is_ignored() {
 
 #[test]
 fn legacy_approvals_use_review_decision_values() {
-    for method in ["execCommandApproval", "applyPatchApproval"] {
+    for (method, always) in [
+        ("execCommandApproval", "approved_for_session"),
+        ("applyPatchApproval", "approved"),
+    ] {
         let respond = |answer: PermissionAnswer| approval_response(method, &json!({}), &answer);
         assert_eq!(
             respond(selected("allow_once")),
@@ -1042,7 +1046,7 @@ fn legacy_approvals_use_review_decision_values() {
         );
         assert_eq!(
             respond(selected("allow_always")),
-            json!({"decision": "approved"})
+            json!({"decision": always})
         );
         for denied in [selected("reject_once"), selected("whatever")] {
             let response = respond(denied);
@@ -1059,10 +1063,10 @@ fn legacy_approvals_use_review_decision_values() {
 #[test]
 fn command_and_file_approvals_map_answers_to_decisions() {
     let methods = [
-        "item/commandExecution/requestApproval",
-        "item/fileChange/requestApproval",
+        ("item/commandExecution/requestApproval", "acceptForSession"),
+        ("item/fileChange/requestApproval", "accept"),
     ];
-    for method in methods {
+    for (method, always) in methods {
         let respond = |answer: PermissionAnswer| approval_response(method, &json!({}), &answer);
         assert_eq!(
             respond(selected("allow_once")),
@@ -1070,7 +1074,7 @@ fn command_and_file_approvals_map_answers_to_decisions() {
         );
         assert_eq!(
             respond(selected("allow_always")),
-            json!({"decision": "accept"})
+            json!({"decision": always})
         );
         assert_eq!(
             respond(selected("reject_once")),
@@ -1088,7 +1092,7 @@ fn command_and_file_approvals_map_answers_to_decisions() {
 }
 
 #[test]
-fn approval_response_never_grants_session_or_global_scope() {
+fn approval_response_never_persists_rules_or_grants_global_scope() {
     let methods = [
         "item/commandExecution/requestApproval",
         "execCommandApproval",
@@ -1102,17 +1106,85 @@ fn approval_response_never_grants_session_or_global_scope() {
         selected("allow_always"),
         selected("reject_once"),
         selected("acceptForSession"),
+        selected("acceptWithExecpolicyAmendment"),
         selected("acceptGlobal"),
         selected(""),
         PermissionAnswer::Cancelled,
     ];
+    let params = json!({
+        "permissions": {"a": 1},
+        "proposedExecpolicyAmendment": ["git", "diff"],
+        "proposedNetworkPolicyAmendments": [{"host": "example.com", "action": "allow"}],
+    });
     for method in methods {
         for answer in &answers {
-            let text =
-                approval_response(method, &json!({"permissions": {"a": 1}}), answer).to_string();
-            assert!(!text.contains("acceptForSession"), "{method} {answer:?}");
-            assert!(!text.contains("acceptGlobal"), "{method} {answer:?}");
+            let text = approval_response(method, &params, answer).to_string();
+            for forbidden in [
+                "acceptWithExecpolicyAmendment",
+                "approved_execpolicy_amendment",
+                "applyNetworkPolicyAmendment",
+                "network_policy_amendment",
+                "acceptGlobal",
+            ] {
+                assert!(!text.contains(forbidden), "{method} {answer:?} {text}");
+            }
         }
+    }
+}
+
+#[test]
+fn only_allow_always_on_a_plain_command_approves_it_for_the_session() {
+    let command = "item/commandExecution/requestApproval";
+    let plain = json!({"command": "git diff", "proposedExecpolicyAmendment": ["git", "diff"]});
+    assert_eq!(
+        approval_response(command, &plain, &selected("allow_always")),
+        json!({"decision": "acceptForSession"})
+    );
+    for other in [
+        selected("allow_once"),
+        selected("acceptForSession"),
+        selected(""),
+    ] {
+        assert_ne!(
+            approval_response(command, &plain, &other),
+            json!({"decision": "acceptForSession"}),
+            "{other:?}"
+        );
+    }
+    for escalated in [
+        json!({"networkApprovalContext": {"host": "example.com", "protocol": "https"}}),
+        json!({"additionalPermissions": {"network": {"enabled": true}}}),
+        json!({"additionalPermissions": {"fileSystem": {"write": ["x".repeat(3000)]}}}),
+    ] {
+        assert_eq!(
+            approval_response(command, &escalated, &selected("allow_always")),
+            json!({"decision": "accept"}),
+            "{escalated}"
+        );
+    }
+    for file in ["item/fileChange/requestApproval", "applyPatchApproval"] {
+        let text = approval_response(file, &json!({}), &selected("allow_always")).to_string();
+        assert!(!text.contains("ForSession"), "{file}");
+        assert!(!text.contains("for_session"), "{file}");
+    }
+}
+
+#[test]
+fn plain_command_cards_offer_permitting_for_the_session() {
+    for method in [
+        "item/commandExecution/requestApproval",
+        "execCommandApproval",
+    ] {
+        let ask = ask(
+            &mut Decoder::new(),
+            method,
+            json!({"itemId": "c1", "command": "rg foo"}),
+        );
+        assert_eq!(
+            option_ids(&ask),
+            vec!["allow_once", "allow_always", "reject_once"],
+            "{method}"
+        );
     }
 }
 
@@ -1174,7 +1246,7 @@ fn thread_params_follow_permission_mode() {
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         assert_eq!(
             thread_params(cwd, None, mode),
-            json!({"cwd": "repo", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only"})
+            json!({"cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only"})
         );
     }
     assert_eq!(
@@ -1198,7 +1270,7 @@ fn resume_params_add_thread_id_and_skip_turn_history() {
             Some("gpt-5"),
             PermissionMode::Supervised
         ),
-        json!({"threadId": "th_1", "excludeTurns": true, "cwd": "repo", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5"})
+        json!({"threadId": "th_1", "excludeTurns": true, "cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5"})
     );
 }
 
@@ -1219,7 +1291,7 @@ fn turn_mode_overrides_follow_permission_mode() {
     let base = || turn_params("th_1", "revise", None, None);
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         let params = with_mode(base(), mode);
-        assert_eq!(params["approvalPolicy"], json!("on-request"));
+        assert_eq!(params["approvalPolicy"], json!("untrusted"));
         assert_eq!(params["approvalsReviewer"], json!("user"));
         assert_eq!(params["sandboxPolicy"], json!({"type": "readOnly"}));
         assert_eq!(params["threadId"], json!("th_1"));

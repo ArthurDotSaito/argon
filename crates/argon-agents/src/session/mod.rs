@@ -34,7 +34,7 @@ pub(crate) use failure::{STDERR_LINES, explain_failure, with_stderr};
 pub(crate) use permissions::prompt_title;
 pub(crate) use permissions::{
     ALLOW_ALWAYS, ALLOW_ONCE, PermissionAnswer, PermissionReply, REJECT_ONCE, input_paths,
-    native_options_for, session_grant_applies,
+    native_options_for, native_options_with_session, session_grant_applies,
 };
 pub use permissions::{
     PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,

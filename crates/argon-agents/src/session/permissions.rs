@@ -219,20 +219,30 @@ fn grantable_for_session(kind: &str) -> bool {
     LOCAL_EDIT_KINDS.contains(&kind)
 }
 
+const NATIVE_OPTIONS: [(&str, &str); 3] = [
+    (ALLOW_ONCE, "Permitir"),
+    (ALLOW_ALWAYS, "Permitir nesta sessão"),
+    (REJECT_ONCE, "Negar"),
+];
+
+fn native_options(include: impl Fn(&str) -> bool) -> Vec<PermissionOption> {
+    NATIVE_OPTIONS
+        .into_iter()
+        .filter(|(id, _)| include(id))
+        .map(|(id, label)| PermissionOption {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            kind: id.to_owned(),
+        })
+        .collect()
+}
+
 pub(crate) fn native_options_for(kind: &str) -> Vec<PermissionOption> {
-    [
-        (ALLOW_ONCE, "Permitir"),
-        (ALLOW_ALWAYS, "Permitir nesta sessão"),
-        (REJECT_ONCE, "Negar"),
-    ]
-    .into_iter()
-    .filter(|(id, _)| *id != ALLOW_ALWAYS || grantable_for_session(kind))
-    .map(|(id, label)| PermissionOption {
-        id: id.to_owned(),
-        label: label.to_owned(),
-        kind: id.to_owned(),
-    })
-    .collect()
+    native_options(|id| id != ALLOW_ALWAYS || grantable_for_session(kind))
+}
+
+pub(crate) fn native_options_with_session() -> Vec<PermissionOption> {
+    native_options(|_| true)
 }
 
 pub(crate) fn paths_contained(ask: &PermissionAsk, cwd: &Path) -> bool {

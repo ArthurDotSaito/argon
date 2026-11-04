@@ -6,8 +6,8 @@ use serde_json::{Map, Value, json};
 
 use crate::registry::ModelInfo;
 use crate::session::{
-    ALLOW_ALWAYS, ALLOW_ONCE, AgentEvent, PermissionAnswer, PermissionAsk, REJECT_ONCE, ToolStatus,
-    native_options_for,
+    ALLOW_ALWAYS, ALLOW_ONCE, AgentEvent, PermissionAnswer, PermissionAsk, PermissionOption,
+    REJECT_ONCE, ToolStatus, native_options_for, native_options_with_session,
 };
 use crate::util::json_text;
 
@@ -228,11 +228,22 @@ impl Decoder {
         let Some(details) = grant_details(params) else {
             return deny(method, params);
         };
+        let options = if details.is_empty() {
+            native_options_with_session()
+        } else {
+            native_options_for("execute")
+        };
         for detail in details {
             title.push_str(DETAIL_SEPARATOR);
             title.push_str(&sanitize(&detail, usize::MAX));
         }
-        ask(item_id, "execute", with_reason(title, params), Vec::new())
+        ask(
+            item_id,
+            "execute",
+            with_reason(title, params),
+            Vec::new(),
+            options,
+        )
     }
 
     fn file_approval(&self, method: &str, params: &Value) -> CodexRequest {
@@ -261,16 +272,23 @@ impl Decoder {
             ));
             paths.clear();
         }
-        ask(item_id, "edit", with_reason(title, params), paths)
+        ask(
+            item_id,
+            "edit",
+            with_reason(title, params),
+            paths,
+            native_options_for("edit"),
+        )
     }
 }
 
 pub(crate) fn approval_response(method: &str, params: &Value, answer: &PermissionAnswer) -> Value {
+    let for_session = command_session_grant(method, params, answer);
     if LEGACY_APPROVAL_METHODS.contains(&method) {
-        json!({"decision": legacy_decision(answer)})
+        json!({"decision": legacy_decision(answer, for_session)})
     } else if COMMAND_APPROVAL_METHODS.contains(&method) || FILE_APPROVAL_METHODS.contains(&method)
     {
-        json!({"decision": decision(answer)})
+        json!({"decision": decision(answer, for_session)})
     } else if method == PERMISSIONS_APPROVAL_METHOD {
         let permissions = if is_allowed(answer) {
             requested_permissions(params)
@@ -301,7 +319,7 @@ struct Policy {
 fn policy(mode: PermissionMode) -> Policy {
     match mode {
         PermissionMode::Supervised | PermissionMode::AcceptEdits => Policy {
-            approval: "on-request",
+            approval: "untrusted",
             sandbox: "read-only",
             sandbox_type: "readOnly",
         },
@@ -629,13 +647,14 @@ fn ask(
     kind: &str,
     title: String,
     paths: Vec<String>,
+    options: Vec<PermissionOption>,
 ) -> CodexRequest {
     CodexRequest::Ask(PermissionAsk {
         tool_call_id,
         kind: kind.to_owned(),
         title,
         paths,
-        options: native_options_for(kind),
+        options,
     })
 }
 
@@ -686,6 +705,7 @@ fn permissions_approval(method: &str, params: &Value) -> CodexRequest {
         "other",
         with_reason(title, params),
         Vec::new(),
+        native_options_for("other"),
     )
 }
 
@@ -716,17 +736,25 @@ fn is_allowed(answer: &PermissionAnswer) -> bool {
     matches!(answer, PermissionAnswer::Selected(id) if id == ALLOW_ONCE || id == ALLOW_ALWAYS)
 }
 
-fn decision(answer: &PermissionAnswer) -> &'static str {
+fn command_session_grant(method: &str, params: &Value, answer: &PermissionAnswer) -> bool {
+    COMMAND_APPROVAL_METHODS.contains(&method)
+        && matches!(answer, PermissionAnswer::Selected(id) if id == ALLOW_ALWAYS)
+        && grant_details(params).is_some_and(|details| details.is_empty())
+}
+
+fn decision(answer: &PermissionAnswer, for_session: bool) -> &'static str {
     match answer {
         PermissionAnswer::Cancelled => "cancel",
+        _ if for_session => "acceptForSession",
         answer if is_allowed(answer) => "accept",
         _ => "decline",
     }
 }
 
-fn legacy_decision(answer: &PermissionAnswer) -> Value {
+fn legacy_decision(answer: &PermissionAnswer, for_session: bool) -> Value {
     match answer {
         PermissionAnswer::Cancelled => json!("abort"),
+        _ if for_session => json!("approved_for_session"),
         answer if is_allowed(answer) => json!("approved"),
         _ => json!({"denied": {"rejection": LEGACY_REJECTION}}),
     }

@@ -2,6 +2,7 @@ use serde_json::json;
 
 use super::state::*;
 use super::*;
+use crate::codex::protocol::{resume_params, thread_params};
 use crate::session::{REJECT_ONCE, native_options_for};
 
 fn cwd() -> PathBuf {
@@ -483,6 +484,30 @@ fn full_access_is_unavailable_without_the_sandbox() {
         mode_refusal(PermissionMode::FullAccess, &missing),
         Some(SessionError::SetPermissionMode { reason, .. }) if reason.contains("notConfigured")
     ));
+}
+
+#[test]
+fn without_a_ready_sandbox_every_mode_asks_before_running_commands() {
+    let missing: Sandbox = Err("notConfigured".to_owned());
+    for requested in [
+        PermissionMode::Supervised,
+        PermissionMode::AcceptEdits,
+        PermissionMode::FullAccess,
+    ] {
+        let mode = effective_mode(requested, &missing);
+        let thread = thread_params(&cwd(), None, mode);
+        let resumed = resume_params("th_1", &cwd(), None, mode);
+        let turn = with_mode(turn_params("th_1", "revise", None, None), mode);
+        for params in [&thread, &resumed, &turn] {
+            assert_eq!(
+                params["approvalPolicy"],
+                json!("untrusted"),
+                "{requested:?}"
+            );
+        }
+        assert_eq!(thread["sandbox"], json!("read-only"), "{requested:?}");
+        assert_eq!(turn["sandboxPolicy"], json!({"type": "readOnly"}));
+    }
 }
 
 #[test]

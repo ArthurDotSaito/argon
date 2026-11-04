@@ -40,7 +40,7 @@ A configuração de agente que vem dentro do PR revisado não é confiável. Cad
 O que cada driver nativo pede ao Argon:
 
 - **Claude Code e OpenCode**: comandos, edições e buscas na web viram pedido de permissão para o Argon. No OpenCode, negar um card encerra o turno; para continuar, mande outra mensagem ao agente. No Claude Code, as regras `permissions.allow` do próprio usuário em `~/.claude/settings.json` continuam valendo nas revisões do Argon: o que elas liberam roda sem card.
-- **Codex**: em Supervisionado, o Codex roda comandos dentro da própria sandbox somente leitura, sem card. Ele só pede ao Argon as escaladas: sair da sandbox, usar a rede ou gravar arquivos. Leituras fora da worktree podem não gerar card.
+- **Codex**: em Supervisionado e Aceitar edições, todo comando do Codex vira card, inclusive leituras como `git diff` e `rg`, porque a sandbox somente leitura do Codex no Windows não impede ler fora da worktree. "Permitir nesta sessão" num card de comando reduz a repetição: o Codex guarda essa aprovação em memória, só na sessão aberta. Pedidos de rede ou de permissões extras não oferecem essa opção. Em Acesso total os comandos rodam sem card.
 - Os títulos dos cards passam por um único filtro: caracteres de controle, bidi e de largura zero viram espaço, e o texto é cortado em 2000 caracteres (comandos, rede e outros) ou 300 (leituras, buscas e edições), sempre com " …" visível quando há corte.
 
 Modos de permissão, por agente:
@@ -49,7 +49,7 @@ Modos de permissão, por agente:
 - **Aceitar edições**: leituras, buscas e edições dentro da worktree da revisão são aprovadas automaticamente; o resto continua pedindo.
 - **Acesso total**: aprova tudo sem mostrar o card. O agente lê código de PR de terceiros, então use só se aceitar o risco. No Codex exige a sandbox do Windows pronta; sem ela a sessão abre em Supervisionado.
 
-"Permitir nesta sessão" vale só para a sessão aberta, fica em memória (não é gravado em disco) e só vale para leituras, buscas e edições dentro da worktree da revisão.
+"Permitir nesta sessão" vale só para a sessão aberta, fica em memória (não é gravado em disco) e só vale para leituras, buscas e edições dentro da worktree da revisão. A exceção são os comandos do Codex, descritos acima.
 
 ### Uso do plano
 
