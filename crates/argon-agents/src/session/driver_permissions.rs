@@ -1,30 +1,13 @@
-use agent_client_protocol::v1::Responder;
-use agent_client_protocol::v1::schema::{
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome,
-};
-use serde_json::Value;
-
 use super::{Shared, State};
 use crate::session::events::{AgentEvent, PendingPermission};
-use crate::session::permissions::{PermissionDecision, acp_ask, decide};
+use crate::session::permissions::{
+    PermissionAnswer, PermissionAsk, PermissionDecision, PermissionReply, decide,
+};
 use crate::session::{Result, SessionError};
 
-pub(super) type PermissionResponder = Responder<RequestPermissionResponse>;
-
 pub(super) struct Pending {
-    pub responder: PermissionResponder,
+    pub reply: PermissionReply,
     pub permission: PendingPermission,
-}
-
-fn selected(option_id: &str) -> RequestPermissionResponse {
-    RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
-        SelectedPermissionOutcome::new(option_id.to_owned()),
-    ))
-}
-
-fn cancelled() -> RequestPermissionResponse {
-    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
 }
 
 pub(crate) fn validate_option(permission: &PendingPermission, option_id: &str) -> Result<()> {
@@ -43,22 +26,11 @@ pub(crate) fn validate_option(permission: &PendingPermission, option_id: &str) -
 }
 
 impl Shared {
-    pub fn on_permission(
-        &self,
-        request: &RequestPermissionRequest,
-        responder: PermissionResponder,
-    ) {
-        let value = serde_json::to_value(request).unwrap_or(Value::Null);
+    pub fn on_permission(&self, ask: PermissionAsk, reply: PermissionReply) {
         let mut state = self.lock();
-        let tool_call_id = value
-            .pointer("/toolCall/toolCallId")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let known_kind = state.tool_kinds.get(tool_call_id).cloned();
-        let ask = acp_ask(&value, known_kind.as_deref());
         match decide(&ask, &self.config.cwd, self.config.full_access) {
             PermissionDecision::Allow { option_id } => {
-                if let Err(error) = responder.respond(selected(&option_id)) {
+                if let Err(error) = reply(PermissionAnswer::Selected(option_id)) {
                     tracing::warn!(%error, "failed to auto-allow permission");
                 }
             }
@@ -71,14 +43,15 @@ impl Shared {
                     options: prompt.options,
                 };
                 let event = AgentEvent::permission(&permission);
-                state.pending.push(Pending {
-                    responder,
-                    permission,
-                });
+                state.pending.push(Pending { reply, permission });
                 self.emit_locked(&mut state, event);
                 self.sync_awaiting(&mut state);
             }
         }
+    }
+
+    pub fn known_kind(&self, tool_call_id: &str) -> Option<String> {
+        self.lock().tool_kinds.get(tool_call_id).cloned()
     }
 
     pub fn respond(&self, request_id: &str, option_id: &str) -> Result<()> {
@@ -90,17 +63,15 @@ impl Shared {
             .ok_or_else(|| SessionError::UnknownPermission(request_id.to_owned()))?;
         validate_option(&state.pending[index].permission, option_id)?;
         let pending = state.pending.remove(index);
-        let result = pending
-            .responder
-            .respond(selected(option_id))
-            .map_err(|error| SessionError::Acp(error.to_string()));
+        let result = (pending.reply)(PermissionAnswer::Selected(option_id.to_owned()))
+            .map_err(SessionError::Acp);
         self.sync_awaiting(&mut state);
         result
     }
 
     pub(super) fn cancel_pending_locked(&self, state: &mut State) {
         for pending in state.pending.drain(..) {
-            let _ = pending.responder.respond(cancelled());
+            let _ = (pending.reply)(PermissionAnswer::Cancelled);
         }
         self.sync_awaiting(state);
     }

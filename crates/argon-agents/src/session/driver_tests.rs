@@ -1,10 +1,11 @@
 use argon_core::{AgentKind, PrKey};
 use argon_store::{NewAgentSession, Store};
 use futures::StreamExt;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
-use crate::session::events::PermissionOption;
+use crate::session::events::{PermissionOption, map_update};
+use crate::session::permissions::{PermissionAnswer, PermissionAsk, PermissionReply};
 use crate::session::{SessionError, event_stream};
 
 const NONCE: &str = "00112233445566778899aabbccddeeff";
@@ -66,10 +67,10 @@ fn models() -> Vec<ModelInfo> {
 async fn updates_before_activation_are_dropped() {
     let (shared, writer) = shared_with(64).await;
     let (_, mut receiver) = shared.subscribe();
-    shared.on_update(&chunk("replayed"));
+    shared.emit_all(map_update(&chunk("replayed")));
     assert!(receiver.try_recv().is_err());
     shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
-    shared.on_update(&chunk("live"));
+    shared.emit_all(map_update(&chunk("live")));
     shared.close();
     assert_eq!(
         receiver.try_recv().unwrap(),
@@ -89,9 +90,9 @@ async fn turn_coalesces_chunks_and_saves_findings_with_ids() {
     shared.begin_turn("revise");
     let message = findings_message("t");
     for piece in message.as_bytes().chunks(9) {
-        shared.on_update(&chunk(std::str::from_utf8(piece).unwrap()));
+        shared.emit_all(map_update(&chunk(std::str::from_utf8(piece).unwrap())));
     }
-    shared.on_update(&json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}}));
+    shared.emit_all(map_update(&json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}})));
     shared.end_turn("end_turn").await;
     assert!(!shared.in_turn());
     assert!(shared.try_acquire());
@@ -127,7 +128,7 @@ async fn identical_finding_keeps_its_id_on_second_turn() {
     let mut ids = Vec::new();
     for _ in 0..2 {
         shared.begin_turn("revise");
-        shared.on_update(&chunk(&findings_message("mesmo")));
+        shared.emit_all(map_update(&chunk(&findings_message("mesmo"))));
         shared.end_turn("end_turn").await;
         let events = writer.events_since("s1", 0).await.unwrap();
         let Some((_, AgentEvent::Findings { findings, .. })) = events.last() else {
@@ -143,7 +144,7 @@ async fn late_subscriber_gets_consistent_snapshot() {
     let (shared, _writer) = shared_with(64).await;
     shared.activate(SessionStatus::Running, 10, "sonnet".into(), models());
     shared.begin_turn("x");
-    shared.on_update(&chunk("parcial "));
+    shared.emit_all(map_update(&chunk("parcial ")));
     let (snapshot, stream) = {
         let (snapshot, receiver) = shared.subscribe();
         (snapshot, event_stream(receiver, 11))
@@ -157,7 +158,7 @@ async fn late_subscriber_gets_consistent_snapshot() {
     assert_eq!(snapshot.models, models());
     assert_eq!(snapshot.status, SessionStatus::Running);
     assert!(snapshot.pending_permissions.is_empty());
-    shared.on_update(&chunk("final"));
+    shared.emit_all(map_update(&chunk("final")));
     let mut stream = Box::pin(stream);
     assert_eq!(
         stream.next().await.unwrap(),
@@ -216,4 +217,103 @@ async fn permission_answers_are_validated() {
         validate_option(&permission, "allow-always"),
         Err(SessionError::InvalidPermissionOption { .. })
     ));
+}
+
+type Answers = Arc<Mutex<Vec<PermissionAnswer>>>;
+
+fn recording_reply() -> (PermissionReply, Answers) {
+    let answers = Answers::default();
+    let sink = Arc::clone(&answers);
+    let reply: PermissionReply = Box::new(move |answer| {
+        sink.lock().unwrap().push(answer);
+        Ok(())
+    });
+    (reply, answers)
+}
+
+fn ask(kind: &str, paths: &[&str]) -> PermissionAsk {
+    PermissionAsk {
+        tool_call_id: Some("t1".into()),
+        kind: kind.into(),
+        title: "Tool".into(),
+        paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+        options: ["allow_once", "reject_once"]
+            .into_iter()
+            .map(|id| PermissionOption {
+                id: id.into(),
+                label: id.into(),
+                kind: id.into(),
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn local_read_is_allowed_without_asking() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (reply, answers) = recording_reply();
+    shared.on_permission(ask("read", &["repo/src/lib.rs"]), reply);
+    assert_eq!(
+        *answers.lock().unwrap(),
+        [PermissionAnswer::Selected("allow_once".into())]
+    );
+    assert!(shared.subscribe().0.pending_permissions.is_empty());
+}
+
+#[tokio::test]
+async fn asked_permission_waits_and_replies_on_respond() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (reply, answers) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), reply);
+    let (snapshot, _) = shared.subscribe();
+    assert_eq!(snapshot.status, SessionStatus::AwaitingUser);
+    assert_eq!(snapshot.pending_permissions[0].request_id, "perm-1");
+    assert!(answers.lock().unwrap().is_empty());
+    shared.respond("perm-1", "reject_once").unwrap();
+    assert_eq!(
+        *answers.lock().unwrap(),
+        [PermissionAnswer::Selected("reject_once".into())]
+    );
+    assert_eq!(shared.subscribe().0.status, SessionStatus::Running);
+}
+
+#[tokio::test]
+async fn respond_maps_reply_failure_to_session_error() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let reply: PermissionReply = Box::new(|_| Err("gone".into()));
+    shared.on_permission(ask("edit", &[]), reply);
+    assert!(matches!(
+        shared.respond("perm-1", "allow_once"),
+        Err(SessionError::Acp(message)) if message == "gone"
+    ));
+}
+
+#[tokio::test]
+async fn ending_turn_cancels_pending_permissions() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (reply, answers) = recording_reply();
+    shared.on_permission(ask("edit", &[]), reply);
+    shared.end_turn("cancelled").await;
+    assert_eq!(*answers.lock().unwrap(), [PermissionAnswer::Cancelled]);
+    assert!(shared.subscribe().0.pending_permissions.is_empty());
+}
+
+#[tokio::test]
+async fn known_kind_comes_from_emitted_tool_calls() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    assert_eq!(shared.known_kind("t1"), None);
+    shared.emit_all(map_update(&json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "t1",
+        "title": "Read",
+        "kind": "read"
+    })));
+    assert_eq!(shared.known_kind("t1").as_deref(), Some("read"));
 }

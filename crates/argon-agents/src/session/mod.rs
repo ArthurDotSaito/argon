@@ -1,4 +1,5 @@
 mod acp;
+mod acp_permissions;
 mod driver;
 mod events;
 mod failure;

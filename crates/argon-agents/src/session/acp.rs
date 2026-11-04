@@ -11,7 +11,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
+use super::acp_permissions::handle_request;
 use super::driver::{Shared, SharedConfig};
+use super::events::map_update;
 use super::failure::{STDERR_LINES, classify, with_stderr};
 use super::setup::{Connection, Ready, run_connection};
 use super::stderr::StderrTail;
@@ -291,14 +293,14 @@ async fn connect(
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
                 let update = serde_json::to_value(&notification.update).unwrap_or_default();
-                on_update.on_update(&update);
+                on_update.emit_all(map_update(&update));
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
             async move |request: RequestPermissionRequest, responder, _cx| {
-                on_permission.on_permission(&request, responder);
+                handle_request(&on_permission, &request, responder);
                 Ok(())
             },
             agent_client_protocol::on_receive_request!(),

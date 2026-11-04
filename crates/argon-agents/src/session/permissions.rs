@@ -29,6 +29,15 @@ pub struct PermissionAsk {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PermissionAnswer {
+    Selected(String),
+    Cancelled,
+}
+
+pub(crate) type PermissionReply =
+    Box<dyn FnOnce(PermissionAnswer) -> std::result::Result<(), String> + Send>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     Allow { option_id: String },
     Ask(PermissionPrompt),

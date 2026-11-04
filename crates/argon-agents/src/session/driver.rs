@@ -4,10 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use argon_store::SessionStatus;
-use serde_json::Value;
 use tokio::sync::{broadcast, watch};
 
-use super::events::{AgentEvent, PendingPermission, SavedFinding, map_update};
+use super::events::{AgentEvent, PendingPermission, SavedFinding};
 use super::record::Recorder;
 use super::stderr::StderrTail;
 use super::turn::{TurnBuffer, TurnOutcome, finish_turn};
@@ -232,9 +231,9 @@ impl Shared {
         self.lock().status
     }
 
-    pub fn on_update(&self, update: &Value) {
+    pub fn emit_all(&self, events: Vec<AgentEvent>) {
         let mut state = self.lock();
-        for event in map_update(update) {
+        for event in events {
             self.emit_locked(&mut state, event);
         }
     }
