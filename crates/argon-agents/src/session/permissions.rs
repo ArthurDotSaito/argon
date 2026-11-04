@@ -20,12 +20,21 @@ pub struct PermissionPrompt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionAsk {
+    pub tool_call_id: Option<String>,
+    pub kind: String,
+    pub title: String,
+    pub paths: Vec<String>,
+    pub options: Vec<PermissionOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     Allow { option_id: String },
     Ask(PermissionPrompt),
 }
 
-pub fn options(request: &Value) -> Vec<PermissionOption> {
+fn options(request: &Value) -> Vec<PermissionOption> {
     request
         .get("options")
         .and_then(Value::as_array)
@@ -147,37 +156,56 @@ fn touched_paths(tool_call: &Value) -> Vec<String> {
     paths
 }
 
-fn is_local_read(kind: &str, tool_call: &Value, cwd: &Path) -> bool {
-    if !READ_ONLY_KINDS.contains(&kind) {
-        return false;
-    }
-    let paths = touched_paths(tool_call);
-    !paths.is_empty() && paths.iter().all(|path| is_inside(cwd, path))
-}
-
-pub fn decide(
-    request: &Value,
-    known_kind: Option<&str>,
-    cwd: &Path,
-    full_access: bool,
-) -> PermissionDecision {
+pub(crate) fn acp_ask(request: &Value, known_kind: Option<&str>) -> PermissionAsk {
     let tool_call = request.get("toolCall").cloned().unwrap_or(Value::Null);
     let kind = json_text(&tool_call, "kind")
         .or_else(|| known_kind.map(str::to_owned))
         .unwrap_or_else(|| "other".to_owned());
-    let options = options(request);
-    let allow_once = options
+    PermissionAsk {
+        tool_call_id: json_text(&tool_call, "toolCallId"),
+        title: json_text(&tool_call, "title").unwrap_or_else(|| kind.clone()),
+        kind,
+        paths: touched_paths(&tool_call),
+        options: options(request),
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn native_options() -> Vec<PermissionOption> {
+    [
+        ("allow_once", "Permitir"),
+        ("allow_always", "Permitir nesta sessão"),
+        ("reject_once", "Negar"),
+    ]
+    .into_iter()
+    .map(|(id, label)| PermissionOption {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        kind: id.to_owned(),
+    })
+    .collect()
+}
+
+fn is_local_read(ask: &PermissionAsk, cwd: &Path) -> bool {
+    READ_ONLY_KINDS.contains(&ask.kind.as_str())
+        && !ask.paths.is_empty()
+        && ask.paths.iter().all(|path| is_inside(cwd, path))
+}
+
+pub fn decide(ask: &PermissionAsk, cwd: &Path, full_access: bool) -> PermissionDecision {
+    let allow_once = ask
+        .options
         .iter()
         .find(|option| option.kind == ALLOW_ONCE)
         .map(|option| option.id.clone());
     match allow_once {
-        Some(option_id) if full_access || is_local_read(&kind, &tool_call, cwd) => {
+        Some(option_id) if full_access || is_local_read(ask, cwd) => {
             PermissionDecision::Allow { option_id }
         }
         _ => PermissionDecision::Ask(PermissionPrompt {
-            title: json_text(&tool_call, "title").unwrap_or_else(|| kind.clone()),
-            kind,
-            options,
+            title: ask.title.clone(),
+            kind: ask.kind.clone(),
+            options: ask.options.clone(),
         }),
     }
 }

@@ -22,7 +22,9 @@ use crate::registry::AgentSpec;
 
 pub use driver::Snapshot;
 pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, ToolStatus};
-pub use permissions::{PermissionDecision, PermissionPrompt, decide as decide_permission};
+pub use permissions::{
+    PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,
+};
 pub use turn::{TurnOutcome, finish_turn};
 pub use writer::SessionWriter;
 

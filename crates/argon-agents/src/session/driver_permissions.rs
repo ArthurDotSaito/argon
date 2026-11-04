@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::{Shared, State};
 use crate::session::events::{AgentEvent, PendingPermission};
-use crate::session::permissions::{PermissionDecision, decide};
+use crate::session::permissions::{PermissionDecision, acp_ask, decide};
 use crate::session::{Result, SessionError};
 
 pub(super) type PermissionResponder = Responder<RequestPermissionResponse>;
@@ -55,12 +55,8 @@ impl Shared {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let known_kind = state.tool_kinds.get(tool_call_id).cloned();
-        match decide(
-            &value,
-            known_kind.as_deref(),
-            &self.config.cwd,
-            self.config.full_access,
-        ) {
+        let ask = acp_ask(&value, known_kind.as_deref());
+        match decide(&ask, &self.config.cwd, self.config.full_access) {
             PermissionDecision::Allow { option_id } => {
                 if let Err(error) = responder.respond(selected(&option_id)) {
                     tracing::warn!(%error, "failed to auto-allow permission");
