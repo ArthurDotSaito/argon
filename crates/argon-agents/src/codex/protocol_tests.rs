@@ -55,7 +55,9 @@ fn option_ids(ask: &PermissionAsk) -> Vec<&str> {
 fn file_change_item(id: &str, paths: &[&str]) -> Value {
     let changes: Vec<Value> = paths
         .iter()
-        .map(|path| json!({"path": path, "kind": "update", "diff": ""}))
+        .map(
+            |path| json!({"path": path, "kind": {"type": "update", "move_path": null}, "diff": ""}),
+        )
         .collect();
     json!({"type": "fileChange", "id": id, "changes": changes})
 }
@@ -334,13 +336,37 @@ fn mcp_completion_uses_string_result_as_output() {
 }
 
 #[test]
-fn mcp_completion_compacts_structured_result() {
-    let item = json!({"type": "mcpToolCall", "id": "m1", "status": "failed", "result": {"content": [{"type": "text", "text": "x"}]}});
+fn mcp_completion_joins_text_content_blocks() {
+    let result = json!({"content": [{"type": "text", "text": "x"}, {"type": "image"}, {"type": "text", "text": "y"}]});
+    let item = json!({"type": "mcpToolCall", "id": "m1", "status": "completed", "result": result});
+    match completed(&mut Decoder::new(), item) {
+        AgentEvent::ToolCallUpdate { status, output, .. } => {
+            assert_eq!(status, Some(ToolStatus::Completed));
+            assert_eq!(output.as_deref(), Some("x\ny"));
+        }
+        other => panic!("expected update, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_completion_without_text_content_compacts_the_result() {
+    let result = json!({"content": [], "structuredContent": {"n": 1}});
+    let item = json!({"type": "mcpToolCall", "id": "m1", "status": "completed", "result": result});
+    match completed(&mut Decoder::new(), item) {
+        AgentEvent::ToolCallUpdate { output, .. } => {
+            assert_eq!(output.as_deref(), Some(r#"{"n":1}"#))
+        }
+        other => panic!("expected update, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_completion_error_message_becomes_output() {
+    let item = json!({"type": "mcpToolCall", "id": "m1", "status": "failed", "result": null, "error": {"message": "boom"}});
     match completed(&mut Decoder::new(), item) {
         AgentEvent::ToolCallUpdate { status, output, .. } => {
             assert_eq!(status, Some(ToolStatus::Failed));
-            let parsed: Value = serde_json::from_str(&output.unwrap()).unwrap();
-            assert_eq!(parsed, json!({"content": [{"type": "text", "text": "x"}]}));
+            assert_eq!(output.as_deref(), Some("boom"));
         }
         other => panic!("expected update, got {other:?}"),
     }
@@ -515,6 +541,141 @@ fn legacy_exec_approval_matches_command_approval() {
 }
 
 #[test]
+fn legacy_approvals_use_call_id_when_item_id_is_absent() {
+    let mut decoder = Decoder::new();
+    let exec = ask(
+        &mut decoder,
+        "execCommandApproval",
+        json!({"callId": "call_1", "conversationId": "t", "command": ["ls"], "cwd": "/repo", "parsedCmd": []}),
+    );
+    assert_eq!(exec.tool_call_id.as_deref(), Some("call_1"));
+    let patch = ask(
+        &mut decoder,
+        "applyPatchApproval",
+        json!({"callId": "call_2", "conversationId": "t", "fileChanges": {}}),
+    );
+    assert_eq!(patch.tool_call_id.as_deref(), Some("call_2"));
+}
+
+#[test]
+fn item_id_takes_precedence_over_call_id() {
+    let ask = ask(
+        &mut Decoder::new(),
+        "execCommandApproval",
+        json!({"itemId": "item_1", "callId": "call_1", "command": ["ls"]}),
+    );
+    assert_eq!(ask.tool_call_id.as_deref(), Some("item_1"));
+}
+
+#[test]
+fn approval_without_any_id_has_no_tool_call_id() {
+    let ask = ask(
+        &mut Decoder::new(),
+        "item/commandExecution/requestApproval",
+        json!({"command": "ls"}),
+    );
+    assert_eq!(ask.tool_call_id, None);
+}
+
+#[test]
+fn legacy_apply_patch_reads_paths_and_rename_targets_from_file_changes() {
+    let params = json!({
+        "callId": "call_1",
+        "conversationId": "t",
+        "fileChanges": {
+            "a.rs": {"type": "update", "unified_diff": "", "move_path": "../../out/b.rs"},
+            "c.rs": {"type": "add", "content": ""},
+        },
+    });
+    let ask = ask(&mut Decoder::new(), "applyPatchApproval", params);
+    assert_eq!(ask.paths, vec!["a.rs", "../../out/b.rs", "c.rs"]);
+    assert_eq!(ask.title, "Edit a.rs · ../../out/b.rs · c.rs");
+}
+
+#[test]
+fn legacy_apply_patch_with_unexpected_change_shape_forces_empty_paths() {
+    let params = json!({"callId": "c", "fileChanges": {"a.rs": {"type": "chmod"}}});
+    let ask = ask(&mut Decoder::new(), "applyPatchApproval", params);
+    assert!(ask.paths.is_empty());
+    assert_eq!(ask.title, "Edit a.rs");
+}
+
+#[test]
+fn command_approval_shows_network_context_and_additional_permissions() {
+    let params = json!({
+        "itemId": "c1",
+        "command": "curl example.com",
+        "networkApprovalContext": {"host": "example.com", "protocol": "https"},
+        "additionalPermissions": {"fileSystem": {"write": ["/tmp/x"]}},
+        "reason": "fetch",
+    });
+    let ask = ask(
+        &mut Decoder::new(),
+        "item/commandExecution/requestApproval",
+        params,
+    );
+    assert_eq!(
+        ask.title,
+        r#"Bash: curl example.com — rede: https://example.com — permissões adicionais: {"fileSystem":{"write":["/tmp/x"]}} — fetch"#
+    );
+    assert!(ask.paths.is_empty());
+}
+
+#[test]
+fn command_approval_ignores_null_grant_details() {
+    let params = json!({"itemId": "c1", "command": "ls", "networkApprovalContext": null, "additionalPermissions": null});
+    let ask = ask(
+        &mut Decoder::new(),
+        "item/commandExecution/requestApproval",
+        params,
+    );
+    assert_eq!(ask.title, "Bash: ls");
+}
+
+#[test]
+fn command_approval_with_oversized_grant_details_is_declined() {
+    let params = json!({"itemId": "c1", "command": "ls", "additionalPermissions": {"fileSystem": {"write": ["x".repeat(3000)]}}});
+    assert_eq!(
+        Decoder::new().request("item/commandExecution/requestApproval", &params),
+        CodexRequest::Reply(json!({"decision": "decline"}))
+    );
+}
+
+#[test]
+fn long_command_and_reason_are_cut_with_a_marker() {
+    let params = json!({"itemId": "c1", "command": "x".repeat(2500), "reason": "r".repeat(400)});
+    let ask = ask(
+        &mut Decoder::new(),
+        "item/commandExecution/requestApproval",
+        params,
+    );
+    let expected = format!("Bash: {} … — {} …", "x".repeat(2000), "r".repeat(300));
+    assert_eq!(ask.title, expected);
+}
+
+#[test]
+fn titles_hide_bidi_and_zero_width_characters() {
+    let command = "a\u{202E}b\u{200B}c\u{2028}d\u{FEFF}e\u{2066}f";
+    let ask = ask(
+        &mut Decoder::new(),
+        "item/commandExecution/requestApproval",
+        json!({"itemId": "c1", "command": command}),
+    );
+    assert_eq!(ask.title, "Bash: a b c d e f");
+}
+
+#[test]
+fn started_item_titles_mark_cut_text() {
+    let item = json!({"type": "commandExecution", "id": "c1", "command": "y".repeat(2100)});
+    match started(&mut Decoder::new(), item) {
+        AgentEvent::ToolCall { title, .. } => {
+            assert_eq!(title, format!("Bash: {} …", "y".repeat(2000)))
+        }
+        other => panic!("expected tool call, got {other:?}"),
+    }
+}
+
+#[test]
 fn reason_is_sanitized_and_blank_reason_is_dropped() {
     let mut decoder = Decoder::new();
     let multiline = ask(
@@ -597,6 +758,97 @@ fn completed_file_change_forgets_paths() {
 }
 
 #[test]
+fn rename_target_outside_the_workspace_is_remembered_and_shown() {
+    let mut decoder = Decoder::new();
+    let item = json!({
+        "type": "fileChange",
+        "id": "f1",
+        "changes": [{"path": "a.rs", "kind": {"type": "update", "move_path": "../../out/b.rs"}, "diff": ""}],
+    });
+    match started(&mut decoder, item) {
+        AgentEvent::ToolCall { title, .. } => assert_eq!(title, "Edit a.rs · ../../out/b.rs"),
+        other => panic!("expected tool call, got {other:?}"),
+    }
+    let ask = ask(
+        &mut decoder,
+        "item/fileChange/requestApproval",
+        json!({"itemId": "f1"}),
+    );
+    assert_eq!(ask.paths, vec!["a.rs", "../../out/b.rs"]);
+    let cwd = Path::new("/work/repo");
+    assert!(!crate::session::session_grant_applies(&ask, cwd));
+}
+
+#[test]
+fn unexpected_change_kind_shapes_force_empty_paths() {
+    let kinds = [
+        json!("update"),
+        json!({"type": "update", "move_path": 5}),
+        json!({"type": "update", "move_path": ["x"]}),
+        json!({"type": "update", "move_path": ""}),
+        json!({"type": "symlink"}),
+        json!({"move_path": "x"}),
+        json!(null),
+    ];
+    for kind in kinds {
+        let mut decoder = Decoder::new();
+        let item =
+            json!({"type": "fileChange", "id": "f1", "changes": [{"path": "a.rs", "kind": kind}]});
+        started(&mut decoder, item);
+        let ask = ask(
+            &mut decoder,
+            "item/fileChange/requestApproval",
+            json!({"itemId": "f1"}),
+        );
+        assert!(ask.paths.is_empty(), "{kind}");
+    }
+}
+
+#[test]
+fn file_change_without_changes_forces_empty_paths() {
+    let mut decoder = Decoder::new();
+    started(
+        &mut decoder,
+        json!({"type": "fileChange", "id": "f1", "changes": []}),
+    );
+    let ask = ask(
+        &mut decoder,
+        "item/fileChange/requestApproval",
+        json!({"itemId": "f1"}),
+    );
+    assert!(ask.paths.is_empty());
+}
+
+#[test]
+fn grant_root_forces_ask_and_is_stated_in_the_title() {
+    let mut decoder = Decoder::new();
+    started(&mut decoder, file_change_item("f1", &["a.rs"]));
+    let ask = ask(
+        &mut decoder,
+        "item/fileChange/requestApproval",
+        json!({"itemId": "f1", "grantRoot": "/etc", "reason": "why"}),
+    );
+    assert!(ask.paths.is_empty());
+    assert_eq!(
+        ask.title,
+        "Edit a.rs — acesso de escrita a /etc pelo resto da sessão — why"
+    );
+}
+
+#[test]
+fn null_grant_root_keeps_the_remembered_paths() {
+    let mut decoder = Decoder::new();
+    started(&mut decoder, file_change_item("f1", &["a.rs"]));
+    let ask = ask(
+        &mut decoder,
+        "item/fileChange/requestApproval",
+        json!({"itemId": "f1", "grantRoot": null}),
+    );
+    assert_eq!(ask.paths, vec!["a.rs"]);
+    assert_eq!(ask.title, "Edit a.rs");
+}
+
+#[test]
 fn legacy_apply_patch_approval_matches_file_change_approval() {
     let mut decoder = Decoder::new();
     started(&mut decoder, file_change_item("f1", &["a.rs"]));
@@ -624,15 +876,34 @@ fn permissions_approval_shows_compact_permissions_and_reason() {
 }
 
 #[test]
-fn permissions_approval_truncates_long_permissions() {
-    let params = json!({"itemId": "p1", "permissions": {"blob": "x".repeat(5000)}});
-    let ask = ask(
-        &mut Decoder::new(),
-        "item/permissions/requestApproval",
-        params,
+fn permissions_approval_too_long_to_show_is_denied() {
+    let params =
+        json!({"itemId": "p1", "permissions": {"fileSystem": {"write": ["x".repeat(5000)]}}});
+    assert_eq!(
+        Decoder::new().request("item/permissions/requestApproval", &params),
+        CodexRequest::Reply(json!({"permissions": {}, "scope": "turn"}))
     );
-    assert!(ask.title.ends_with(" …"));
-    assert!(ask.title.chars().count() < 2100);
+}
+
+#[test]
+fn permissions_approval_non_object_permissions_grant_nothing() {
+    for permissions in [json!(null), json!("all"), json!(["x"])] {
+        let params = json!({"itemId": "p1", "permissions": permissions});
+        let ask = ask(
+            &mut Decoder::new(),
+            "item/permissions/requestApproval",
+            params.clone(),
+        );
+        assert_eq!(ask.title, "Permissões");
+        assert_eq!(
+            approval_response(
+                "item/permissions/requestApproval",
+                &params,
+                &selected("allow_once")
+            ),
+            json!({"permissions": {}, "scope": "turn"})
+        );
+    }
 }
 
 #[test]
@@ -646,12 +917,17 @@ fn permissions_approval_without_permissions_has_plain_title() {
 }
 
 #[test]
-fn user_input_requests_reply_with_empty_answers() {
+fn user_input_requests_answer_every_question_with_nothing() {
     let mut decoder = Decoder::new();
+    let params = json!({"questions": [{"id": "q1", "header": "h", "question": "?"}, {"id": "q2", "header": "h", "question": "?"}]});
     for method in ["item/tool/requestUserInput", "requestUserInput"] {
         assert_eq!(
+            decoder.request(method, &params),
+            CodexRequest::Reply(json!({"answers": {"q1": {"answers": []}, "q2": {"answers": []}}}))
+        );
+        assert_eq!(
             decoder.request(method, &json!({"questions": []})),
-            CodexRequest::Reply(json!({"answers": []}))
+            CodexRequest::Reply(json!({"answers": {}}))
         );
     }
 }
@@ -659,18 +935,66 @@ fn user_input_requests_reply_with_empty_answers() {
 #[test]
 fn unknown_requests_reply_with_empty_object() {
     assert_eq!(
-        Decoder::new().request("mcpServer/elicitation/request", &json!({"x": 1})),
+        Decoder::new().request("account/chatgptAuthTokens/refresh", &json!({"x": 1})),
         CodexRequest::Reply(json!({}))
     );
+}
+
+#[test]
+fn elicitation_and_dynamic_tool_requests_get_schema_valid_refusals() {
+    let mut decoder = Decoder::new();
+    assert_eq!(
+        decoder.request("mcpServer/elicitation/request", &json!({})),
+        CodexRequest::Reply(json!({"action": "decline"}))
+    );
+    assert_eq!(
+        decoder.request("item/tool/call", &json!({})),
+        CodexRequest::Reply(json!({"success": false, "contentItems": []}))
+    );
+}
+
+#[test]
+fn reasoning_without_item_id_is_ignored() {
+    let mut decoder = Decoder::new();
+    assert_eq!(
+        decoder.notification("item/reasoning/textDelta", &json!({"delta": "x"})),
+        CodexEvent::Ignore
+    );
+    assert_eq!(
+        decoder.notification("item/reasoning/summaryTextDelta", &json!({"delta": "x"})),
+        CodexEvent::Ignore
+    );
+}
+
+#[test]
+fn legacy_approvals_use_review_decision_values() {
+    for method in ["execCommandApproval", "applyPatchApproval"] {
+        let respond = |answer: PermissionAnswer| approval_response(method, &json!({}), &answer);
+        assert_eq!(
+            respond(selected("allow_once")),
+            json!({"decision": "approved"})
+        );
+        assert_eq!(
+            respond(selected("allow_always")),
+            json!({"decision": "approved"})
+        );
+        for denied in [selected("reject_once"), selected("whatever")] {
+            let response = respond(denied);
+            assert!(response["decision"]["denied"]["rejection"].is_string());
+            assert_eq!(response["decision"].as_object().unwrap().len(), 1);
+        }
+        assert_eq!(
+            respond(PermissionAnswer::Cancelled),
+            json!({"decision": "abort"})
+        );
+    }
 }
 
 #[test]
 fn command_and_file_approvals_map_answers_to_decisions() {
     let methods = [
         "item/commandExecution/requestApproval",
-        "execCommandApproval",
         "item/fileChange/requestApproval",
-        "applyPatchApproval",
     ];
     for method in methods {
         let respond = |answer: PermissionAnswer| approval_response(method, &json!({}), &answer);

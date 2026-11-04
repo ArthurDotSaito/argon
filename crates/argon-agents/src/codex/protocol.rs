@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use argon_core::PermissionMode;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::registry::ModelInfo;
-use crate::session::{AgentEvent, PermissionAnswer, PermissionAsk, ToolStatus, native_options_for};
+use crate::session::{
+    ALLOW_ALWAYS, ALLOW_ONCE, AgentEvent, PermissionAnswer, PermissionAsk, REJECT_ONCE, ToolStatus,
+    native_options_for,
+};
 use crate::util::json_text;
 
 const OUTPUT_LIMIT: usize = 8000;
@@ -14,18 +17,21 @@ const FULL_TITLE_LIMIT: usize = 2000;
 const REASON_LIMIT: usize = 300;
 const TITLE_SEPARATOR: &str = " · ";
 const TITLE_ELLIPSIS: &str = " …";
-const REASON_SEPARATOR: &str = " — ";
+const DETAIL_SEPARATOR: &str = " — ";
 const TURN_FAILED_MESSAGE: &str = "falha no Codex";
-const ALLOW_ONCE: &str = "allow_once";
-const ALLOW_ALWAYS: &str = "allow_always";
+const LEGACY_REJECTION: &str = "Negado pelo usuário no Argon";
 
 const COMMAND_APPROVAL_METHODS: [&str; 2] = [
     "item/commandExecution/requestApproval",
     "execCommandApproval",
 ];
 const FILE_APPROVAL_METHODS: [&str; 2] = ["item/fileChange/requestApproval", "applyPatchApproval"];
+const LEGACY_APPROVAL_METHODS: [&str; 2] = ["execCommandApproval", "applyPatchApproval"];
+const APPLY_PATCH_METHOD: &str = "applyPatchApproval";
 const PERMISSIONS_APPROVAL_METHOD: &str = "item/permissions/requestApproval";
 const USER_INPUT_METHODS: [&str; 2] = ["item/tool/requestUserInput", "requestUserInput"];
+const ELICITATION_METHOD: &str = "mcpServer/elicitation/request";
+const DYNAMIC_TOOL_METHOD: &str = "item/tool/call";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CodexEvent {
@@ -53,10 +59,26 @@ enum ReasoningKind {
     Text,
 }
 
+#[derive(Debug, Clone, Default)]
+struct FileTargets {
+    paths: Vec<String>,
+    trusted: bool,
+}
+
+impl FileTargets {
+    fn askable_paths(&self) -> Vec<String> {
+        if self.trusted {
+            self.paths.clone()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Decoder {
     reasoning: HashMap<String, ReasoningKind>,
-    paths: HashMap<String, Vec<String>>,
+    files: HashMap<String, FileTargets>,
     commands: HashMap<String, String>,
 }
 
@@ -81,23 +103,28 @@ impl Decoder {
 
     pub fn request(&mut self, method: &str, params: &Value) -> CodexRequest {
         if COMMAND_APPROVAL_METHODS.contains(&method) {
-            self.command_approval(params)
+            self.command_approval(method, params)
         } else if FILE_APPROVAL_METHODS.contains(&method) {
-            self.file_approval(params)
+            self.file_approval(method, params)
         } else if method == PERMISSIONS_APPROVAL_METHOD {
-            permissions_approval(params)
+            permissions_approval(method, params)
         } else if USER_INPUT_METHODS.contains(&method) {
-            CodexRequest::Reply(json!({"answers": []}))
+            CodexRequest::Reply(user_input_reply(params))
+        } else if method == ELICITATION_METHOD {
+            CodexRequest::Reply(json!({"action": "decline"}))
+        } else if method == DYNAMIC_TOOL_METHOD {
+            CodexRequest::Reply(json!({"success": false, "contentItems": []}))
         } else {
             CodexRequest::Reply(json!({}))
         }
     }
 
     fn reasoning(&mut self, params: &Value, kind: ReasoningKind) -> CodexEvent {
-        let Some(delta) = text_field(params, "delta") else {
+        let (Some(delta), Some(item_id)) =
+            (text_field(params, "delta"), text_field(params, "itemId"))
+        else {
             return CodexEvent::Ignore;
         };
-        let item_id = json_text(params, "itemId").unwrap_or_default();
         if *self.reasoning.entry(item_id).or_insert(kind) != kind {
             return CodexEvent::Ignore;
         }
@@ -111,24 +138,25 @@ impl Decoder {
         match kind.as_str() {
             "commandExecution" => {
                 let command = command_text(item.get("command")).unwrap_or_default();
-                let title = format!("Bash: {}", sanitize(&command, FULL_TITLE_LIMIT));
+                let title = format!("Bash: {}", truncated(&command, FULL_TITLE_LIMIT));
                 self.commands.insert(id.clone(), command);
                 tool_call(id, "execute", title)
             }
             "fileChange" => {
-                let title = list_title("Edit", &display_paths(item), COMPACT_TITLE_LIMIT);
-                self.paths.insert(id.clone(), change_paths(item));
+                let targets = item_file_targets(item);
+                let title = list_title("Edit", &targets.paths, COMPACT_TITLE_LIMIT);
+                self.files.insert(id.clone(), targets);
                 tool_call(id, "edit", title)
             }
             "mcpToolCall" => {
                 let server = json_text(item, "server").unwrap_or_default();
                 let tool = json_text(item, "tool").unwrap_or_default();
-                let title = sanitize(&format!("{server}.{tool}"), FULL_TITLE_LIMIT);
+                let title = truncated(&format!("{server}.{tool}"), FULL_TITLE_LIMIT);
                 tool_call(id, "other", title)
             }
             "webSearch" => {
                 let query = text_field(item, "query").unwrap_or_default();
-                let title = format!("Web search {}", sanitize(&query, FULL_TITLE_LIMIT));
+                let title = format!("Web search {}", truncated(&query, FULL_TITLE_LIMIT));
                 tool_call(id, "fetch", title.trim_end().to_owned())
             }
             _ => CodexEvent::Ignore,
@@ -146,7 +174,7 @@ impl Decoder {
                 tool_update(id, final_status(item), output)
             }
             "fileChange" => {
-                self.paths.remove(&id);
+                self.files.remove(&id);
                 tool_update(id, final_status(item), None)
             }
             "mcpToolCall" => tool_update(id, final_status(item), mcp_output(item)),
@@ -159,37 +187,68 @@ impl Decoder {
         }
     }
 
-    fn command_approval(&self, params: &Value) -> CodexRequest {
+    fn command_approval(&self, method: &str, params: &Value) -> CodexRequest {
         let item_id = approval_item_id(params);
         let command = command_text(params.get("command")).or_else(|| {
             item_id
                 .as_ref()
                 .and_then(|id| self.commands.get(id).cloned())
         });
-        let title = match command {
-            Some(command) => format!("Bash: {}", sanitize(&command, FULL_TITLE_LIMIT)),
+        let mut title = match command {
+            Some(command) => format!("Bash: {}", truncated(&command, FULL_TITLE_LIMIT)),
             None => "Bash".to_owned(),
         };
+        let Some(details) = grant_details(params) else {
+            return deny(method, params);
+        };
+        for detail in details {
+            title.push_str(DETAIL_SEPARATOR);
+            title.push_str(&sanitize(&detail, usize::MAX));
+        }
         ask(item_id, "execute", with_reason(title, params), Vec::new())
     }
 
-    fn file_approval(&self, params: &Value) -> CodexRequest {
+    fn file_approval(&self, method: &str, params: &Value) -> CodexRequest {
         let item_id = approval_item_id(params);
-        let paths = item_id
-            .as_ref()
-            .and_then(|id| self.paths.get(id).cloned())
+        let legacy_targets = if method == APPLY_PATCH_METHOD {
+            params
+                .get("fileChanges")
+                .and_then(Value::as_object)
+                .map(legacy_file_targets)
+        } else {
+            None
+        };
+        let targets = legacy_targets
+            .or_else(|| item_id.as_ref().and_then(|id| self.files.get(id).cloned()))
             .unwrap_or_default();
-        let title = list_title("Edit", &paths, COMPACT_TITLE_LIMIT);
+        let mut title = list_title("Edit", &targets.paths, COMPACT_TITLE_LIMIT);
+        let mut paths = targets.askable_paths();
+        if let Some(root) = params.get("grantRoot").filter(|root| !root.is_null()) {
+            let root = match root.as_str() {
+                Some(text) => text.to_owned(),
+                None => root.to_string(),
+            };
+            title.push_str(&format!(
+                "{DETAIL_SEPARATOR}acesso de escrita a {} pelo resto da sessão",
+                truncated(&root, FULL_TITLE_LIMIT)
+            ));
+            paths.clear();
+        }
         ask(item_id, "edit", with_reason(title, params), paths)
     }
 }
 
 pub(crate) fn approval_response(method: &str, params: &Value, answer: &PermissionAnswer) -> Value {
-    if COMMAND_APPROVAL_METHODS.contains(&method) || FILE_APPROVAL_METHODS.contains(&method) {
+    if LEGACY_APPROVAL_METHODS.contains(&method) {
+        json!({"decision": legacy_decision(answer)})
+    } else if COMMAND_APPROVAL_METHODS.contains(&method) || FILE_APPROVAL_METHODS.contains(&method)
+    {
         json!({"decision": decision(answer)})
     } else if method == PERMISSIONS_APPROVAL_METHOD {
         let permissions = if is_allowed(answer) {
-            params.get("permissions").cloned().unwrap_or(json!({}))
+            requested_permissions(params)
+                .cloned()
+                .unwrap_or_else(|| json!({}))
         } else {
             json!({})
         };
@@ -379,11 +438,37 @@ fn final_status(item: &Value) -> ToolStatus {
 }
 
 fn mcp_output(item: &Value) -> Option<String> {
+    if let Some(message) = item
+        .get("error")
+        .and_then(|error| text_field(error, "message"))
+    {
+        return Some(message);
+    }
     match item.get("result")? {
         Value::Null => None,
         Value::String(text) => Some(text.clone()),
-        other => Some(other.to_string()),
+        result => Some(
+            content_text(result)
+                .or_else(|| {
+                    result
+                        .get("structuredContent")
+                        .filter(|content| !content.is_null())
+                        .map(Value::to_string)
+                })
+                .unwrap_or_else(|| result.to_string()),
+        ),
     }
+}
+
+fn content_text(result: &Value) -> Option<String> {
+    let blocks = result.get("content")?.as_array()?;
+    let text = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| json_text(block, "text"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(text).filter(|text| !text.is_empty())
 }
 
 fn command_text(command: Option<&Value>) -> Option<String> {
@@ -399,27 +484,58 @@ fn command_text(command: Option<&Value>) -> Option<String> {
     Some(text).filter(|text| !text.trim().is_empty())
 }
 
-fn changes(item: &Value) -> &[Value] {
-    item.get("changes")
+fn move_target(kind: &Value) -> Option<Option<&str>> {
+    match kind.get("type").and_then(Value::as_str)? {
+        "add" | "delete" => Some(None),
+        "update" => match kind.get("move_path") {
+            None | Some(Value::Null) => Some(None),
+            Some(Value::String(path)) if !path.trim().is_empty() => Some(Some(path)),
+            Some(_) => None,
+        },
+        _ => None,
+    }
+}
+
+fn file_targets<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Value)>) -> FileTargets {
+    let mut targets = FileTargets {
+        paths: Vec::new(),
+        trusted: true,
+    };
+    for (path, kind) in entries {
+        match path.filter(|path| !path.trim().is_empty()) {
+            Some(path) => targets.paths.push(path.to_owned()),
+            None => targets.trusted = false,
+        }
+        match move_target(kind) {
+            Some(Some(target)) => targets.paths.push(target.to_owned()),
+            Some(None) => {}
+            None => targets.trusted = false,
+        }
+    }
+    targets.trusted &= !targets.paths.is_empty();
+    targets
+}
+
+fn item_file_targets(item: &Value) -> FileTargets {
+    let changes = item
+        .get("changes")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    file_targets(changes.iter().map(|change| {
+        (
+            change.get("path").and_then(Value::as_str),
+            change.get("kind").unwrap_or(&Value::Null),
+        )
+    }))
 }
 
-fn display_paths(item: &Value) -> Vec<String> {
-    changes(item)
-        .iter()
-        .filter_map(|change| text_field(change, "path"))
-        .collect()
-}
-
-fn change_paths(item: &Value) -> Vec<String> {
-    let paths = display_paths(item);
-    if paths.len() == changes(item).len() && paths.iter().all(|path| !path.trim().is_empty()) {
-        paths
-    } else {
-        Vec::new()
-    }
+fn legacy_file_targets(changes: &Map<String, Value>) -> FileTargets {
+    file_targets(
+        changes
+            .iter()
+            .map(|(path, change)| (Some(path.as_str()), change)),
+    )
 }
 
 fn approval_item_id(params: &Value) -> Option<String> {
@@ -441,13 +557,47 @@ fn ask(
     })
 }
 
-fn permissions_approval(params: &Value) -> CodexRequest {
-    let title = match params.get("permissions") {
-        Some(permissions) if !permissions.is_null() => format!(
-            "Permissões: {}",
-            truncated(&permissions.to_string(), FULL_TITLE_LIMIT)
-        ),
-        _ => "Permissões".to_owned(),
+fn deny(method: &str, params: &Value) -> CodexRequest {
+    CodexRequest::Reply(approval_response(
+        method,
+        params,
+        &PermissionAnswer::Selected(REJECT_ONCE.to_owned()),
+    ))
+}
+
+fn grant_details(params: &Value) -> Option<Vec<String>> {
+    let present = |key: &str| params.get(key).filter(|value| !value.is_null());
+    let mut details = Vec::new();
+    if let Some(context) = present("networkApprovalContext") {
+        let target = match (text_field(context, "protocol"), text_field(context, "host")) {
+            (Some(protocol), Some(host)) => format!("{protocol}://{host}"),
+            _ => context.to_string(),
+        };
+        details.push(format!("rede: {target}"));
+    }
+    if let Some(extra) = present("additionalPermissions") {
+        details.push(format!("permissões adicionais: {extra}"));
+    }
+    details
+        .iter()
+        .all(|detail| detail.chars().count() <= FULL_TITLE_LIMIT)
+        .then_some(details)
+}
+
+fn requested_permissions(params: &Value) -> Option<&Value> {
+    params.get("permissions").filter(|value| value.is_object())
+}
+
+fn permissions_approval(method: &str, params: &Value) -> CodexRequest {
+    let title = match requested_permissions(params) {
+        Some(permissions) => {
+            let compact = permissions.to_string();
+            if compact.chars().count() > FULL_TITLE_LIMIT {
+                return deny(method, params);
+            }
+            format!("Permissões: {}", sanitize(&compact, usize::MAX))
+        }
+        None => "Permissões".to_owned(),
     };
     ask(
         approval_item_id(params),
@@ -457,11 +607,24 @@ fn permissions_approval(params: &Value) -> CodexRequest {
     )
 }
 
+fn user_input_reply(params: &Value) -> Value {
+    let answers: Map<String, Value> = params
+        .get("questions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|question| text_field(question, "id"))
+        .map(|id| (id, json!({"answers": []})))
+        .collect();
+    json!({"answers": answers})
+}
+
 fn with_reason(title: String, params: &Value) -> String {
     match text_field(params, "reason").filter(|reason| !reason.trim().is_empty()) {
         Some(reason) => format!(
-            "{title}{REASON_SEPARATOR}{}",
-            sanitize(&reason, REASON_LIMIT)
+            "{title}{DETAIL_SEPARATOR}{}",
+            truncated(&reason, REASON_LIMIT)
         ),
         None => title,
     }
@@ -479,6 +642,14 @@ fn decision(answer: &PermissionAnswer) -> &'static str {
     }
 }
 
+fn legacy_decision(answer: &PermissionAnswer) -> Value {
+    match answer {
+        PermissionAnswer::Cancelled => json!("abort"),
+        answer if is_allowed(answer) => json!("approved"),
+        _ => json!({"denied": {"rejection": LEGACY_REJECTION}}),
+    }
+}
+
 fn truncate(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
@@ -491,10 +662,28 @@ fn truncated(text: &str, limit: usize) -> String {
     shown
 }
 
+fn is_hidden_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{FEFF}'
+    )
+}
+
 fn sanitize(text: &str, limit: usize) -> String {
     text.chars()
         .take(limit)
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || is_hidden_format(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 

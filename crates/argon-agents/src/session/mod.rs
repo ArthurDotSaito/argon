@@ -31,7 +31,8 @@ pub use driver::Snapshot;
 pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, ToolStatus};
 pub(crate) use failure::with_stderr;
 pub(crate) use permissions::{
-    PermissionAnswer, PermissionReply, input_paths, native_options_for, session_grant_applies,
+    ALLOW_ALWAYS, ALLOW_ONCE, PermissionAnswer, PermissionReply, REJECT_ONCE, input_paths,
+    native_options_for, session_grant_applies,
 };
 pub use permissions::{
     PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,

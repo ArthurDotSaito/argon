@@ -8,9 +8,9 @@ use crate::util::json_text;
 
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
-const ALLOW_ONCE: &str = "allow_once";
-const ALLOW_ALWAYS: &str = "allow_always";
-const REJECT_ONCE: &str = "reject_once";
+pub(crate) const ALLOW_ONCE: &str = "allow_once";
+pub(crate) const ALLOW_ALWAYS: &str = "allow_always";
+pub(crate) const REJECT_ONCE: &str = "reject_once";
 const PATH_KEYS: [&str; 6] = [
     "path",
     "file_path",
