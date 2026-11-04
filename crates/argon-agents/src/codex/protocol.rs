@@ -20,6 +20,7 @@ const TITLE_ELLIPSIS: &str = " …";
 const DETAIL_SEPARATOR: &str = " — ";
 const TURN_FAILED_MESSAGE: &str = "falha no Codex";
 const LEGACY_REJECTION: &str = "Negado pelo usuário no Argon";
+const APPROVALS_REVIEWER: &str = "user";
 
 const COMMAND_APPROVAL_METHODS: [&str; 2] = [
     "item/commandExecution/requestApproval",
@@ -317,6 +318,7 @@ pub(crate) fn thread_params(cwd: &Path, model: Option<&str>, mode: PermissionMod
     let mut params = json!({
         "cwd": cwd.to_string_lossy(),
         "approvalPolicy": policy.approval,
+        "approvalsReviewer": APPROVALS_REVIEWER,
         "sandbox": policy.sandbox,
     });
     set_optional(&mut params, "model", model);
@@ -326,6 +328,7 @@ pub(crate) fn thread_params(cwd: &Path, model: Option<&str>, mode: PermissionMod
 pub(crate) fn with_mode(mut params: Value, mode: PermissionMode) -> Value {
     let policy = policy(mode);
     params["approvalPolicy"] = json!(policy.approval);
+    params["approvalsReviewer"] = json!(APPROVALS_REVIEWER);
     params["sandboxPolicy"] = json!({"type": policy.sandbox_type});
     params
 }
@@ -343,6 +346,10 @@ pub(crate) fn thread_id(result: &Value) -> Option<String> {
     result
         .get("thread")
         .and_then(|thread| text_field(thread, "id"))
+}
+
+pub(crate) fn thread_model(result: &Value) -> Option<String> {
+    text_field(result, "model")
 }
 
 pub(crate) fn turn_id(result: &Value) -> Option<String> {

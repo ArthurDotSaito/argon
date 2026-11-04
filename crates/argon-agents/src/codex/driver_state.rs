@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use argon_core::PermissionMode;
 use serde_json::{Value, json};
@@ -16,6 +16,8 @@ const CANCELLED: &str = "cancelled";
 const ARCHIVED_MARKER: &str = "archived";
 const MAX_MODELS: usize = 500;
 const MAX_MODEL_PAGES: usize = 50;
+const SANDBOX_READY: &str = "ready";
+const GITDIR_PREFIX: &str = "gitdir:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Close {
@@ -171,6 +173,93 @@ impl ModelPages {
     }
 }
 
+pub(super) type Sandbox = std::result::Result<(), String>;
+
+pub(super) fn readiness(result: std::result::Result<Value, String>) -> Sandbox {
+    let result = result?;
+    match result.get("status").and_then(Value::as_str) {
+        Some(SANDBOX_READY) => Ok(()),
+        Some(status) => Err(status.to_owned()),
+        None => Err(result.to_string()),
+    }
+}
+
+pub(super) fn agent_mode(mode: PermissionMode, sandbox: &Sandbox) -> PermissionMode {
+    match (mode, sandbox) {
+        (PermissionMode::FullAccess, Err(_)) => PermissionMode::Supervised,
+        _ => mode,
+    }
+}
+
+pub(super) fn sandbox_warning(mode: PermissionMode, sandbox: &Sandbox) -> Option<String> {
+    match (mode, sandbox) {
+        (PermissionMode::FullAccess, Err(status)) => Some(format!(
+            "a sandbox do Codex no Windows não está pronta ({status}); Acesso total vai pedir aprovação para comandos"
+        )),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ModeSwitch {
+    pending: Option<PermissionMode>,
+}
+
+impl ModeSwitch {
+    pub fn request(&mut self, mode: PermissionMode, in_turn: bool) -> Option<PermissionMode> {
+        if in_turn {
+            self.pending = Some(mode);
+            None
+        } else {
+            self.pending = None;
+            Some(mode)
+        }
+    }
+
+    pub fn take(&mut self) -> Option<PermissionMode> {
+        self.pending.take()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ModelChoice {
+    pub shown: String,
+    pub sent: Option<String>,
+}
+
+pub(super) fn pick_model(
+    chosen: Option<&str>,
+    reported: Option<&str>,
+    default: Option<&str>,
+) -> ModelChoice {
+    let pick = |model: &str, sent: bool| ModelChoice {
+        shown: model.to_owned(),
+        sent: sent.then(|| model.to_owned()),
+    };
+    match (chosen, reported, default) {
+        (Some(model), _, _) => pick(model, true),
+        (None, Some(model), _) => pick(model, false),
+        (None, None, Some(model)) => pick(model, true),
+        (None, None, None) => ModelChoice {
+            shown: String::new(),
+            sent: None,
+        },
+    }
+}
+
+pub(super) fn gitdir_target(gitfile: &str, root: &Path) -> Option<PathBuf> {
+    let target = gitfile.lines().next()?.strip_prefix(GITDIR_PREFIX)?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    Some(root.join(target))
+}
+
+pub(super) fn common_dir(gitdir: &Path, commondir: &str) -> Option<PathBuf> {
+    let target = commondir.trim();
+    (!target.is_empty()).then(|| gitdir.join(target))
+}
+
 pub(super) fn project_roots(cwd: &Path, is_root: impl Fn(&Path) -> bool) -> Vec<&Path> {
     let mut roots = Vec::new();
     for dir in cwd.ancestors() {
@@ -182,7 +271,7 @@ pub(super) fn project_roots(cwd: &Path, is_root: impl Fn(&Path) -> bool) -> Vec<
     roots
 }
 
-pub(super) fn trust_keys(roots: &[&Path]) -> Vec<String> {
+pub(super) fn trust_keys(roots: &[PathBuf]) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
     for root in roots {
         let text = root.display().to_string();

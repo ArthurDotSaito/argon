@@ -146,6 +146,10 @@ impl RpcClient {
         self.enqueue(&json!({ "id": id, "error": { "code": code, "message": message } }))
     }
 
+    pub fn is_closed(&self) -> bool {
+        lock(&self.inner.shared.pending).is_none()
+    }
+
     fn enqueue(&self, message: &Value) -> Result<(), String> {
         let pending = lock(&self.inner.shared.pending);
         if pending.is_none() {

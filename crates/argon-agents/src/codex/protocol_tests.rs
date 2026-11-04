@@ -1174,12 +1174,12 @@ fn thread_params_follow_permission_mode() {
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         assert_eq!(
             thread_params(cwd, None, mode),
-            json!({"cwd": "repo", "approvalPolicy": "on-request", "sandbox": "read-only"})
+            json!({"cwd": "repo", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only"})
         );
     }
     assert_eq!(
         thread_params(cwd, Some("gpt-5"), PermissionMode::FullAccess),
-        json!({"cwd": "repo", "approvalPolicy": "never", "sandbox": "workspace-write", "model": "gpt-5"})
+        json!({"cwd": "repo", "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "workspace-write", "model": "gpt-5"})
     );
 }
 
@@ -1198,7 +1198,7 @@ fn resume_params_add_thread_id() {
             Some("gpt-5"),
             PermissionMode::Supervised
         ),
-        json!({"threadId": "th_1", "cwd": "repo", "approvalPolicy": "on-request", "sandbox": "read-only", "model": "gpt-5"})
+        json!({"threadId": "th_1", "cwd": "repo", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5"})
     );
 }
 
@@ -1220,11 +1220,13 @@ fn turn_mode_overrides_follow_permission_mode() {
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         let params = with_mode(base(), mode);
         assert_eq!(params["approvalPolicy"], json!("on-request"));
+        assert_eq!(params["approvalsReviewer"], json!("user"));
         assert_eq!(params["sandboxPolicy"], json!({"type": "readOnly"}));
         assert_eq!(params["threadId"], json!("th_1"));
     }
     let full = with_mode(base(), PermissionMode::FullAccess);
     assert_eq!(full["approvalPolicy"], json!("never"));
+    assert_eq!(full["approvalsReviewer"], json!("user"));
     assert_eq!(full["sandboxPolicy"], json!({"type": "workspaceWrite"}));
 }
 
@@ -1261,7 +1263,12 @@ fn response_ids_come_from_thread_and_turn_objects() {
     ] {
         assert_eq!(thread_id(&malformed), None);
         assert_eq!(turn_id(&malformed), None);
+        assert_eq!(thread_model(&malformed), None);
     }
+    assert_eq!(
+        thread_model(&json!({"thread": {"id": "th_1"}, "model": "gpt-5"})),
+        Some("gpt-5".to_owned())
+    );
 }
 
 #[test]

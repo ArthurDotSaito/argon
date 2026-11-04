@@ -1,54 +1,44 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use argon_core::PermissionMode;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use super::protocol::{
-    CodexEvent, CodexRequest, Decoder, approval_response, default_model, initialize_params,
-    interrupt_params, message_turn, parse_models, resume_params, thread_id, thread_params, turn_id,
-    turn_params, with_mode, with_untrusted_projects,
+    CodexEvent, CodexRequest, Decoder, approval_response, default_model, interrupt_params,
+    message_turn, parse_models, turn_id, turn_params, with_mode,
 };
 use crate::jsonrpc::{Incoming, RpcClient};
-use crate::process::KillOnDropChild;
 use crate::registry::{AgentSpec, ModelInfo};
 use crate::session::{
     ALLOW_ONCE, AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk,
-    PermissionReply, Ready, Result, SessionError, Shared, StderrTail, start_agent, terminate,
-    with_stderr,
+    PermissionReply, Ready, Result, SessionError, Shared, StderrTail, with_stderr,
 };
-use crate::util::{Resolved, resolve_command};
 
+#[path = "driver_launch.rs"]
+mod launch;
 #[path = "driver_state.rs"]
 mod state;
 
+use launch::{Codex, Feed, Open, Tagged, ThreadSetup, list_models, open_thread, workspace};
 use state::{
-    Close, ModelPages, Turns, auto_allowed, check_model, exit_message, grants_session, is_archived,
-    project_roots, trust_keys,
+    Close, ModeSwitch, Sandbox, Turns, agent_mode, auto_allowed, check_model, exit_message,
+    grants_session, pick_model, sandbox_warning,
 };
 
-const APP_SERVER_ARG: &str = "app-server";
-const GIT_MARKER: &str = ".git";
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const UNSUPPORTED_REQUEST: i64 = -32601;
 const END_TURN: &str = "end_turn";
 const CANCELLED_REASON: &str = "cancelled";
 const SESSION_CLOSED: &str = "a sessão do Codex foi encerrada";
 const BUSY_TURN: &str = "já existe um turno em andamento";
-const MISSING_THREAD: &str = "o Codex não devolveu o id da conversa";
 const MISSING_TURN: &str = "o Codex não devolveu o id do turno";
 
 type Answer = (Route, PermissionAnswer);
-type Tagged = (u64, Feed);
-
-enum Feed {
-    Message(Incoming),
-    Closed,
-}
 
 struct Route {
     generation: u64,
@@ -65,18 +55,6 @@ enum Wake {
     Awaiting(bool),
     TurnTimeout,
     CancelExpired,
-}
-
-enum Open<'a> {
-    Start,
-    Resume(&'a str),
-}
-
-struct ThreadSetup<'a> {
-    cwd: &'a Path,
-    model: Option<&'a str>,
-    mode: PermissionMode,
-    untrusted: &'a [String],
 }
 
 fn reply_to(answers: &mpsc::UnboundedSender<Answer>, route: Route) -> PermissionReply {
@@ -99,142 +77,20 @@ fn non_empty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
-fn check_command(spec: &AgentSpec) -> Result<()> {
-    match resolve_command(&spec.command) {
-        Resolved::Path(_) => Ok(()),
-        Resolved::Missing => Err(SessionError::CommandNotFound(
-            spec.command.display().to_string(),
-        )),
-        Resolved::Failed(message) => Err(SessionError::Agent(message)),
-    }
-}
-
-fn untrusted_roots(cwd: &Path) -> Vec<String> {
-    let canonical = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    trust_keys(&project_roots(&canonical, |dir| {
-        dir.join(GIT_MARKER).exists()
-    }))
-}
-
-fn forward(
-    mut incoming: mpsc::UnboundedReceiver<Incoming>,
-    generation: u64,
-    feed: mpsc::UnboundedSender<Tagged>,
-) {
-    tokio::spawn(async move {
-        while let Some(message) = incoming.recv().await {
-            if feed.send((generation, Feed::Message(message))).is_err() {
-                return;
-            }
-        }
-        let _ = feed.send((generation, Feed::Closed));
-    });
-}
-
-struct Codex {
-    child: KillOnDropChild,
-    rpc: RpcClient,
-    generation: u64,
-}
-
-impl Codex {
-    fn spawn(
-        spec: &AgentSpec,
-        cwd: &Path,
-        tail: Arc<StderrTail>,
-        generation: u64,
-        feed: &mpsc::UnboundedSender<Tagged>,
-    ) -> Result<Codex> {
-        check_command(spec)?;
-        let mut args = spec.args.clone();
-        args.push(APP_SERVER_ARG.to_owned());
-        let spec = AgentSpec {
-            args,
-            ..spec.clone()
-        };
-        let (child, stdin, stdout) = start_agent(&spec, cwd, tail)?;
-        let (rpc, incoming) = RpcClient::new(stdin, stdout);
-        forward(incoming, generation, feed.clone());
-        Ok(Codex {
-            child,
-            rpc,
-            generation,
-        })
-    }
-
-    async fn stop(self) -> Option<i32> {
-        let Codex { mut child, rpc, .. } = self;
-        drop(rpc);
-        terminate(&mut child).await;
-        child.wait().await.ok().and_then(|status| status.code())
-    }
-}
-
-async fn handshake(rpc: &RpcClient) -> std::result::Result<(), String> {
-    rpc.call("initialize", initialize_params(env!("CARGO_PKG_VERSION")))
-        .await?;
-    rpc.notify("initialized", None)
-}
-
-async fn resume(rpc: &RpcClient, id: &str, params: Value) -> std::result::Result<(), String> {
-    match rpc.call("thread/resume", params.clone()).await {
-        Ok(_) => Ok(()),
-        Err(error) if is_archived(&error) => {
-            rpc.call("thread/unarchive", json!({"threadId": id}))
-                .await?;
-            rpc.call("thread/resume", params).await.map(|_| ())
-        }
-        Err(error) => Err(error),
-    }
-}
-
-async fn open_thread(
-    rpc: &RpcClient,
-    open: Open<'_>,
-    setup: &ThreadSetup<'_>,
-) -> std::result::Result<String, String> {
-    handshake(rpc).await?;
-    match open {
-        Open::Start => {
-            let params = thread_params(setup.cwd, setup.model, setup.mode);
-            let result = rpc
-                .call(
-                    "thread/start",
-                    with_untrusted_projects(params, setup.untrusted),
-                )
-                .await?;
-            thread_id(&result).ok_or_else(|| MISSING_THREAD.to_owned())
-        }
-        Open::Resume(id) => {
-            let params = resume_params(id, setup.cwd, setup.model, setup.mode);
-            resume(rpc, id, with_untrusted_projects(params, setup.untrusted)).await?;
-            Ok(id.to_owned())
-        }
-    }
-}
-
-async fn list_models(rpc: &RpcClient) -> std::result::Result<Value, String> {
-    let mut pages = ModelPages::default();
-    let mut params = json!({});
-    loop {
-        let page = rpc.call("model/list", params).await?;
-        match pages.add(&page) {
-            Some(cursor) => params = json!({"cursor": cursor}),
-            None => return Ok(pages.result()),
-        }
-    }
-}
-
 struct Session {
     shared: Arc<Shared>,
     spec: AgentSpec,
     cwd: PathBuf,
+    agent_cwd: PathBuf,
     tail: Arc<StderrTail>,
     untrusted: Vec<String>,
     thread: String,
     models: Vec<ModelInfo>,
-    model: String,
+    chosen_model: Option<String>,
     mode: PermissionMode,
+    switch: ModeSwitch,
+    sandbox: Sandbox,
+    warned: bool,
     codex: Option<Codex>,
     generation: u64,
     decoder: Decoder,
@@ -280,9 +136,9 @@ impl Session {
                     self.change_model(model, reply);
                 }
                 Wake::Command(Some(Command::SetPermissionMode { mode, reply })) => {
-                    self.mode = mode;
-                    self.grants.clear();
-                    self.shared.set_permission_mode(mode);
+                    if let Some(mode) = self.switch.request(mode, self.turns.in_turn()) {
+                        self.apply_mode(mode);
+                    }
                     let _ = reply.send(Ok(()));
                 }
                 Wake::Feed((generation, feed)) if self.is_current(generation) => {
@@ -330,6 +186,28 @@ impl Session {
         }
     }
 
+    fn apply_mode(&mut self, mode: PermissionMode) {
+        self.mode = mode;
+        self.grants.clear();
+        self.shared.set_permission_mode(mode);
+    }
+
+    fn apply_pending_mode(&mut self) {
+        if let Some(mode) = self.switch.take() {
+            self.apply_mode(mode);
+        }
+    }
+
+    fn agent_mode(&mut self) -> PermissionMode {
+        if !self.warned
+            && let Some(warning) = sandbox_warning(self.mode, &self.sandbox)
+        {
+            self.warned = true;
+            self.shared.emit(AgentEvent::Error(warning));
+        }
+        agent_mode(self.mode, &self.sandbox)
+    }
+
     async fn ensure_process(&mut self) -> std::result::Result<(), String> {
         if self.codex.is_some() {
             return Ok(());
@@ -344,13 +222,14 @@ impl Session {
         )
         .map_err(|error| error.to_string())?;
         let setup = ThreadSetup {
-            cwd: &self.cwd,
-            model: non_empty(&self.model),
+            cwd: &self.agent_cwd,
+            model: self.chosen_model.as_deref(),
             mode: self.mode,
             untrusted: &self.untrusted,
         };
         match open_thread(&codex.rpc, Open::Resume(&self.thread), &setup).await {
-            Ok(_) => {
+            Ok(started) => {
+                self.sandbox = started.sandbox;
                 self.codex = Some(codex);
                 self.decoder = Decoder::new();
                 Ok(())
@@ -374,15 +253,17 @@ impl Session {
             self.shared.emit(AgentEvent::Error(BUSY_TURN.to_owned()));
             return;
         }
+        self.apply_pending_mode();
         self.shared.begin_turn(&text);
         if let Err(error) = self.ensure_process().await {
             let message = format!("não consegui reiniciar o Codex: {error}");
             self.shared.fail(with_stderr(message, &self.shared));
             return;
         }
+        let mode = self.agent_mode();
         let params = with_mode(
-            turn_params(&self.thread, &text, non_empty(&self.model), None),
-            self.mode,
+            turn_params(&self.thread, &text, self.chosen_model.as_deref(), None),
+            mode,
         );
         let started = match self.rpc() {
             Some(rpc) => rpc.call("turn/start", params).await,
@@ -394,6 +275,7 @@ impl Session {
                 self.remaining = self.turn_timeout;
                 self.running_since = (!paused).then(Instant::now);
             }
+            Err(_) if self.rpc().is_some_and(RpcClient::is_closed) => {}
             Err(error) => self
                 .shared
                 .fail(format!("não consegui iniciar o turno do Codex: {error}")),
@@ -438,7 +320,7 @@ impl Session {
         };
         if result.is_ok() {
             self.shared.set_model(&model);
-            self.model = model;
+            self.chosen_model = Some(model);
         }
         self.shared.release();
         let _ = reply.send(result);
@@ -542,6 +424,7 @@ impl Session {
             Close::Cancelled => self.shared.end_turn(CANCELLED_REASON).await,
             Close::Failed(message) => self.shared.fail(message),
         }
+        self.apply_pending_mode();
     }
 }
 
@@ -550,7 +433,11 @@ struct Opened {
     thread: String,
     models: Vec<ModelInfo>,
     model: String,
+    chosen_model: Option<String>,
+    sandbox: Sandbox,
     warnings: Vec<String>,
+    warned: bool,
+    agent_cwd: PathBuf,
     untrusted: Vec<String>,
 }
 
@@ -558,27 +445,28 @@ async fn connect(
     run: &DriverRun,
     feed: &mpsc::UnboundedSender<Tagged>,
 ) -> std::result::Result<Opened, SessionError> {
+    let workspace = workspace(&run.ctx.cwd);
     let codex = Codex::spawn(&run.spec, &run.ctx.cwd, Arc::clone(&run.stderr), 1, feed)?;
-    let untrusted = untrusted_roots(&run.ctx.cwd);
+    let chosen = non_empty(&run.ctx.model);
     let setup = ThreadSetup {
-        cwd: &run.ctx.cwd,
-        model: non_empty(&run.ctx.model),
+        cwd: &workspace.cwd,
+        model: chosen,
         mode: run.ctx.permission_mode,
-        untrusted: &untrusted,
+        untrusted: &workspace.untrusted,
     };
     let open = match &run.load {
         Some(id) => Open::Resume(id),
         None => Open::Start,
     };
-    let thread = match open_thread(&codex.rpc, open, &setup).await {
-        Ok(thread) => thread,
+    let started = match open_thread(&codex.rpc, open, &setup).await {
+        Ok(started) => started,
         Err(error) => {
             codex.stop().await;
             let message = format!("não consegui abrir a conversa do Codex: {error}");
             return Err(SessionError::Agent(with_stderr(message, &run.shared)));
         }
     };
-    let (models, default, warnings) = match list_models(&codex.rpc).await {
+    let (models, default, mut warnings) = match list_models(&codex.rpc).await {
         Ok(result) => (parse_models(&result), default_model(&result), Vec::new()),
         Err(error) => (
             Vec::new(),
@@ -586,17 +474,21 @@ async fn connect(
             vec![format!("não consegui listar os modelos do Codex: {error}")],
         ),
     };
-    let model = non_empty(&run.ctx.model)
-        .map(str::to_owned)
-        .or(default)
-        .unwrap_or_default();
+    let choice = pick_model(chosen, started.model.as_deref(), default.as_deref());
+    let warning = sandbox_warning(run.ctx.permission_mode, &started.sandbox);
+    let warned = warning.is_some();
+    warnings.extend(warning);
     Ok(Opened {
         codex,
-        thread,
+        thread: started.thread,
         models,
-        model,
+        model: choice.shown,
+        chosen_model: choice.sent,
+        sandbox: started.sandbox,
         warnings,
-        untrusted,
+        warned,
+        agent_cwd: workspace.cwd,
+        untrusted: workspace.untrusted,
     })
 }
 
@@ -625,12 +517,16 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             shared: Arc::clone(&run.shared),
             spec: run.spec.clone(),
             cwd: run.ctx.cwd.clone(),
+            agent_cwd: opened.agent_cwd,
             tail: Arc::clone(&run.stderr),
             untrusted: opened.untrusted,
             thread: opened.thread,
             models: opened.models,
-            model: opened.model,
+            chosen_model: opened.chosen_model,
             mode: run.ctx.permission_mode,
+            switch: ModeSwitch::default(),
+            sandbox: opened.sandbox,
+            warned: opened.warned,
             generation: opened.codex.generation,
             codex: Some(opened.codex),
             decoder: Decoder::new(),

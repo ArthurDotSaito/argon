@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use super::state::*;
 use super::*;
 use crate::session::{REJECT_ONCE, native_options_for};
 
@@ -310,11 +311,150 @@ fn project_roots_stop_at_the_first_git_root() {
 #[test]
 fn trust_keys_add_a_lowercase_variant_on_windows_without_duplicates() {
     let upper = cwd();
-    let keys = trust_keys(&[upper.as_path(), upper.as_path()]);
+    let keys = trust_keys(&[upper.clone(), upper.clone()]);
     let text = upper.display().to_string();
     if cfg!(windows) {
         assert_eq!(keys, vec![text.clone(), text.to_lowercase()]);
     } else {
         assert_eq!(keys, vec![text]);
     }
+}
+
+#[test]
+fn trust_keys_cover_the_worktree_and_the_main_repository() {
+    let worktree = cwd();
+    let main = cwd().with_file_name("Main");
+    let keys = trust_keys(&[worktree.clone(), main.clone()]);
+    for root in [&worktree, &main] {
+        let text = root.display().to_string();
+        assert!(keys.contains(&text), "{keys:?}");
+        if cfg!(windows) {
+            assert!(keys.contains(&text.to_lowercase()), "{keys:?}");
+        }
+    }
+}
+
+#[test]
+fn gitfile_points_to_the_worktree_gitdir() {
+    let root = cwd();
+    let absolute = if cfg!(windows) {
+        "C:/mirror/.git/worktrees/wt"
+    } else {
+        "/mirror/.git/worktrees/wt"
+    };
+    assert_eq!(
+        gitdir_target(&format!("gitdir: {absolute}\n"), &root),
+        Some(PathBuf::from(absolute))
+    );
+    assert_eq!(
+        gitdir_target("gitdir: ../mirror/.git/worktrees/wt", &root),
+        Some(root.join("../mirror/.git/worktrees/wt"))
+    );
+    assert_eq!(gitdir_target("gitdir:   \n", &root), None);
+    assert_eq!(gitdir_target("ref: refs/heads/main", &root), None);
+}
+
+#[test]
+fn commondir_is_resolved_against_the_gitdir() {
+    let gitdir = cwd().join(".git").join("worktrees").join("wt");
+    assert_eq!(common_dir(&gitdir, "../..\n"), Some(gitdir.join("../..")));
+    assert_eq!(common_dir(&gitdir, "  "), None);
+}
+
+#[test]
+fn a_mode_change_waits_for_the_running_turn() {
+    let mut switch = ModeSwitch::default();
+
+    assert_eq!(switch.request(PermissionMode::FullAccess, true), None);
+    assert_eq!(switch.request(PermissionMode::AcceptEdits, true), None);
+    assert_eq!(switch.take(), Some(PermissionMode::AcceptEdits));
+    assert_eq!(switch.take(), None);
+}
+
+#[test]
+fn a_mode_change_while_idle_applies_at_once_and_drops_older_pending() {
+    let mut switch = ModeSwitch::default();
+
+    switch.request(PermissionMode::FullAccess, true);
+    assert_eq!(
+        switch.request(PermissionMode::Supervised, false),
+        Some(PermissionMode::Supervised)
+    );
+    assert_eq!(switch.take(), None);
+}
+
+#[test]
+fn sandbox_readiness_needs_the_ready_status() {
+    assert_eq!(readiness(Ok(json!({"status": "ready"}))), Ok(()));
+    assert_eq!(
+        readiness(Ok(json!({"status": "notConfigured"}))),
+        Err("notConfigured".to_owned())
+    );
+    assert_eq!(
+        readiness(Ok(json!({"status": "updateRequired"}))),
+        Err("updateRequired".to_owned())
+    );
+    assert_eq!(readiness(Ok(json!({}))), Err("{}".to_owned()));
+    assert_eq!(
+        readiness(Err("windowsSandbox/readiness: -32601 x".to_owned())),
+        Err("windowsSandbox/readiness: -32601 x".to_owned())
+    );
+}
+
+#[test]
+fn full_access_falls_back_to_supervised_values_without_the_sandbox() {
+    let missing: Sandbox = Err("notConfigured".to_owned());
+    let ready: Sandbox = Ok(());
+
+    assert_eq!(
+        agent_mode(PermissionMode::FullAccess, &missing),
+        PermissionMode::Supervised
+    );
+    assert_eq!(
+        agent_mode(PermissionMode::FullAccess, &ready),
+        PermissionMode::FullAccess
+    );
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        assert_eq!(agent_mode(mode, &missing), mode);
+        assert_eq!(sandbox_warning(mode, &missing), None);
+    }
+    assert_eq!(sandbox_warning(PermissionMode::FullAccess, &ready), None);
+    assert_eq!(
+        sandbox_warning(PermissionMode::FullAccess, &missing).as_deref(),
+        Some(
+            "a sandbox do Codex no Windows não está pronta (notConfigured); Acesso total vai pedir aprovação para comandos"
+        )
+    );
+}
+
+#[test]
+fn model_choice_prefers_the_user_then_the_thread_then_the_default() {
+    assert_eq!(
+        pick_model(Some("o3"), Some("gpt-5"), Some("gpt-6")),
+        ModelChoice {
+            shown: "o3".to_owned(),
+            sent: Some("o3".to_owned())
+        }
+    );
+    assert_eq!(
+        pick_model(None, Some("gpt-5"), Some("gpt-6")),
+        ModelChoice {
+            shown: "gpt-5".to_owned(),
+            sent: None
+        }
+    );
+    assert_eq!(
+        pick_model(None, None, Some("gpt-6")),
+        ModelChoice {
+            shown: "gpt-6".to_owned(),
+            sent: Some("gpt-6".to_owned())
+        }
+    );
+    assert_eq!(
+        pick_model(None, None, None),
+        ModelChoice {
+            shown: String::new(),
+            sent: None
+        }
+    );
 }

@@ -235,9 +235,11 @@ async fn eof_fails_pending_calls_ends_the_receiver_and_later_calls_fail_fast() {
         async move { client.call("slow", json!({})).await }
     });
     server.read().await;
+    assert!(!client.is_closed());
     drop(server);
 
     assert_eq!(pending.await.unwrap().unwrap_err(), CLOSED);
+    assert!(client.is_closed());
     assert!(incoming.recv().await.is_none());
     assert_eq!(client.call("later", json!({})).await.unwrap_err(), CLOSED);
     assert_eq!(client.notify("later", None).unwrap_err(), CLOSED);
