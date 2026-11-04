@@ -27,7 +27,6 @@ pub struct AgentSpec {
     pub model_selection: ModelSelection,
     pub supports_load: bool,
     pub requires_login_hint: Option<String>,
-    pub full_access: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +105,6 @@ fn build_spec(defaults: &AgentDefaults, launch: Launch, cfg: &Config) -> AgentSp
         model_selection: defaults.model_selection,
         supports_load: defaults.load_session,
         requires_login_hint: requires_login(kind).then(|| login_hint(defaults)),
-        full_access: overrides.is_some_and(|agent| agent.full_access),
     }
 }
 
@@ -192,8 +190,8 @@ mod tests {
                 args: vec!["--verbose".into()],
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
-                full_access: true,
                 use_acp: false,
+                ..AgentCfg::default()
             },
         );
         let spec = agent_spec(AgentKind::ClaudeCode, &cfg);

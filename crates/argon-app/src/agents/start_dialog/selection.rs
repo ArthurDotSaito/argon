@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, PromptTemplate, render_prompt};
+use argon_core::{AgentCfg, AgentKind, PermissionMode, PromptTemplate, render_prompt};
 use gpui_kit::{AppContext as _, Context, SharedString, Window};
 
 use super::{Load, Preview, StartDialog};
@@ -51,6 +51,12 @@ impl StartDialog {
             return;
         };
         let model = default_model(&option.spec);
+        let permission_mode = self
+            .config
+            .agents
+            .get(&kind)
+            .map(AgentCfg::permission_mode)
+            .unwrap_or_default();
         let choices: Vec<Choice> = model_choices(&option.spec)
             .into_iter()
             .map(|model| Choice::new(model.id, model.label))
@@ -62,6 +68,11 @@ impl StartDialog {
             if let Some(model) = &model {
                 select.set_selected_value(model, window, cx);
             }
+        });
+        self.permission_mode = permission_mode;
+        let mode = permission_mode.as_str().to_owned();
+        self.permission_select.update(cx, |select, cx| {
+            select.set_selected_value(&mode, window, cx)
         });
         self.clear_failure();
         cx.notify();
@@ -81,6 +92,13 @@ impl StartDialog {
     pub(super) fn set_model(&mut self, id: String, cx: &mut Context<Self>) {
         if self.model.as_ref() != Some(&id) {
             self.model = Some(id);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_permission_mode(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        if self.permission_mode != mode {
+            self.permission_mode = mode;
             cx.notify();
         }
     }

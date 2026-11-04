@@ -1,12 +1,16 @@
+use argon_core::PermissionMode;
+
 use super::{Shared, State};
 use crate::session::events::{AgentEvent, PendingPermission};
 use crate::session::permissions::{
     PermissionAnswer, PermissionAsk, PermissionDecision, PermissionReply, decide,
 };
+use crate::session::writer::Op;
 use crate::session::{Result, SessionError};
 
 pub(super) struct Pending {
     pub reply: PermissionReply,
+    pub ask: PermissionAsk,
     pub permission: PendingPermission,
 }
 
@@ -28,7 +32,7 @@ pub(crate) fn validate_option(permission: &PendingPermission, option_id: &str) -
 impl Shared {
     pub fn on_permission(&self, ask: PermissionAsk, reply: PermissionReply) {
         let mut state = self.lock();
-        match decide(&ask, &self.config.cwd, self.config.full_access) {
+        match decide(&ask, &self.config.cwd, state.permission_mode) {
             PermissionDecision::Allow { option_id } => {
                 if let Err(error) = reply(PermissionAnswer::Selected(option_id)) {
                     tracing::warn!(%error, "failed to auto-allow permission");
@@ -43,11 +47,35 @@ impl Shared {
                     options: prompt.options,
                 };
                 let event = AgentEvent::permission(&permission);
-                state.pending.push(Pending { reply, permission });
+                state.pending.push(Pending {
+                    reply,
+                    ask,
+                    permission,
+                });
                 self.emit_locked(&mut state, event);
                 self.sync_awaiting(&mut state);
             }
         }
+    }
+
+    pub fn set_permission_mode(&self, mode: PermissionMode) {
+        let mut state = self.lock();
+        state.permission_mode = mode;
+        self.config.writer.push(Op::PermissionMode {
+            session: self.config.id.clone(),
+            mode,
+        });
+        for pending in std::mem::take(&mut state.pending) {
+            match decide(&pending.ask, &self.config.cwd, mode) {
+                PermissionDecision::Allow { option_id } => {
+                    if let Err(error) = (pending.reply)(PermissionAnswer::Selected(option_id)) {
+                        tracing::warn!(%error, "failed to auto-allow pending permission");
+                    }
+                }
+                PermissionDecision::Ask(_) => state.pending.push(pending),
+            }
+        }
+        self.sync_awaiting(&mut state);
     }
 
     pub fn known_kind(&self, tool_call_id: &str) -> Option<String> {

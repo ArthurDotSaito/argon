@@ -35,8 +35,12 @@ fn request(kind: Option<&str>, locations: &[String], raw_input: Value) -> Value 
     })
 }
 
-fn decide_acp(request: &Value, known_kind: Option<&str>, full_access: bool) -> PermissionDecision {
-    decide(&acp_ask(request, known_kind), &cwd(), full_access)
+fn decide_acp(
+    request: &Value,
+    known_kind: Option<&str>,
+    mode: PermissionMode,
+) -> PermissionDecision {
+    decide(&acp_ask(request, known_kind), &cwd(), mode)
 }
 
 fn allowed(decision: &PermissionDecision) -> bool {
@@ -61,14 +65,14 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
         let decision = decide_acp(
             &request(Some(kind), &[inside("src/a.rs")], json!({})),
             None,
-            false,
+            PermissionMode::Supervised,
         );
         assert!(allowed(&decision), "{kind}: {decision:?}");
     }
     let relative = decide_acp(
         &request(Some("read"), &["src/a.rs".into()], json!({})),
         None,
-        false,
+        PermissionMode::Supervised,
     );
     assert!(allowed(&relative));
     let search_in_cwd = decide_acp(
@@ -78,7 +82,7 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
             json!({"pattern": "fn main", "glob": "src/**/*.rs"}),
         ),
         None,
-        false,
+        PermissionMode::Supervised,
     );
     assert!(allowed(&search_in_cwd));
 }
@@ -86,14 +90,22 @@ fn read_and_search_inside_worktree_are_auto_allowed() {
 #[test]
 fn fetch_always_asks() {
     for input in [json!({"url": "https://example.com"}), json!({})] {
-        let decision = decide_acp(&request(Some("fetch"), &[], input), None, false);
+        let decision = decide_acp(
+            &request(Some("fetch"), &[], input),
+            None,
+            PermissionMode::Supervised,
+        );
         assert!(asks(&decision), "{decision:?}");
     }
 }
 
 #[test]
 fn read_without_any_path_asks() {
-    let decision = decide_acp(&request(Some("read"), &[], json!({})), None, false);
+    let decision = decide_acp(
+        &request(Some("read"), &[], json!({})),
+        None,
+        PermissionMode::Supervised,
+    );
     assert!(asks(&decision));
 }
 
@@ -104,7 +116,11 @@ fn search_without_any_path_asks() {
         json!({"pattern": "fn main"}),
         json!({"query": "token"}),
     ] {
-        let decision = decide_acp(&request(Some("search"), &[], input), None, false);
+        let decision = decide_acp(
+            &request(Some("search"), &[], input),
+            None,
+            PermissionMode::Supervised,
+        );
         assert!(asks(&decision), "{decision:?}");
     }
 }
@@ -116,13 +132,17 @@ fn reads_outside_worktree_ask() {
         vec!["../other/secret.txt".to_string()],
         vec![inside("src/a.rs"), outside().to_string()],
     ] {
-        let decision = decide_acp(&request(Some("read"), &locations, json!({})), None, false);
+        let decision = decide_acp(
+            &request(Some("read"), &locations, json!({})),
+            None,
+            PermissionMode::Supervised,
+        );
         assert!(asks(&decision), "{locations:?}");
     }
     let via_input = decide_acp(
         &request(Some("read"), &[], json!({"file_path": outside()})),
         None,
-        false,
+        PermissionMode::Supervised,
     );
     assert!(asks(&via_input));
 }
@@ -140,14 +160,18 @@ fn search_patterns_escaping_the_worktree_ask() {
         json!({"pattern": "secret", "include": "../../**"}),
         json!({"path": outside()}),
     ] {
-        let decision = decide_acp(&request(Some("search"), &[], input.clone()), None, false);
+        let decision = decide_acp(
+            &request(Some("search"), &[], input.clone()),
+            None,
+            PermissionMode::Supervised,
+        );
         assert!(asks(&decision), "{input}");
     }
     let inside_glob = format!("{}/**/*.rs", cwd().display());
     let decision = decide_acp(
         &request(Some("search"), &[], json!({"glob": inside_glob})),
         None,
-        false,
+        PermissionMode::Supervised,
     );
     assert!(allowed(&decision));
 }
@@ -165,7 +189,7 @@ fn edit_execute_and_unknown_kinds_ask_with_all_options() {
         let decision = decide_acp(
             &request(kind, &[inside("src/a.rs")], json!({})),
             None,
-            false,
+            PermissionMode::Supervised,
         );
         let PermissionDecision::Ask(prompt) = decision else {
             panic!("{kind:?} should ask");
@@ -186,19 +210,27 @@ fn edit_execute_and_unknown_kinds_ask_with_all_options() {
 #[test]
 fn kind_from_earlier_tool_call_is_used_when_request_omits_it() {
     let req = request(None, &[inside("src/a.rs")], json!({}));
-    assert!(allowed(&decide_acp(&req, Some("read"), false)));
-    assert!(asks(&decide_acp(&req, Some("edit"), false)));
+    assert!(allowed(&decide_acp(
+        &req,
+        Some("read"),
+        PermissionMode::Supervised
+    )));
+    assert!(asks(&decide_acp(
+        &req,
+        Some("edit"),
+        PermissionMode::Supervised
+    )));
 }
 
 #[test]
 fn read_without_allow_once_option_asks() {
     let mut req = request(Some("read"), &[inside("a.rs")], json!({}));
     req["options"] = json!([{"optionId": "always", "name": "Always", "kind": "allow_always"}]);
-    assert!(asks(&decide_acp(&req, None, false)));
+    assert!(asks(&decide_acp(&req, None, PermissionMode::Supervised)));
 }
 
 #[test]
-fn full_access_allows_every_kind_with_allow_once() {
+fn unrestricted_mode_allows_every_kind_with_allow_once() {
     let cases = [
         request(Some("execute"), &[], json!({"command": "rm -rf /"})),
         request(Some("edit"), &[inside("src/a.rs")], json!({})),
@@ -207,26 +239,65 @@ fn full_access_allows_every_kind_with_allow_once() {
         request(None, &[], json!({})),
     ];
     for req in cases {
-        let decision = decide_acp(&req, None, true);
+        let decision = decide_acp(&req, None, PermissionMode::FullAccess);
         assert!(allowed(&decision), "{req}: {decision:?}");
     }
 }
 
 #[test]
-fn full_access_never_picks_allow_always() {
+fn unrestricted_mode_never_picks_allow_always() {
     let mut req = request(Some("execute"), &[], json!({}));
     req["options"] = json!([
         {"optionId": "allow-always", "name": "Always allow", "kind": "allow_always"},
         {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"}
     ]);
-    assert!(allowed(&decide_acp(&req, None, true)));
+    assert!(allowed(&decide_acp(&req, None, PermissionMode::FullAccess)));
 }
 
 #[test]
-fn full_access_without_allow_once_option_asks() {
-    let mut req = request(Some("execute"), &[], json!({}));
-    req["options"] = json!([{"optionId": "always", "name": "Always", "kind": "allow_always"}]);
-    assert!(asks(&decide_acp(&req, None, true)));
+fn decide_matrix_covers_every_mode_kind_and_path_scope() {
+    use PermissionMode::{AcceptEdits, FullAccess, Supervised};
+    let scopes = [
+        ("inside", vec![inside("src/a.rs")]),
+        ("outside", vec![outside().to_string()]),
+        ("empty", Vec::new()),
+    ];
+    let expected = |mode: PermissionMode, kind: &str, scope: &str| match mode {
+        FullAccess => true,
+        AcceptEdits => scope == "inside" && ["read", "search", "edit"].contains(&kind),
+        Supervised => scope == "inside" && ["read", "search"].contains(&kind),
+    };
+    for mode in [Supervised, AcceptEdits, FullAccess] {
+        for kind in ["read", "search", "edit", "execute"] {
+            for (scope, paths) in &scopes {
+                let decision = decide_acp(&request(Some(kind), paths, json!({})), None, mode);
+                assert_eq!(
+                    allowed(&decision),
+                    expected(mode, kind, scope),
+                    "{mode:?} {kind} {scope}: {decision:?}"
+                );
+                assert_eq!(asks(&decision), !expected(mode, kind, scope));
+            }
+        }
+    }
+}
+
+#[test]
+fn no_allow_once_option_always_asks() {
+    for mode in [
+        PermissionMode::Supervised,
+        PermissionMode::AcceptEdits,
+        PermissionMode::FullAccess,
+    ] {
+        for kind in ["read", "edit", "execute"] {
+            let mut req = request(Some(kind), &[inside("src/a.rs")], json!({}));
+            req["options"] = json!([
+                {"optionId": "always", "name": "Always", "kind": "allow_always"},
+                {"optionId": "reject", "name": "Reject", "kind": "reject_once"}
+            ]);
+            assert!(asks(&decide_acp(&req, None, mode)), "{mode:?} {kind}");
+        }
+    }
 }
 
 #[test]

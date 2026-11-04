@@ -13,7 +13,7 @@ mod views;
 
 pub use config::{
     AgentCfg, AgentKind, AppearanceCfg, Config, ConfigError, Density, NotificationsCfg, OrgsCfg,
-    ReviewCfg, SyncCfg, ThemeChoice,
+    PermissionMode, ReviewCfg, SyncCfg, ThemeChoice,
 };
 pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patch, split_rows};
 pub use findings::{

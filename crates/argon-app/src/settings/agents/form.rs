@@ -2,14 +2,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use argon_agents::{AgentSpec, Support, agent_spec, support_for};
-use argon_core::{AgentCfg, AgentKind, Config};
+use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
 
 use super::fields::{FieldError, join_args, parse_env, split_args};
 use super::{DetectionResult, run_detection, store_cache};
-use crate::agents::{CardState, Choice, card_state};
+use crate::agents::{CardState, Choice, card_state, permission_choices};
 use crate::config_watch;
 use crate::settings::labels;
 
@@ -37,7 +37,8 @@ pub struct AgentForm {
     pub(super) env: Vec<EnvRow>,
     pub(super) model_select: Entity<SelectState<Vec<Choice>>>,
     pub(super) model: Option<String>,
-    pub(super) full_access: bool,
+    pub(super) permission_select: Entity<SelectState<Vec<Choice>>>,
+    pub(super) permission_mode: PermissionMode,
     pub(super) use_acp: bool,
     pub(super) error: Option<SharedString>,
     test_task: Option<Task<()>>,
@@ -60,6 +61,11 @@ fn text_input(
     })
 }
 
+fn normalized(cfg: AgentCfg) -> AgentCfg {
+    let mode = cfg.permission_mode();
+    cfg.with_permission_mode(mode)
+}
+
 impl AgentForm {
     pub fn new(
         kind: AgentKind,
@@ -68,7 +74,7 @@ impl AgentForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let defaults = agent_spec(kind, &Config::default());
-        let saved = config.agents.get(&kind).cloned().unwrap_or_default();
+        let saved = normalized(config.agents.get(&kind).cloned().unwrap_or_default());
         let command = text_input(
             defaults.command.display().to_string(),
             saved
@@ -88,6 +94,12 @@ impl AgentForm {
             cx,
         );
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
+        let permission_mode = saved.permission_mode();
+        let permission_select = cx.new(|cx| {
+            let mut select = SelectState::new(permission_choices(), None, window, cx);
+            select.set_selected_value(&permission_mode.as_str().to_owned(), window, cx);
+            select
+        });
         let subscriptions = vec![
             cx.observe(&command, |_, _, cx| cx.notify()),
             cx.observe(&args, |_, _, cx| cx.notify()),
@@ -101,6 +113,18 @@ impl AgentForm {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &permission_select,
+                window,
+                |this, _, event: &SelectEvent<Vec<Choice>>, _, cx| {
+                    if let SelectEvent::Confirm(Some(id)) = event
+                        && let Some(mode) = PermissionMode::parse(id)
+                    {
+                        this.permission_mode = mode;
+                        cx.notify();
+                    }
+                },
+            ),
         ];
         let mut this = Self {
             kind,
@@ -109,7 +133,8 @@ impl AgentForm {
             status: Status::Detecting,
             detected: None,
             model: saved.default_model.clone(),
-            full_access: saved.full_access,
+            permission_select,
+            permission_mode,
             use_acp: saved.use_acp,
             command,
             args,
@@ -176,9 +201,10 @@ impl AgentForm {
             args: split_args(&self.args.read(cx).value())?,
             env: parse_env(&rows)?,
             default_model: self.model.clone(),
-            full_access: self.full_access,
             use_acp: self.use_acp,
-        })
+            ..AgentCfg::default()
+        }
+        .with_permission_mode(self.permission_mode))
     }
 
     pub(super) fn is_dirty(&self, cx: &Context<Self>) -> bool {
@@ -278,7 +304,7 @@ impl AgentForm {
         let kind = self.kind;
         let stored = draft.clone();
         config_watch::update(cx, move |config| {
-            if stored == AgentCfg::default() {
+            if stored == normalized(AgentCfg::default()) {
                 config.agents.remove(&kind);
             } else {
                 config.agents.insert(kind, stored);
@@ -291,6 +317,7 @@ impl AgentForm {
 
     pub(super) fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let saved = self.saved.clone();
+        self.permission_mode = saved.permission_mode();
         let command = saved
             .command
             .as_ref()
@@ -306,7 +333,10 @@ impl AgentForm {
             self.push_env(key, value, window, cx);
         }
         self.model = saved.default_model;
-        self.full_access = saved.full_access;
+        let mode = self.permission_mode.as_str().to_owned();
+        self.permission_select.update(cx, |select, cx| {
+            select.set_selected_value(&mode, window, cx)
+        });
         self.use_acp = saved.use_acp;
         self.error = None;
         self.refresh_models(window, cx);

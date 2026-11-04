@@ -7,18 +7,20 @@ use agent_client_protocol::v1::schema::{
     PromptRequest, PromptResponse, SessionId, TextContent,
 };
 use agent_client_protocol::{Agent, UntypedMessage};
+use argon_core::PermissionMode;
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::acp_mode::acp_mode_value;
 use super::bootstrap::{DriverRun, Ready};
 use super::driver::Shared;
 use super::events::{AgentEvent, config_option, config_values, current_value};
 use super::failure::{STDERR_LINES, classify, turn_failure};
 use super::turn::stop_reason_name;
 use super::{Command, Result, SessionContext, SessionError};
-use crate::defaults::{ModelSelection, agent_defaults};
+use crate::defaults::ModelSelection;
 use crate::registry::AgentSpec;
 
 const MODE_CONFIG_ID: &str = "mode";
@@ -70,6 +72,26 @@ async fn change_model(
         .map_err(failed)
 }
 
+fn offered_mode(session: &Value, mode: PermissionMode) -> Option<String> {
+    config_option(session, MODE_CONFIG_ID)
+        .and_then(|option| acp_mode_value(mode, &config_values(option)))
+}
+
+async fn set_mode(
+    cx: &ConnectionTo<Agent>,
+    acp_id: &str,
+    value: &str,
+) -> std::result::Result<(), String> {
+    let params = json!({ "sessionId": acp_id, "configId": MODE_CONFIG_ID, "value": value });
+    call(cx, "session/set_config_option", params)
+        .await
+        .map(|_| ())
+}
+
+fn mode_warning(value: &str, error: &str) -> String {
+    format!("não consegui ativar o modo `{value}` do agente: {error}")
+}
+
 struct Opened {
     ready: Ready,
     session: Value,
@@ -117,17 +139,14 @@ async fn open(
     };
 
     let mut warnings = Vec::new();
-    if let Some(mode) = agent_defaults(spec.kind).permission_mode
-        && let Some(option) = config_option(&session, MODE_CONFIG_ID)
-        && current_value(option).as_deref() != Some(mode)
+    if let Some(value) = offered_mode(&session, ctx.permission_mode)
+        && config_option(&session, MODE_CONFIG_ID)
+            .and_then(current_value)
+            .as_deref()
+            != Some(value.as_str())
+        && let Err(error) = set_mode(cx, &acp_session_id, &value).await
     {
-        let params =
-            json!({ "sessionId": acp_session_id, "configId": MODE_CONFIG_ID, "value": mode });
-        if let Err(error) = call(cx, "session/set_config_option", params).await {
-            warnings.push(format!(
-                "não consegui ativar o modo `{mode}` do agente: {error}"
-            ));
-        }
+        warnings.push(mode_warning(&value, &error));
     }
 
     let config_id = model_config_id(spec)?;
@@ -204,6 +223,36 @@ impl ModelChange {
     }
 }
 
+struct ModeChange {
+    cx: ConnectionTo<Agent>,
+    shared: Arc<Shared>,
+    session: Arc<Value>,
+    acp_id: String,
+    timeout: std::time::Duration,
+}
+
+impl ModeChange {
+    fn spawn(self, mode: PermissionMode, reply: oneshot::Sender<Result<()>>) {
+        self.shared.set_permission_mode(mode);
+        let Some(value) = offered_mode(&self.session, mode) else {
+            let _ = reply.send(Ok(()));
+            return;
+        };
+        tokio::spawn(async move {
+            let change = set_mode(&self.cx, &self.acp_id, &value);
+            let result = match tokio::time::timeout(self.timeout, change).await {
+                Ok(result) => result,
+                Err(_) => Err(format!("sem resposta em {}s", self.timeout.as_secs())),
+            };
+            if let Err(error) = result {
+                self.shared
+                    .emit(AgentEvent::Error(mode_warning(&value, &error)));
+            }
+            let _ = reply.send(Ok(()));
+        });
+    }
+}
+
 pub(super) async fn run_connection(
     cx: ConnectionTo<Agent>,
     run: DriverRun,
@@ -267,6 +316,14 @@ pub(super) async fn run_connection(
                     timeout: options.set_model_timeout,
                 }
                 .spawn(model, reply),
+                Some(Command::SetPermissionMode { mode, reply }) => ModeChange {
+                    cx: cx.clone(),
+                    shared: Arc::clone(&shared),
+                    session: Arc::clone(&session),
+                    acp_id: acp_id.clone(),
+                    timeout: options.set_model_timeout,
+                }
+                .spawn(mode, reply),
             },
             changed = awaiting.changed(), if turn.is_some() => {
                 if changed.is_ok() {

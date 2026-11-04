@@ -78,7 +78,6 @@ pub struct AgentDefaults {
     pub models_from_session: bool,
     pub models: &'static [KnownModel],
     pub default_model: &'static str,
-    pub permission_mode: Option<&'static str>,
     pub load_session: bool,
     pub headless: Option<HeadlessFlags>,
     pub tested_version: &'static str,
@@ -269,7 +268,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: CLAUDE_MODELS,
         default_model: "default",
-        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "claude-agent-acp 0.100.0 / claude 2.1.316",
@@ -295,7 +293,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: &[],
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "codex-acp 2.5.0 / codex 0.160.0",
@@ -321,7 +318,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: &[],
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "opencode 2.2.5",
@@ -347,7 +343,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: true,
         models: COMMAND_CODE_MODELS,
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: None,
         tested_version: "command-code 1.88.2",
@@ -373,7 +368,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         models_from_session: false,
         models: ANTIGRAVITY_MODELS,
         default_model: "",
-        permission_mode: None,
         load_session: true,
         headless: Some(HeadlessFlags {
             output: &["--output-format", "stream-json"],
@@ -422,13 +416,6 @@ mod tests {
             if let Some(fallback) = defaults.acp_fallback {
                 assert_eq!(fallback.transport, Transport::Acp, "{:?}", defaults.kind);
             }
-        }
-    }
-
-    #[test]
-    fn agents_inherit_the_user_permission_mode() {
-        for defaults in &AGENT_DEFAULTS {
-            assert_eq!(defaults.permission_mode, None, "{:?}", defaults.kind);
         }
     }
 }

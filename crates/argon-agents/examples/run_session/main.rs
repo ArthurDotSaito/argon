@@ -6,7 +6,7 @@ use argon_agents::{
     AgentEvent, AgentSessionHandle, AgentSpec, SessionContext, SessionOptions, SessionWriter,
     Support, WorktreeManager, agent_spec, new_session_id, start_session_with, support_for,
 };
-use argon_core::{AgentKind, Config, Paths, PrKey};
+use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey};
 use argon_github::{GithubClient, discover_accounts, token_for};
 use argon_store::Store;
 use futures::StreamExt;
@@ -233,6 +233,7 @@ async fn startup_probe(
         allowed_files: Vec::new(),
         cwd,
         model: String::new(),
+        permission_mode: PermissionMode::Supervised,
     };
     let started = Instant::now();
     let result = start_session_with(&spec, ctx, writer, options(args)).await;
@@ -288,6 +289,11 @@ async fn run() -> Result<(), BoxError> {
             .model
             .clone()
             .unwrap_or_else(|| spec.default_model.clone()),
+        permission_mode: config
+            .agents
+            .get(&args.kind)
+            .map(|agent| agent.permission_mode())
+            .unwrap_or_default(),
     };
 
     let outcome = match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {

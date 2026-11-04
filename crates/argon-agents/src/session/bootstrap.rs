@@ -123,8 +123,8 @@ pub(super) async fn launch(
             allowed_files: ctx.allowed_files.clone(),
             writer: writer.clone(),
             stderr: Arc::clone(&tail),
-            full_access: spec.full_access,
         },
+        ctx.permission_mode,
         events,
     ));
     let (commands, receiver) = mpsc::unbounded_channel();
@@ -170,6 +170,7 @@ pub(super) async fn launch(
                 worktree_path: Some(ctx.cwd.clone()),
                 acp_session_id: Some(ready.agent_session_id.clone()),
                 transport: spec.transport.as_str().to_owned(),
+                permission_mode: ctx.permission_mode.as_str().to_owned(),
                 nonce: ctx.nonce.clone(),
                 allowed_files: ctx.allowed_files.clone(),
             })

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use argon_core::PermissionMode;
 use argon_store::SessionStatus;
 use tokio::sync::{broadcast, watch};
 
@@ -42,6 +43,7 @@ struct State {
     pending: Vec<Pending>,
     tool_kinds: HashMap<String, String>,
     next_permission: u64,
+    permission_mode: PermissionMode,
 }
 
 pub(super) struct SharedConfig {
@@ -51,7 +53,6 @@ pub(super) struct SharedConfig {
     pub allowed_files: Vec<String>,
     pub writer: SessionWriter,
     pub stderr: Arc<StderrTail>,
-    pub full_access: bool,
 }
 
 pub(super) struct Shared {
@@ -63,7 +64,11 @@ pub(super) struct Shared {
 }
 
 impl Shared {
-    pub fn new(config: SharedConfig, events: broadcast::Sender<(u64, AgentEvent)>) -> Shared {
+    pub fn new(
+        config: SharedConfig,
+        permission_mode: PermissionMode,
+        events: broadcast::Sender<(u64, AgentEvent)>,
+    ) -> Shared {
         Shared {
             config,
             events,
@@ -80,6 +85,7 @@ impl Shared {
                 pending: Vec::new(),
                 tool_kinds: HashMap::new(),
                 next_permission: 0,
+                permission_mode,
             }),
         }
     }

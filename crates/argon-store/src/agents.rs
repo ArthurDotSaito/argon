@@ -9,7 +9,7 @@ use crate::Store;
 use crate::error::Result;
 
 const SESSION_COLUMNS: &str = "id, host, pr_id, agent, model, template, status, worktree_path, \
-     acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason,      transport";
+     acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason,      transport, permission_mode";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionStatus {
@@ -79,6 +79,7 @@ pub struct NewAgentSession {
     pub worktree_path: Option<PathBuf>,
     pub acp_session_id: Option<String>,
     pub transport: String,
+    pub permission_mode: String,
     pub nonce: String,
     pub allowed_files: Vec<String>,
 }
@@ -100,6 +101,7 @@ pub struct SessionRow {
     pub model_label: Option<String>,
     pub failure_reason: Option<String>,
     pub transport: String,
+    pub permission_mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +156,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         model_label: row.get(13)?,
         failure_reason: row.get(14)?,
         transport: row.get(15)?,
+        permission_mode: row.get(16)?,
     })
 }
 
@@ -163,8 +166,8 @@ impl Store {
         self.conn.execute(
             "INSERT INTO agent_sessions
                 (id, host, pr_id, agent, model, template, status, worktree_path, acp_session_id,
-                 nonce, allowed_files, created_at, updated_at, transport)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)",
+                 nonce, allowed_files, created_at, updated_at, transport, permission_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14)",
             params![
                 session.id,
                 session.pr.host,
@@ -182,6 +185,7 @@ impl Store {
                 serde_json::to_string(&session.allowed_files)?,
                 now,
                 session.transport,
+                session.permission_mode,
             ],
         )?;
         Ok(())
@@ -201,6 +205,14 @@ impl Store {
         self.conn.execute(
             "UPDATE agent_sessions SET model = ?1, updated_at = ?2 WHERE id = ?3",
             params![model, Utc::now().timestamp_millis(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_session_permission_mode(&mut self, id: &str, mode: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_sessions SET permission_mode = ?1, updated_at = ?2 WHERE id = ?3",
+            params![mode, Utc::now().timestamp_millis(), id],
         )?;
         Ok(())
     }

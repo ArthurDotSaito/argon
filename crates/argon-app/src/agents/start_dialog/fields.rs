@@ -62,6 +62,9 @@ impl StartDialog {
             .small()
             .placeholder(model_placeholder)
             .disabled(!has_models || self.is_launching());
+        let permissions = Select::new(&self.permission_select)
+            .small()
+            .disabled(self.selected_option().is_none() || self.is_launching());
         let template_placeholder = match &self.templates {
             Load::Loading => labels::LOADING_TEMPLATES,
             Load::Ready(_) | Load::Failed(_) => labels::NO_TEMPLATES,
@@ -108,6 +111,14 @@ impl StartDialog {
                     .items_center()
                     .child(section_label(labels::MODEL, cx))
                     .child(div().flex_1().child(model)),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .gap_2()
+                    .items_center()
+                    .child(section_label(labels::PERMISSIONS, cx))
+                    .child(div().flex_1().child(permissions)),
             )
             .child(
                 v_flex()

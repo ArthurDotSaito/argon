@@ -14,6 +14,7 @@ fn session(id: &str) -> NewAgentSession {
         worktree_path: Some(PathBuf::from("wt")),
         acp_session_id: Some("acp".into()),
         transport: "acp".into(),
+        permission_mode: "supervised".into(),
         nonce: "n".into(),
         allowed_files: vec!["a.rs".into()],
     }

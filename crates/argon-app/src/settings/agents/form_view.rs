@@ -1,5 +1,6 @@
 use argon_agents::Support;
 use argon_agents::defaults::agent_defaults;
+use argon_core::PermissionMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -105,18 +106,22 @@ impl AgentForm {
         v_flex().gap_1().children(rows).child(h_flex().child(add))
     }
 
-    fn full_access_control(&self, cx: &mut Context<Self>) -> Div {
-        let toggle = Switch::new(("settings-agent-full-access", self.kind as usize))
-            .checked(self.full_access)
-            .small()
-            .on_click(cx.listener(|this, on: &bool, _, cx| {
-                this.full_access = *on;
-                cx.notify();
-            }));
+    fn permission_mode_control(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let risk = (self.permission_mode == PermissionMode::FullAccess)
+            .then(|| note(labels::FULL_ACCESS_NOTE, theme.warning));
         v_flex()
             .gap_1()
-            .child(h_flex().child(toggle))
-            .child(note(labels::FULL_ACCESS_NOTE, cx.theme().muted_foreground))
+            .child(
+                div()
+                    .w_64()
+                    .child(Select::new(&self.permission_select).small()),
+            )
+            .child(note(
+                labels::permission_mode_hint(self.permission_mode),
+                theme.muted_foreground,
+            ))
+            .children(risk)
     }
 
     fn use_acp_control(&self, cx: &mut Context<Self>) -> Div {
@@ -203,7 +208,11 @@ impl Render for AgentForm {
             .child(field(labels::ARGS, Input::new(&self.args).small(), cx))
             .child(field(labels::ENV, self.env_rows(cx), cx))
             .child(field(labels::DEFAULT_MODEL, model, cx))
-            .child(field(labels::FULL_ACCESS, self.full_access_control(cx), cx))
+            .child(field(
+                labels::PERMISSION_MODE,
+                self.permission_mode_control(cx),
+                cx,
+            ))
             .children(use_acp)
             .child(self.actions(cx))
     }

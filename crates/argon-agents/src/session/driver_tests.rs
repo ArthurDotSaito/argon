@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, PrKey};
+use argon_core::{AgentKind, PermissionMode, PrKey};
 use argon_store::{NewAgentSession, Store};
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -26,6 +26,7 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             worktree_path: None,
             acp_session_id: Some("acp".into()),
             transport: "acp".into(),
+            permission_mode: "supervised".into(),
             nonce: NONCE.into(),
             allowed_files: vec!["src/lib.rs".into()],
         })
@@ -40,8 +41,8 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             allowed_files: vec!["src/lib.rs".into()],
             writer: writer.clone(),
             stderr: Arc::default(),
-            full_access: false,
         },
+        PermissionMode::Supervised,
         events,
     );
     (shared, writer)
@@ -302,6 +303,54 @@ async fn ending_turn_cancels_pending_permissions() {
     shared.on_permission(ask("edit", &[]), reply);
     shared.end_turn("cancelled").await;
     assert_eq!(*answers.lock().unwrap(), [PermissionAnswer::Cancelled]);
+    assert!(shared.subscribe().0.pending_permissions.is_empty());
+}
+
+#[tokio::test]
+async fn switching_to_accept_edits_answers_pending_local_edits() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (edit_reply, edit_answers) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), edit_reply);
+    let (exec_reply, exec_answers) = recording_reply();
+    shared.on_permission(ask("execute", &[]), exec_reply);
+    assert_eq!(shared.subscribe().0.pending_permissions.len(), 2);
+
+    shared.set_permission_mode(PermissionMode::AcceptEdits);
+
+    assert_eq!(
+        *edit_answers.lock().unwrap(),
+        [PermissionAnswer::Selected("allow_once".into())]
+    );
+    assert!(exec_answers.lock().unwrap().is_empty());
+    let (snapshot, _) = shared.subscribe();
+    assert_eq!(snapshot.pending_permissions.len(), 1);
+    assert_eq!(snapshot.pending_permissions[0].request_id, "perm-2");
+    assert_eq!(snapshot.status, SessionStatus::AwaitingUser);
+
+    shared.set_permission_mode(PermissionMode::FullAccess);
+
+    assert_eq!(
+        *exec_answers.lock().unwrap(),
+        [PermissionAnswer::Selected("allow_once".into())]
+    );
+    let (snapshot, _) = shared.subscribe();
+    assert!(snapshot.pending_permissions.is_empty());
+    assert_eq!(snapshot.status, SessionStatus::Running);
+}
+
+#[tokio::test]
+async fn new_permission_mode_applies_to_later_asks() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.set_permission_mode(PermissionMode::AcceptEdits);
+    let (reply, answers) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), reply);
+    assert_eq!(
+        *answers.lock().unwrap(),
+        [PermissionAnswer::Selected("allow_once".into())]
+    );
     assert!(shared.subscribe().0.pending_permissions.is_empty());
 }
 

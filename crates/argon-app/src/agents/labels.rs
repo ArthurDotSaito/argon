@@ -1,9 +1,12 @@
+use argon_core::PermissionMode;
+
 pub const DIALOG_TITLE: &str = "Revisar com IA";
 pub const AGENT: &str = "Agente";
 pub const GENERIC_AGENT: &str = "agente";
 pub const MODEL: &str = "Modelo";
 pub const TEMPLATE: &str = "Template";
 pub const OPTIONS: &str = "Opções";
+pub const PERMISSIONS: &str = "Permissões";
 pub const EDIT_IN_SETTINGS: &str = "Editar em Configurações";
 pub const DETECTING: &str = "detectando…";
 pub const NOT_FOUND: &str = "não encontrado no PATH";
@@ -43,6 +46,14 @@ pub const CI_HEADING: &str = "Jobs com falha:";
 pub const NO_CI_LOG: &str = "(log vazio)";
 pub const BUTTON_TOOLTIP: &str = "Revisar este PR com um agente de IA (a)";
 pub const CLOSED_TOOLTIP: &str = "Disponível só para PRs abertos";
+
+pub fn permission_mode(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Supervised => "Supervisionado",
+        PermissionMode::AcceptEdits => "Aceitar edições",
+        PermissionMode::FullAccess => "Acesso total",
+    }
+}
 
 pub fn permissions_warning(agent: &str) -> String {
     format!(

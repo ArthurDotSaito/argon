@@ -1,4 +1,5 @@
 mod acp;
+mod acp_mode;
 mod acp_permissions;
 mod bootstrap;
 mod driver;
@@ -15,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use argon_core::PrKey;
+use argon_core::{PermissionMode, PrKey};
 use argon_store::SessionStatus;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -84,6 +85,7 @@ pub struct SessionContext {
     pub allowed_files: Vec<String>,
     pub cwd: PathBuf,
     pub model: String,
+    pub permission_mode: PermissionMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +123,10 @@ pub(crate) enum Command {
     Cancel,
     SetModel {
         model: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    SetPermissionMode {
+        mode: PermissionMode,
         reply: oneshot::Sender<Result<()>>,
     },
     Shutdown,
@@ -184,6 +190,12 @@ impl AgentSessionHandle {
             self.shared.release();
             return Err(error);
         }
+        response.await.map_err(|_| SessionError::Closed)?
+    }
+
+    pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
+        let (reply, response) = oneshot::channel();
+        self.send(Command::SetPermissionMode { mode, reply })?;
         response.await.map_err(|_| SessionError::Closed)?
     }
 

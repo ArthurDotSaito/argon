@@ -1,11 +1,13 @@
 use std::path::{Component, Path, PathBuf};
 
+use argon_core::PermissionMode;
 use serde_json::Value;
 
 use super::events::PermissionOption;
 use crate::util::json_text;
 
-const READ_ONLY_KINDS: [&str; 2] = ["read", "search"];
+const READ_ONLY_KINDS: &[&str] = &["read", "search"];
+const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
 const ALLOW_ONCE: &str = "allow_once";
 const PATH_KEYS: [&str; 5] = ["path", "file_path", "filePath", "abs_path", "directory"];
 const PATTERN_KEYS: [&str; 3] = ["pattern", "glob", "include"];
@@ -195,22 +197,28 @@ pub(crate) fn native_options() -> Vec<PermissionOption> {
     .collect()
 }
 
-fn is_local_read(ask: &PermissionAsk, cwd: &Path) -> bool {
-    READ_ONLY_KINDS.contains(&ask.kind.as_str())
+fn is_local(ask: &PermissionAsk, cwd: &Path, kinds: &[&str]) -> bool {
+    kinds.contains(&ask.kind.as_str())
         && !ask.paths.is_empty()
         && ask.paths.iter().all(|path| is_inside(cwd, path))
 }
 
-pub fn decide(ask: &PermissionAsk, cwd: &Path, full_access: bool) -> PermissionDecision {
+fn auto_allowed(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> bool {
+    match mode {
+        PermissionMode::Supervised => is_local(ask, cwd, READ_ONLY_KINDS),
+        PermissionMode::AcceptEdits => is_local(ask, cwd, LOCAL_EDIT_KINDS),
+        PermissionMode::FullAccess => true,
+    }
+}
+
+pub fn decide(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> PermissionDecision {
     let allow_once = ask
         .options
         .iter()
         .find(|option| option.kind == ALLOW_ONCE)
         .map(|option| option.id.clone());
     match allow_once {
-        Some(option_id) if full_access || is_local_read(ask, cwd) => {
-            PermissionDecision::Allow { option_id }
-        }
+        Some(option_id) if auto_allowed(ask, cwd, mode) => PermissionDecision::Allow { option_id },
         _ => PermissionDecision::Ask(PermissionPrompt {
             title: ask.title.clone(),
             kind: ask.kind.clone(),
