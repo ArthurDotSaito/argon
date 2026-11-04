@@ -37,6 +37,10 @@ pub(crate) enum Op {
         session: String,
         mode: PermissionMode,
     },
+    AgentSessionId {
+        session: String,
+        id: String,
+    },
     SaveFindings {
         session: String,
         findings: Vec<Finding>,
@@ -189,6 +193,16 @@ impl Worker {
                         let _ = errors.send(format!(
                             "falha ao gravar o modo de permissão da sessão: {error}"
                         ));
+                    }
+                }
+            }
+            Op::AgentSessionId { session, id } => {
+                self.count();
+                if let Err(error) = self.store.set_session_acp_id(&session, &id) {
+                    tracing::error!(%error, "failed to persist agent session id");
+                    if let Some(errors) = self.errors.get(&session) {
+                        let _ = errors
+                            .send(format!("falha ao gravar o id da sessão do agente: {error}"));
                     }
                 }
             }

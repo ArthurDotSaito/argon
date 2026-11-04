@@ -443,11 +443,13 @@ impl Session {
     fn on_init(&mut self, session_id: String, model: String) {
         self.transcript = true;
         if !session_id.is_empty() && session_id != self.id {
-            tracing::warn!(
-                expected = %self.id,
+            tracing::info!(
+                previous = %self.id,
                 reported = %session_id,
-                "claude reported an unexpected session id"
+                "claude reported a new session id; following it"
             );
+            self.shared.set_agent_session_id(&session_id);
+            self.id = session_id;
         }
         if !model.is_empty() && model != self.model {
             self.shared.set_model(&model);

@@ -53,6 +53,22 @@ fn updates_status_and_model() {
 }
 
 #[test]
+fn updates_the_agent_session_id() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.create_session(&new_session("s1")).unwrap();
+    store.set_session_acp_id("s1", "ses_2").unwrap();
+    assert_eq!(
+        store
+            .session("s1")
+            .unwrap()
+            .unwrap()
+            .acp_session_id
+            .as_deref(),
+        Some("ses_2")
+    );
+}
+
+#[test]
 fn duplicate_session_id_is_an_error() {
     let mut store = Store::open_in_memory().unwrap();
     store.create_session(&new_session("s1")).unwrap();

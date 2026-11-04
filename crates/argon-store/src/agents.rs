@@ -218,6 +218,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_session_acp_id(&mut self, id: &str, acp_session_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_sessions SET acp_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![acp_session_id, Utc::now().timestamp_millis(), id],
+        )?;
+        Ok(())
+    }
+
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>> {
         let row = self
             .conn

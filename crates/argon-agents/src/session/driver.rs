@@ -265,6 +265,13 @@ impl Shared {
         });
     }
 
+    pub fn set_agent_session_id(&self, id: &str) {
+        self.config.writer.push(Op::AgentSessionId {
+            session: self.config.id.clone(),
+            id: id.to_owned(),
+        });
+    }
+
     pub fn in_turn(&self) -> bool {
         self.lock().in_turn
     }

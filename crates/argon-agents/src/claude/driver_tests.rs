@@ -311,7 +311,12 @@ fn expire_only_closes_a_cancelled_turn() {
 const FAKE_WINDOWS: &str = r#"@echo off
 >>"%~dp0args.txt" echo %*
 if "%1"=="early" goto early
+if "%1"=="fork" goto fork
 echo {"type":"system","subtype":"init"}
+goto prompt
+:fork
+echo {"type":"system","subtype":"init","session_id":"forked-id"}
+:prompt
 set /p line=
 if "%1"=="crash" goto crash
 if "%1"=="auth" goto auth
@@ -331,7 +336,11 @@ exit /b 1
 const FAKE_UNIX: &str = r#"#!/bin/sh
 echo "$*" >> "$(dirname "$0")/args.txt"
 if [ "$1" = early ]; then echo boom >&2; exit 1; fi
-echo '{"type":"system","subtype":"init"}'
+if [ "$1" = fork ]; then
+  echo '{"type":"system","subtype":"init","session_id":"forked-id"}'
+else
+  echo '{"type":"system","subtype":"init"}'
+fi
 read line
 if [ "$1" = crash ]; then echo boom >&2; exit 3; fi
 if [ "$1" = auth ]; then
@@ -545,6 +554,32 @@ async fn death_before_init_respawns_with_the_same_session_id() {
         assert!(started_with(launch, SESSION_ID_FLAG, &id), "{launches:?}");
         assert!(!launch.contains(RESUME_FLAG), "{launches:?}");
     }
+}
+
+#[tokio::test]
+async fn reported_session_id_is_followed_on_resume_and_persisted() {
+    let mut fake = fake("fork").await;
+    let id = fake.session.id.clone();
+
+    fake.turn("primeiro").await;
+    fake.turn("segundo").await;
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(
+        started_with(&launches[0], SESSION_ID_FLAG, &id),
+        "{launches:?}"
+    );
+    assert!(
+        started_with(&launches[1], RESUME_FLAG, "forked-id"),
+        "{launches:?}"
+    );
+    fake.writer.flush().await;
+    let row = Store::open(&fake.dir.join("argon.db"))
+        .unwrap()
+        .session(SESSION)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.acp_session_id.as_deref(), Some("forked-id"));
 }
 
 #[tokio::test]
