@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use argon_agents::defaults::AGENT_DEFAULTS;
 use argon_agents::{
-    AgentSpec, ModelInfo, ModelsCache, list_models, listing_spec, lists_models, spec_fingerprint,
+    AgentSpec, ModelInfo, ModelsCache, list_models, listing_spec, spec_fingerprint,
     spec_lists_models,
 };
 use argon_core::{AgentKind, Config, Paths};
@@ -72,8 +72,7 @@ impl ModelListings {
         trigger: Trigger,
     ) -> bool {
         let key = (kind, fingerprint.to_owned());
-        lists_models(kind)
-            && !self.cache.is_fresh(kind, fingerprint, now)
+        !self.cache.is_fresh(kind, fingerprint, now)
             && (trigger == Trigger::Manual || !self.backing_off(&key, now))
             && self.in_flight.insert(key)
     }
@@ -122,14 +121,14 @@ impl ModelListings {
 
 impl AgentSessions {
     pub fn apply_listed_models(&self, spec: &mut AgentSpec) {
-        if let Some(models) = self.listed_models(spec.kind) {
+        if let Some(models) = self.listed_models(spec) {
             spec.models = models.to_vec();
         }
     }
 
-    pub fn listed_models(&self, kind: AgentKind) -> Option<&[ModelInfo]> {
-        lists_models(kind)
-            .then(|| self.detection().reported(kind))
+    pub fn listed_models(&self, spec: &AgentSpec) -> Option<&[ModelInfo]> {
+        spec_lists_models(spec)
+            .then(|| self.detection().reported(spec.kind))
             .flatten()
     }
 
@@ -226,6 +225,8 @@ impl AgentSessions {
 
 #[cfg(test)]
 mod tests {
+    use argon_agents::{Transport, agent_spec};
+
     use super::*;
 
     const FP_A: &str = "fp-a";
@@ -307,16 +308,18 @@ mod tests {
     }
 
     #[test]
-    fn agents_without_listing_are_skipped() {
-        let mut fixture = Fixture::new("skipped");
-        let listings = &mut fixture.listings;
-        let began = listings.begin(
+    fn only_specs_that_list_models_are_refreshed_or_applied() {
+        let config = Config::default();
+        assert!(!spec_lists_models(&agent_spec(
             AgentKind::ClaudeCode,
-            FP_A,
-            SystemTime::now(),
-            Trigger::Manual,
-        );
-        assert!(!began);
+            &config
+        )));
+        assert!(spec_lists_models(&agent_spec(OPENCODE, &config)));
+        let mut codex = agent_spec(AgentKind::Codex, &config);
+        codex.transport = Transport::Acp;
+        assert!(!spec_lists_models(&codex));
+        codex.transport = Transport::CodexAppServer;
+        assert!(spec_lists_models(&codex));
     }
 
     #[test]

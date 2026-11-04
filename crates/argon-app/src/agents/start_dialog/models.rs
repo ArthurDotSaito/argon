@@ -45,7 +45,7 @@ impl StartDialog {
         if let Load::Ready(options) = &mut self.agents {
             let sessions = sessions.read(cx);
             for option in options {
-                let Some(listed) = sessions.listed_models(option.spec.kind) else {
+                let Some(listed) = sessions.listed_models(&option.spec) else {
                     continue;
                 };
                 if option.spec.models != listed {

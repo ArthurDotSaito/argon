@@ -420,7 +420,7 @@ impl AgentForm {
         };
         let listed = sessions
             .read(cx)
-            .listed_models(self.kind)
+            .listed_models(spec)
             .filter(|listed| spec.models != *listed)
             .map(<[_]>::to_vec);
         if let Some(models) = listed {
