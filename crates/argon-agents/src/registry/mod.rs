@@ -19,6 +19,7 @@ pub use spec::{
     AgentSpec, ModelInfo, Support, agent_spec, agent_spec_for, effective_transport,
     override_applies_to, support_for,
 };
+pub use version::outdated_version;
 pub use warmup::warm_up_agents;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -658,7 +658,7 @@ mod tests {
         assert!(
             hint(AgentKind::CommandCode)
                 .unwrap()
-                .contains("command-code login")
+                .contains("`command-code logout; command-code login`")
         );
         assert!(hint(AgentKind::OpenCode).is_none());
         assert!(hint(AgentKind::ClaudeCode).is_none());

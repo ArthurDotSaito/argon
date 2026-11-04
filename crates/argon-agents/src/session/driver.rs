@@ -163,6 +163,9 @@ impl Shared {
         if !state.active {
             return;
         }
+        if let AgentEvent::Error(message) = &event {
+            tracing::warn!(session = %self.config.id, %message, "agent session error");
+        }
         state.buffer.observe(&event);
         if let AgentEvent::ToolCall { id, kind, .. } = &event {
             state.tool_kinds.insert(id.clone(), kind.clone());

@@ -113,12 +113,23 @@ pub(crate) fn parse_models(body: &Value) -> Vec<ModelInfo> {
         let id = format!("{provider_id}/{model_id}");
         let label = json_text(item, "name")
             .filter(|name| !name.is_empty())
+            .map(|name| format!("{name} · {}", provider_label(&provider_id)))
             .unwrap_or_else(|| id.clone());
         models
-            .entry(id.clone())
+            .entry((provider_id != PLAN_PROVIDER, id.clone()))
             .or_insert_with(|| ModelInfo { id, label });
     }
     models.into_values().collect()
+}
+
+const PLAN_PROVIDER: &str = "opencode-go";
+
+fn provider_label(provider_id: &str) -> &str {
+    match provider_id {
+        PLAN_PROVIDER => "OpenCode Go",
+        "opencode" => "OpenCode Zen",
+        other => other,
+    }
 }
 
 pub(crate) fn split_model(id: &str) -> Option<(&str, &str)> {

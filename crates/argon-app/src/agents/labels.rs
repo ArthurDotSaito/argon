@@ -56,6 +56,10 @@ pub const NO_USAGE_WINDOWS: &str = "sem dados de uso";
 pub const LIMIT_REACHED: &str = "Limite atingido";
 pub const RESETS_SOON: &str = "em instantes";
 
+pub fn outdated(installed: &str, tested: &str) -> String {
+    format!("v{installed} · atualize para {tested} ou mais nova")
+}
+
 pub fn in_minutes(minutes: u64) -> String {
     format!("em {minutes} min")
 }

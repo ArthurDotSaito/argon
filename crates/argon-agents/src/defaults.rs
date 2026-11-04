@@ -352,7 +352,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         cli_command: "command-code",
         version_args: &["--version"],
         install_hint: "npm i -g command-code",
-        login_command: "command-code login",
+        login_command: "command-code logout; command-code login",
         login_check: "command-code status",
         model_selection: MODEL_OPTION,
         models_from_session: true,
