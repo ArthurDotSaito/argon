@@ -58,6 +58,12 @@ const END_TURN: &str = "end_turn";
 const CANCELLED_REASON: &str = "cancelled";
 const SESSION_CLOSED: &str = "a sessão do Claude foi encerrada";
 const BUSY_TURN: &str = "já existe um turno em andamento";
+const NO_CONVERSATION: &str = "no conversation found";
+const ID_IN_USE: &str = "already in use";
+const CONVERSATION_LOST: &str =
+    "a conversa anterior do Claude não foi encontrada; a próxima mensagem começa uma conversa nova";
+const CONVERSATION_EXISTS: &str =
+    "o Claude já tem uma conversa com este id; a próxima mensagem retoma essa conversa";
 
 type Answer = (String, PermissionAnswer);
 type Tagged = (u64, Output);
@@ -130,6 +136,10 @@ fn exit_message(code: Option<i32>) -> String {
     }
 }
 
+fn mentions(tail: &[String], marker: &str) -> bool {
+    tail.iter().any(|line| line.to_lowercase().contains(marker))
+}
+
 fn reply_to(answers: &mpsc::UnboundedSender<Answer>, request_id: String) -> PermissionReply {
     let answers = answers.clone();
     Box::new(move |answer| {
@@ -192,17 +202,21 @@ struct Claude {
     outbox: mpsc::UnboundedSender<String>,
     stderr: Option<JoinHandle<()>>,
     generation: u64,
+    resumed: bool,
+    initialized: bool,
 }
 
 impl Claude {
     fn spawn(
         spec: &AgentSpec,
         cwd: &Path,
-        args: Vec<String>,
+        start: Start<'_>,
+        model: &str,
         tail: Arc<StderrTail>,
         generation: u64,
         outputs: &mpsc::UnboundedSender<Tagged>,
     ) -> Result<Claude> {
+        let args = launch_args(&spec.args, start, model);
         let spec = AgentSpec {
             args,
             ..spec.clone()
@@ -219,6 +233,8 @@ impl Claude {
             outbox: spawn_writer(stdin, generation, outputs.clone()),
             stderr,
             generation,
+            resumed: matches!(start, Start::Resume(_)),
+            initialized: false,
         })
     }
 
@@ -354,13 +370,13 @@ impl Session {
         } else {
             Start::New(&self.id)
         };
-        let args = launch_args(&self.spec.args, start, &self.launch_model);
         self.tail.clear();
         self.generation += 1;
         self.claude = Some(Claude::spawn(
             &self.spec,
             &self.cwd,
-            args,
+            start,
+            &self.launch_model,
             Arc::clone(&self.tail),
             self.generation,
             &self.outputs,
@@ -442,17 +458,45 @@ impl Session {
     }
 
     async fn on_exit(&mut self, write_error: Option<String>) {
+        let launched = self
+            .claude
+            .as_ref()
+            .map(|claude| (claude.resumed, claude.initialized));
         let mut message = exit_message(self.stop_process().await);
         if let Some(error) = write_error {
             message = format!("{message}; falha ao escrever no stdin: {error}");
+        }
+        let tail = self.shared.stderr_tail(STDERR_LINES);
+        if let Some((resumed, false)) = launched
+            && let Some(notice) = self.recover_start(resumed, &tail)
+        {
+            message = format!("{notice}; {message}");
         }
         if !self.turns.in_turn() {
             tracing::info!(%message, "claude exited between turns; the next prompt resumes it");
             return;
         }
-        let tail = self.shared.stderr_tail(STDERR_LINES);
         let close = self.turns.abort(message);
         self.close_turn(close, &tail).await;
+    }
+
+    fn recover_start(&mut self, resumed: bool, tail: &[String]) -> Option<&'static str> {
+        if resumed && mentions(tail, NO_CONVERSATION) {
+            let id = new_uuid()
+                .inspect_err(
+                    |error| tracing::warn!(%error, "could not mint a new claude session id"),
+                )
+                .ok()?;
+            self.shared.set_agent_session_id(&id);
+            self.id = id;
+            self.transcript = false;
+            Some(CONVERSATION_LOST)
+        } else if !resumed && mentions(tail, ID_IN_USE) {
+            self.transcript = true;
+            Some(CONVERSATION_EXISTS)
+        } else {
+            None
+        }
     }
 
     async fn on_line(&mut self, line: &str) {
@@ -479,6 +523,9 @@ impl Session {
 
     fn on_init(&mut self, session_id: String, model: String) {
         self.transcript = true;
+        if let Some(claude) = &mut self.claude {
+            claude.initialized = true;
+        }
         if !session_id.is_empty() && session_id != self.id {
             self.follow(session_id);
         }

@@ -312,6 +312,14 @@ fn expire_only_closes_a_cancelled_turn() {
 const FAKE_WINDOWS: &str = r#"@echo off
 >>"%~dp0args.txt" echo %*
 if "%1"=="early" goto early
+if not "%1"=="expired" goto checkinuse
+echo %*| findstr /C:"--resume" >nul
+if not errorlevel 1 goto expired
+:checkinuse
+if not "%1"=="inuse" goto start
+echo %*| findstr /C:"--session-id" >nul
+if not errorlevel 1 goto inuse
+:start
 if "%1"=="fork" goto fork
 echo {"type":"system","subtype":"init"}
 goto prompt
@@ -332,11 +340,21 @@ exit /b 3
 :early
 >&2 echo boom
 exit /b 1
+:expired
+>&2 echo No conversation found with session ID: gone
+exit /b 1
+:inuse
+>&2 echo Error: Session ID taken is already in use.
+exit /b 1
 "#;
 
 const FAKE_UNIX: &str = r#"#!/bin/sh
 echo "$*" >> "$(dirname "$0")/args.txt"
 if [ "$1" = early ]; then echo boom >&2; exit 1; fi
+case "$1 $*" in
+  expired*--resume*) echo "No conversation found with session ID: gone" >&2; exit 1 ;;
+  inuse*--session-id*) echo "Error: Session ID taken is already in use." >&2; exit 1 ;;
+esac
 if [ "$1" = fork ]; then
   echo '{"type":"system","subtype":"init","session_id":"11111111-2222-4333-8444-555555555555"}'
 else
@@ -352,6 +370,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
 "#;
 
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(20);
+static FAKES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 struct Fake {
     dir: PathBuf,
@@ -406,7 +425,11 @@ fn fake_run(dir: &Path, mode: &str, shared: &Arc<Shared>, tail: Arc<StderrTail>)
 }
 
 async fn fake(mode: &str) -> Fake {
-    let dir = std::env::temp_dir().join(format!("argon-claude-{mode}-{}", std::process::id()));
+    let unique = FAKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "argon-claude-{mode}-{}-{unique}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let writer = SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
@@ -638,6 +661,83 @@ fn uuid_check_accepts_only_hyphenated_hex() {
         "0f8e4d2c-1b3a-4c5d-9e6f_7a8b9c0d1e2f",
     ] {
         assert!(!is_uuid(invalid), "{invalid}");
+    }
+}
+
+#[tokio::test]
+async fn missing_conversation_on_resume_starts_a_new_one() {
+    let mut fake = fake("expired").await;
+    let old = fake.session.id.clone();
+    fake.session.transcript = true;
+
+    fake.turn("primeiro").await;
+    assert_eq!(fake.status(), SessionStatus::Failed);
+    let errors = fake.errors().await;
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with(CONVERSATION_LOST), "{errors:?}");
+    let new = fake.session.id.clone();
+    assert_ne!(new, old);
+    assert!(is_uuid(&new));
+    assert!(!fake.session.transcript);
+
+    fake.turn("segundo").await;
+    assert_eq!(fake.status(), SessionStatus::Completed);
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(
+        started_with(&launches[0], RESUME_FLAG, &old),
+        "{launches:?}"
+    );
+    assert!(
+        started_with(&launches[1], SESSION_ID_FLAG, &new),
+        "{launches:?}"
+    );
+    fake.writer.flush().await;
+    let row = Store::open(&fake.dir.join("argon.db"))
+        .unwrap()
+        .session(SESSION)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.acp_session_id.as_deref(), Some(new.as_str()));
+}
+
+#[tokio::test]
+async fn session_id_already_in_use_falls_back_to_resume() {
+    let mut fake = fake("inuse").await;
+    let id = fake.session.id.clone();
+
+    fake.turn("primeiro").await;
+    assert_eq!(fake.status(), SessionStatus::Failed);
+    let errors = fake.errors().await;
+    assert!(errors[0].starts_with(CONVERSATION_EXISTS), "{errors:?}");
+    assert!(fake.session.transcript);
+
+    fake.turn("segundo").await;
+    assert_eq!(fake.status(), SessionStatus::Completed);
+    assert_eq!(fake.session.id, id);
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    assert!(
+        started_with(&launches[0], SESSION_ID_FLAG, &id),
+        "{launches:?}"
+    );
+    assert!(started_with(&launches[1], RESUME_FLAG, &id), "{launches:?}");
+}
+
+#[tokio::test]
+async fn other_deaths_before_init_keep_resuming() {
+    let mut fake = fake("early").await;
+    let id = fake.session.id.clone();
+    fake.session.transcript = true;
+
+    fake.turn("primeiro").await;
+    fake.turn("segundo").await;
+
+    assert_eq!(fake.session.id, id);
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
+    for launch in &launches {
+        assert!(started_with(launch, RESUME_FLAG, &id), "{launches:?}");
     }
 }
 
