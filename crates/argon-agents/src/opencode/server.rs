@@ -1,27 +1,30 @@
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use argon_core::Paths;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader, Lines};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdout};
 
 use crate::http::LocalApi;
 use crate::process::{KillOnDropChild, spawn_in_job};
 use crate::registry::AgentSpec;
 use crate::session::StderrTail;
-use crate::util::{Resolved, json_text, resolve_command};
+use crate::util::{Resolved, json_text, lock, resolve_command};
 
 const SERVE_ARGS: [&str; 6] = ["serve", "--stdio", "--port", "0", "--hostname", "127.0.0.1"];
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const PROBE_INTERVAL: Duration = Duration::from_millis(500);
 const EXIT_GRACE: Duration = Duration::from_millis(500);
 const STDERR_LINES_IN_ERROR: usize = 10;
+const MAX_LINE_BYTES: usize = 64 * 1024;
+const REDACTED: &str = "[redacted]";
 const PASSWORD_BYTES: usize = 24;
 const REQUIRED_MAJOR: u64 = 2;
 const PASSWORD_ENV: &str = "OPENCODE_PASSWORD";
@@ -83,11 +86,13 @@ pub(crate) async fn start(
     if let Some(child_stderr) = child.stderr.take() {
         drain_stderr(child_stderr, Arc::clone(&stderr));
     }
-    let ready = tokio::time::timeout(
-        STARTUP_TIMEOUT,
-        connect(&mut child, stdout, &password, cwd, &stderr),
-    )
-    .await;
+    let startup = Startup {
+        password: &password,
+        stderr: &stderr,
+        last_probe_error: Mutex::new(None),
+    };
+    let ready =
+        tokio::time::timeout(STARTUP_TIMEOUT, startup.connect(&mut child, stdout, cwd)).await;
     match ready {
         Ok(Ok(api)) => Ok(OpencodeServer { api, child }),
         Ok(Err(message)) => {
@@ -96,65 +101,97 @@ pub(crate) async fn start(
         }
         Err(_) => {
             kill(&mut child).await;
-            Err(format!(
-                "o OpenCode não iniciou em {}s",
-                STARTUP_TIMEOUT.as_secs()
-            ))
+            Err(startup.timeout_message())
         }
     }
 }
 
-async fn connect(
-    child: &mut KillOnDropChild,
-    stdout: ChildStdout,
-    password: &str,
-    cwd: &Path,
-    stderr: &StderrTail,
-) -> Result<LocalApi, String> {
-    let mut lines = BufReader::new(stdout).lines();
-    let port = read_port(&mut lines, child, stderr).await?;
-    drain_stdout(lines);
-    let api = LocalApi::new(
-        format!("http://127.0.0.1:{port}"),
-        password,
-        cwd.display().to_string(),
-    )?;
-    probe(&api, child, stderr).await?;
-    Ok(api)
+struct Startup<'a> {
+    password: &'a str,
+    stderr: &'a StderrTail,
+    last_probe_error: Mutex<Option<String>>,
 }
 
-async fn read_port(
-    lines: &mut Lines<BufReader<ChildStdout>>,
-    child: &mut KillOnDropChild,
-    stderr: &StderrTail,
-) -> Result<u16, String> {
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                if let Some(port) = port_from_line(&line) {
-                    return Ok(port);
+impl Startup<'_> {
+    async fn connect(
+        &self,
+        child: &mut KillOnDropChild,
+        stdout: ChildStdout,
+        cwd: &Path,
+    ) -> Result<LocalApi, String> {
+        let mut reader = BufReader::new(stdout);
+        let port = self.read_port(&mut reader, child).await?;
+        drain_stdout(reader);
+        let api = LocalApi::new(
+            format!("http://127.0.0.1:{port}"),
+            self.password,
+            cwd.display().to_string(),
+        )?;
+        self.probe(&api, child).await?;
+        Ok(api)
+    }
+
+    async fn read_port(
+        &self,
+        reader: &mut BufReader<ChildStdout>,
+        child: &mut KillOnDropChild,
+    ) -> Result<u16, String> {
+        loop {
+            match read_line_lossy(reader).await {
+                Ok(Some(line)) => {
+                    if let Some(port) = port_from_line(&line) {
+                        return Ok(port);
+                    }
                 }
+                Ok(None) | Err(_) => return Err(self.exited_early(child).await),
             }
-            Ok(None) | Err(_) => return Err(exited_early(child, stderr).await),
         }
     }
-}
 
-async fn probe(
-    api: &LocalApi,
-    child: &mut KillOnDropChild,
-    stderr: &StderrTail,
-) -> Result<(), String> {
-    loop {
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return Err(exited_early(child, stderr).await);
+    async fn probe(&self, api: &LocalApi, child: &mut KillOnDropChild) -> Result<(), String> {
+        loop {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return Err(self.exited_early(child).await);
+            }
+            match api.get("/api/info").await {
+                Ok(info) => {
+                    if let Some(version) =
+                        json_text(&info, "version").filter(|text| !text.is_empty())
+                    {
+                        return check_version(&version);
+                    }
+                    self.note_probe_error("resposta sem versão".to_owned());
+                }
+                Err(error) => self.note_probe_error(error),
+            }
+            tokio::time::sleep(PROBE_INTERVAL).await;
         }
-        if let Ok(info) = api.get("/api/info").await
-            && let Some(version) = json_text(&info, "version").filter(|text| !text.is_empty())
-        {
-            return check_version(&version);
+    }
+
+    fn note_probe_error(&self, error: String) {
+        *lock(&self.last_probe_error) = Some(error);
+    }
+
+    fn timeout_message(&self) -> String {
+        let base = format!("o OpenCode não iniciou em {}s", STARTUP_TIMEOUT.as_secs());
+        match lock(&self.last_probe_error).as_deref() {
+            Some(error) => format!("{base} (último erro: {})", self.scrub(error)),
+            None => base,
         }
-        tokio::time::sleep(PROBE_INTERVAL).await;
+    }
+
+    async fn exited_early(&self, child: &mut KillOnDropChild) -> String {
+        let _ = tokio::time::timeout(EXIT_GRACE, child.wait()).await;
+        let tail = self.scrub(&self.stderr.last(STDERR_LINES_IN_ERROR).join("\n"));
+        if tail.is_empty() {
+            "o OpenCode encerrou antes de ficar pronto".to_owned()
+        } else {
+            format!("o OpenCode encerrou antes de ficar pronto:\n{tail}")
+        }
+    }
+
+    fn scrub(&self, text: &str) -> String {
+        text.replace(self.password, REDACTED)
     }
 }
 
@@ -167,16 +204,6 @@ fn check_version(version: &str) -> Result<(), String> {
     }
 }
 
-async fn exited_early(child: &mut KillOnDropChild, stderr: &StderrTail) -> String {
-    let _ = tokio::time::timeout(EXIT_GRACE, child.wait()).await;
-    let tail = stderr.last(STDERR_LINES_IN_ERROR).join("\n");
-    if tail.is_empty() {
-        "o OpenCode encerrou antes de ficar pronto".to_owned()
-    } else {
-        format!("o OpenCode encerrou antes de ficar pronto:\n{tail}")
-    }
-}
-
 async fn kill(child: &mut KillOnDropChild) {
     if let Err(error) = child.kill_tree() {
         tracing::debug!(%error, "OpenCode server process tree already gone");
@@ -184,14 +211,43 @@ async fn kill(child: &mut KillOnDropChild) {
     let _ = child.wait().await;
 }
 
-fn drain_stdout(mut lines: Lines<BufReader<ChildStdout>>) {
-    tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+async fn read_line_lossy<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut line = Vec::new();
+    let mut any_bytes = false;
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            break;
+        }
+        any_bytes = true;
+        let (consumed, complete) = match chunk.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (index + 1, true),
+            None => (chunk.len(), false),
+        };
+        let room = MAX_LINE_BYTES.saturating_sub(line.len());
+        line.extend_from_slice(&chunk[..consumed.min(room)]);
+        reader.consume(consumed);
+        if complete {
+            break;
+        }
+    }
+    if !any_bytes {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&line);
+    Ok(Some(text.trim_end_matches(['\r', '\n']).to_owned()))
+}
+
+fn drain_stdout(mut reader: BufReader<ChildStdout>) {
+    tokio::spawn(async move {
+        let _ = tokio::io::copy(&mut reader, &mut tokio::io::sink()).await;
+    });
 }
 
 fn drain_stderr(stderr: ChildStderr, tail: Arc<StderrTail>) {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        let mut reader = BufReader::new(stderr);
+        while let Ok(Some(line)) = read_line_lossy(&mut reader).await {
             tracing::debug!(target: "argon_agents::agent_stderr", "{line}");
             tail.push(line);
         }
@@ -217,17 +273,27 @@ fn major_version(version: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
+fn has_env_key(env: &BTreeMap<String, String>, key: &str) -> bool {
+    env.keys()
+        .any(|existing| existing.eq_ignore_ascii_case(key))
+}
+
 fn server_env(
     spec_env: &BTreeMap<String, String>,
     config_dir: &Path,
     password: &str,
 ) -> BTreeMap<String, String> {
     let mut env = spec_env.clone();
-    env.entry(CONFIG_DIR_ENV.to_owned())
-        .or_insert_with(|| config_dir.display().to_string());
-    for key in [DISABLE_PROJECT_CONFIG_ENV, DISABLE_AUTOUPDATE_ENV] {
-        env.entry(key.to_owned())
-            .or_insert_with(|| "true".to_owned());
+    env.retain(|key, _| !key.eq_ignore_ascii_case(PASSWORD_ENV));
+    let defaults = [
+        (CONFIG_DIR_ENV, config_dir.display().to_string()),
+        (DISABLE_PROJECT_CONFIG_ENV, "true".to_owned()),
+        (DISABLE_AUTOUPDATE_ENV, "true".to_owned()),
+    ];
+    for (key, value) in defaults {
+        if !has_env_key(&env, key) {
+            env.insert(key.to_owned(), value);
+        }
     }
     env.insert(PASSWORD_ENV.to_owned(), password.to_owned());
     env

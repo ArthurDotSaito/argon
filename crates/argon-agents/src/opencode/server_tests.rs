@@ -101,6 +101,86 @@ fn config_dir_lives_under_the_argon_data_dir() {
     assert!(dir.starts_with(Paths::resolve().data_dir));
 }
 
+#[test]
+fn env_keys_are_matched_case_insensitively() {
+    let user = env(&[
+        ("opencode_password", "stolen"),
+        ("Opencode_Config_Dir", "mine"),
+        ("opencode_disable_project_config", "false"),
+        ("Opencode_Disable_Autoupdate", "false"),
+    ]);
+    let result = server_env(&user, Path::new("cfg"), "pw");
+    assert_eq!(result.len(), 4);
+    assert_eq!(result["Opencode_Config_Dir"], "mine");
+    assert_eq!(result["opencode_disable_project_config"], "false");
+    assert_eq!(result["Opencode_Disable_Autoupdate"], "false");
+    assert_eq!(result[PASSWORD_ENV], "pw");
+}
+
+async fn read_all_lines(bytes: &[u8]) -> Vec<String> {
+    let mut reader = bytes;
+    let mut lines = Vec::new();
+    while let Some(line) = read_line_lossy(&mut reader).await.unwrap() {
+        lines.push(line);
+    }
+    lines
+}
+
+#[tokio::test]
+async fn lines_are_split_on_newlines_and_the_last_one_may_be_unterminated() {
+    assert_eq!(
+        read_all_lines(b"one\r\ntwo\n\nlast").await,
+        ["one", "two", "", "last"]
+    );
+    assert!(read_all_lines(b"").await.is_empty());
+}
+
+#[tokio::test]
+async fn invalid_utf8_never_aborts_the_read() {
+    let lines = read_all_lines(b"bad \xff\xfe bytes\n{\"url\":\"http://127.0.0.1:4096\"}\n").await;
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].contains('\u{fffd}'));
+    assert_eq!(port_from_line(&lines[1]), Some(4096));
+}
+
+#[tokio::test]
+async fn overlong_lines_are_truncated_and_the_next_line_survives() {
+    let mut bytes = vec![b'a'; MAX_LINE_BYTES * 3];
+    bytes.extend_from_slice(b"\nnext\n");
+    let lines = read_all_lines(&bytes).await;
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].len(), MAX_LINE_BYTES);
+    assert_eq!(lines[1], "next");
+}
+
+#[test]
+fn startup_messages_never_contain_the_password() {
+    let tail = StderrTail::default();
+    tail.push("boom with secret-pw inside".to_owned());
+    let startup = Startup {
+        password: "secret-pw",
+        stderr: &tail,
+        last_probe_error: Mutex::new(Some("HTTP 401: secret-pw".to_owned())),
+    };
+    let timeout = startup.timeout_message();
+    assert!(timeout.starts_with("o OpenCode não iniciou em 90s"));
+    assert!(timeout.contains("HTTP 401: [redacted]"));
+    assert!(!timeout.contains("secret-pw"));
+    let scrubbed = startup.scrub(&tail.last(STDERR_LINES_IN_ERROR).join("\n"));
+    assert_eq!(scrubbed, "boom with [redacted] inside");
+}
+
+#[test]
+fn timeout_message_without_a_probe_error_is_plain() {
+    let tail = StderrTail::default();
+    let startup = Startup {
+        password: "pw",
+        stderr: &tail,
+        last_probe_error: Mutex::new(None),
+    };
+    assert_eq!(startup.timeout_message(), "o OpenCode não iniciou em 90s");
+}
+
 #[tokio::test]
 #[ignore = "starts a real local opencode server"]
 async fn smoke_private_server_ignores_the_project_config() {
@@ -109,6 +189,11 @@ async fn smoke_private_server_ignores_the_project_config() {
     std::fs::write(
         dir.join("opencode.json"),
         r#"{"plugin":["definitely-not-a-real-plugin-xyz"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(".env"),
+        "OPENCODE_CONFIG_CONTENT={\"plugin\":[\"dotenv-injected-plugin-xyz\"]}\nOPENCODE_DISABLE_PROJECT_CONFIG=false\n",
     )
     .unwrap();
     let mut spec = crate::agent_spec(
@@ -128,4 +213,5 @@ async fn smoke_private_server_ignores_the_project_config() {
     let sources = outcome.unwrap().to_string();
     assert!(sources.contains("Argon"));
     assert!(!sources.contains("definitely-not-a-real-plugin-xyz"));
+    assert!(!sources.contains("dotenv-injected-plugin-xyz"));
 }
