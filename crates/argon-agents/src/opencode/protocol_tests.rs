@@ -1013,8 +1013,30 @@ fn parse_models_skips_disabled_and_prefixes_provider() {
     assert_eq!(
         parse_models(&body),
         vec![
-            model("anthropic/claude-x", "Claude X"),
-            model("opencode-go/glm-5.3", "GLM 5.3"),
+            model("opencode-go/glm-5.3", "GLM 5.3 · OpenCode Go"),
+            model("anthropic/claude-x", "Claude X · anthropic"),
+        ]
+    );
+}
+
+#[test]
+fn same_model_from_two_providers_gets_distinct_labels_with_the_plan_first() {
+    let body = json!({"data": [
+        {"providerID": "opencode", "id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash"},
+        {"providerID": "opencode-go", "id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash"},
+    ]});
+
+    assert_eq!(
+        parse_models(&body),
+        vec![
+            model(
+                "opencode-go/deepseek-v4.1-flash",
+                "DeepSeek V4.1 Flash · OpenCode Go"
+            ),
+            model(
+                "opencode/deepseek-v4.1-flash",
+                "DeepSeek V4.1 Flash · OpenCode Zen"
+            ),
         ]
     );
 }
@@ -1036,7 +1058,7 @@ fn parse_models_dedupes_by_id_and_sorts() {
 
     assert_eq!(
         parse_models(&body),
-        vec![model("a/y", "A Y"), model("b/z", "B Z")]
+        vec![model("a/y", "A Y · a"), model("b/z", "B Z · b")]
     );
 }
 
