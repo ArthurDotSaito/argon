@@ -449,15 +449,27 @@ async fn fake(mode: &str) -> Fake {
 
 impl Fake {
     async fn turn(&mut self, text: &str) {
-        self.session.prompt(text.to_owned(), false);
+        self.session.prompt(text.to_owned(), false).await;
         while self.session.claude.is_some() {
-            let (generation, output) = tokio::time::timeout(SETTLE_TIMEOUT, self.outputs.recv())
-                .await
-                .expect("the fake Claude never exited")
-                .expect("output channel closed");
-            if self.session.is_current(generation) {
-                self.session.on_output(output).await;
-            }
+            self.next_output().await;
+        }
+    }
+
+    async fn next_output(&mut self) {
+        let (generation, output) = tokio::time::timeout(SETTLE_TIMEOUT, self.outputs.recv())
+            .await
+            .expect("the fake Claude went silent")
+            .expect("output channel closed");
+        if self.session.is_current(generation) {
+            self.session.on_output(output).await;
+        }
+    }
+
+    async fn wait_for_exit(&mut self) {
+        let deadline = Instant::now() + SETTLE_TIMEOUT;
+        while !self.session.process_exited() {
+            assert!(Instant::now() < deadline, "the fake Claude never exited");
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -514,6 +526,25 @@ async fn exit_between_turns_keeps_the_session_and_resumes_on_the_next_prompt() {
         started_with(&launches[0], SESSION_ID_FLAG, &id),
         "{launches:?}"
     );
+    assert!(started_with(&launches[1], RESUME_FLAG, &id), "{launches:?}");
+    assert!(fake.errors().await.is_empty());
+}
+
+#[tokio::test]
+async fn prompt_after_an_unnoticed_exit_starts_a_new_process() {
+    let mut fake = fake("unnoticed").await;
+    let id = fake.session.id.clone();
+
+    fake.session.prompt("primeiro".to_owned(), false).await;
+    while fake.session.turns.in_turn() {
+        fake.next_output().await;
+    }
+    fake.wait_for_exit().await;
+    fake.turn("segundo").await;
+
+    assert_eq!(fake.status(), SessionStatus::Completed);
+    let launches = fake.launches();
+    assert_eq!(launches.len(), 2, "{launches:?}");
     assert!(started_with(&launches[1], RESUME_FLAG, &id), "{launches:?}");
     assert!(fake.errors().await.is_empty());
 }

@@ -302,7 +302,7 @@ impl Session {
                 Wake::Command(None | Some(Command::Shutdown)) => return Ok(true),
                 Wake::Command(Some(Command::Prompt(text))) => {
                     let paused = *awaiting.borrow();
-                    self.prompt(text, paused);
+                    self.prompt(text, paused).await;
                 }
                 Wake::Command(Some(Command::Cancel)) => self.cancel(),
                 Wake::Command(Some(Command::SetModel { model, reply })) => {
@@ -368,6 +368,12 @@ impl Session {
         Ok(())
     }
 
+    fn process_exited(&mut self) -> bool {
+        self.claude
+            .as_mut()
+            .is_some_and(|claude| !matches!(claude.child.try_wait(), Ok(None)))
+    }
+
     async fn stop_process(&mut self) -> Option<i32> {
         self.asks.clear();
         match self.claude.take() {
@@ -376,10 +382,13 @@ impl Session {
         }
     }
 
-    fn prompt(&mut self, text: String, paused: bool) {
+    async fn prompt(&mut self, text: String, paused: bool) {
         if self.turns.in_turn() {
             self.shared.emit(AgentEvent::Error(BUSY_TURN.to_owned()));
             return;
+        }
+        if self.process_exited() {
+            self.on_exit(None).await;
         }
         self.shared.begin_turn(&text);
         if let Err(error) = self.ensure_process() {
@@ -425,11 +434,14 @@ impl Session {
     }
 
     async fn on_output(&mut self, output: Output) {
-        let write_error = match output {
-            Output::Line(line) => return self.on_line(&line).await,
-            Output::Closed => None,
-            Output::WriteFailed(error) => Some(error),
-        };
+        match output {
+            Output::Line(line) => self.on_line(&line).await,
+            Output::Closed => self.on_exit(None).await,
+            Output::WriteFailed(error) => self.on_exit(Some(error)).await,
+        }
+    }
+
+    async fn on_exit(&mut self, write_error: Option<String>) {
         let mut message = exit_message(self.stop_process().await);
         if let Some(error) = write_error {
             message = format!("{message}; falha ao escrever no stdin: {error}");
