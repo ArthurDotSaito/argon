@@ -95,6 +95,7 @@ impl Decoder {
             "item/reasoning/textDelta" => self.reasoning(params, ReasoningKind::Text),
             "item/started" => self.item_started(params),
             "item/completed" => self.item_completed(params),
+            "item/fileChange/patchUpdated" => self.patch_updated(params),
             "turn/plan/updated" => plan(params),
             "turn/completed" => turn_completed(params),
             _ => CodexEvent::Ignore,
@@ -161,6 +162,30 @@ impl Decoder {
             }
             _ => CodexEvent::Ignore,
         }
+    }
+
+    fn patch_updated(&mut self, params: &Value) -> CodexEvent {
+        let Some(id) = text_field(params, "itemId") else {
+            return CodexEvent::Ignore;
+        };
+        let update = item_file_targets(params);
+        let targets = self.files.entry(id.clone()).or_insert_with(|| FileTargets {
+            paths: Vec::new(),
+            trusted: true,
+        });
+        targets.trusted &= update.trusted;
+        for path in update.paths {
+            if !targets.paths.contains(&path) {
+                targets.paths.push(path);
+            }
+        }
+        let title = list_title("Edit", &targets.paths, COMPACT_TITLE_LIMIT);
+        single(AgentEvent::ToolCallUpdate {
+            id,
+            status: None,
+            output: None,
+            title: Some(title),
+        })
     }
 
     fn item_completed(&mut self, params: &Value) -> CodexEvent {

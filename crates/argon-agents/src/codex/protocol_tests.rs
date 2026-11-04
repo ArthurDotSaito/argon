@@ -780,6 +780,63 @@ fn rename_target_outside_the_workspace_is_remembered_and_shown() {
 }
 
 #[test]
+fn patch_updates_add_new_targets_to_the_remembered_paths() {
+    let mut decoder = Decoder::new();
+    let item = json!({
+        "type": "fileChange",
+        "id": "f1",
+        "changes": [{"path": "a.rs", "kind": {"type": "add"}, "diff": ""}],
+    });
+    started(&mut decoder, item);
+    let update = decoder.notification(
+        "item/fileChange/patchUpdated",
+        &json!({
+            "itemId": "f1",
+            "threadId": "t",
+            "turnId": "u",
+            "changes": [{"path": "a.rs", "kind": {"type": "update", "move_path": "../../out/b.rs"}, "diff": ""}],
+        }),
+    );
+    match update {
+        CodexEvent::Events(events) => match events.as_slice() {
+            [AgentEvent::ToolCallUpdate { id, title, .. }] => {
+                assert_eq!(id, "f1");
+                assert_eq!(title.as_deref(), Some("Edit a.rs · ../../out/b.rs"));
+            }
+            other => panic!("expected one tool update, got {other:?}"),
+        },
+        other => panic!("expected events, got {other:?}"),
+    }
+    let ask = ask(
+        &mut decoder,
+        "item/fileChange/requestApproval",
+        json!({"itemId": "f1"}),
+    );
+    assert_eq!(ask.paths, vec!["a.rs", "../../out/b.rs"]);
+    assert!(!crate::session::session_grant_applies(
+        &ask,
+        Path::new("/work/repo")
+    ));
+}
+
+#[test]
+fn untrusted_patch_updates_force_empty_paths() {
+    let mut decoder = Decoder::new();
+    let item = json!({"type": "fileChange", "id": "f1", "changes": [{"path": "a.rs", "kind": {"type": "add"}}]});
+    started(&mut decoder, item);
+    decoder.notification(
+        "item/fileChange/patchUpdated",
+        &json!({"itemId": "f1", "changes": [{"path": "b.rs", "kind": {"type": "symlink"}}]}),
+    );
+    let ask = ask(
+        &mut decoder,
+        "item/fileChange/requestApproval",
+        json!({"itemId": "f1"}),
+    );
+    assert!(ask.paths.is_empty());
+}
+
+#[test]
 fn unexpected_change_kind_shapes_force_empty_paths() {
     let kinds = [
         json!("update"),
