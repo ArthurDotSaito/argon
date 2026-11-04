@@ -16,7 +16,7 @@ use gpui_kit::{
 
 use super::fields::env_summary;
 use super::form::{AgentForm, Status};
-use crate::agents::CardState;
+use crate::agents::{CardState, FULL_ACCESS_RISK};
 use crate::settings::labels;
 use crate::settings::ui::{card, field, indented, mono, note};
 
@@ -109,7 +109,7 @@ impl AgentForm {
     fn permission_mode_control(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let risk = (self.permission_mode == PermissionMode::FullAccess)
-            .then(|| note(labels::FULL_ACCESS_NOTE, theme.warning));
+            .then(|| note(FULL_ACCESS_RISK, theme.warning));
         v_flex()
             .gap_1()
             .child(

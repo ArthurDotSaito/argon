@@ -53,6 +53,8 @@ pub enum SessionError {
     ModelUnavailable { model: String },
     #[error("não consegui trocar o modelo para `{model}`: {reason}")]
     SetModel { model: String, reason: String },
+    #[error("não consegui trocar o modo de permissão do agente para `{mode}`: {reason}")]
+    SetPermissionMode { mode: String, reason: String },
     #[error("este agente não roda via ACP")]
     NotAcp,
     #[error("o transporte `{}` ainda não é suportado", .0.as_str())]

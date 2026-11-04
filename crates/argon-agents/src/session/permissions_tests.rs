@@ -301,9 +301,50 @@ fn no_allow_once_option_always_asks() {
 }
 
 #[test]
+fn unresolvable_paths_are_never_auto_allowed() {
+    let candidates = [
+        "~/.bashrc".to_owned(),
+        "~".to_owned(),
+        "$HOME/x".to_owned(),
+        "src/${SECRET}/a.rs".to_owned(),
+        r"%USERPROFILE%\x".to_owned(),
+        "src/../../x".to_owned(),
+        "link/../x".to_owned(),
+        inside("src/../a.rs"),
+    ];
+    for candidate in &candidates {
+        assert!(!is_inside(&cwd(), candidate), "{candidate}");
+        for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+            for kind in ["read", "search", "edit"] {
+                let req = request(Some(kind), std::slice::from_ref(candidate), json!({}));
+                let decision = decide_acp(&req, None, mode);
+                assert!(asks(&decision), "{mode:?} {kind} {candidate}: {decision:?}");
+            }
+        }
+    }
+    let via_input = request(Some("read"), &[], json!({"file_path": "~/.ssh/id_rsa"}));
+    assert!(asks(&decide_acp(
+        &via_input,
+        None,
+        PermissionMode::Supervised
+    )));
+}
+
+#[test]
+fn plain_worktree_paths_are_still_auto_allowed() {
+    for candidate in ["src/a.rs".to_owned(), inside("src/a.rs")] {
+        for kind in ["read", "search", "edit"] {
+            let req = request(Some(kind), std::slice::from_ref(&candidate), json!({}));
+            let decision = decide_acp(&req, None, PermissionMode::AcceptEdits);
+            assert!(allowed(&decision), "{kind} {candidate}: {decision:?}");
+        }
+    }
+}
+
+#[test]
 fn inside_handles_prefix_collisions_and_dots() {
     let root = cwd();
-    assert!(is_inside(&root, &inside("a/../b.rs")));
+    assert!(!is_inside(&root, &inside("a/../b.rs")));
     assert!(!is_inside(&root, &inside("a/../../b.rs")));
     assert!(!is_inside(&root, &format!("{}-evil/x", root.display())));
     assert!(is_inside(&root, &root.to_string_lossy()));
@@ -316,10 +357,10 @@ fn inside_canonicalizes_real_directories() {
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::create_dir_all(base.join("other")).unwrap();
     std::fs::write(repo.join("src").join("a.rs"), "").unwrap();
-    let via_dots = format!("{}/src/../src/a.rs", repo.display());
+    let direct = format!("{}/src/a.rs", repo.display());
     let escape = format!("{}/src/../../other", repo.display());
     let result = (
-        is_inside(&repo, &via_dots),
+        is_inside(&repo, &direct),
         is_inside(&repo, &escape),
         is_inside(&repo, "src/new_file.rs"),
     );

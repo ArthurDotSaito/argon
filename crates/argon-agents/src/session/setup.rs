@@ -10,10 +10,10 @@ use agent_client_protocol::{Agent, UntypedMessage};
 use argon_core::PermissionMode;
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
-use super::acp_mode::acp_mode_value;
+use super::acp_mode::{ModeRequest, acp_mode_value, mode_failure, spawn_mode_applier};
 use super::bootstrap::{DriverRun, Ready};
 use super::driver::Shared;
 use super::events::{AgentEvent, config_option, config_values, current_value};
@@ -21,7 +21,7 @@ use super::failure::{STDERR_LINES, classify, turn_failure};
 use super::turn::stop_reason_name;
 use super::{Command, Result, SessionContext, SessionError};
 use crate::defaults::ModelSelection;
-use crate::registry::AgentSpec;
+use crate::registry::{AgentSpec, ModelInfo};
 
 const MODE_CONFIG_ID: &str = "mode";
 type Turn = BoxFuture<'static, agent_client_protocol::Result<PromptResponse>>;
@@ -72,9 +72,10 @@ async fn change_model(
         .map_err(failed)
 }
 
-fn offered_mode(session: &Value, mode: PermissionMode) -> Option<String> {
+fn offered_modes(session: &Value) -> Vec<ModelInfo> {
     config_option(session, MODE_CONFIG_ID)
-        .and_then(|option| acp_mode_value(mode, &config_values(option)))
+        .map(config_values)
+        .unwrap_or_default()
 }
 
 async fn set_mode(
@@ -86,10 +87,6 @@ async fn set_mode(
     call(cx, "session/set_config_option", params)
         .await
         .map(|_| ())
-}
-
-fn mode_warning(value: &str, error: &str) -> String {
-    format!("não consegui ativar o modo `{value}` do agente: {error}")
 }
 
 struct Opened {
@@ -138,15 +135,15 @@ async fn open(
         }
     };
 
-    let mut warnings = Vec::new();
-    if let Some(value) = offered_mode(&session, ctx.permission_mode)
+    if let Some(value) = acp_mode_value(ctx.permission_mode, &offered_modes(&session))
         && config_option(&session, MODE_CONFIG_ID)
             .and_then(current_value)
             .as_deref()
             != Some(value.as_str())
-        && let Err(error) = set_mode(cx, &acp_session_id, &value).await
     {
-        warnings.push(mode_warning(&value, &error));
+        set_mode(cx, &acp_session_id, &value)
+            .await
+            .map_err(|reason| mode_failure(&value, reason))?;
     }
 
     let config_id = model_config_id(spec)?;
@@ -164,7 +161,7 @@ async fn open(
             agent_session_id: acp_session_id,
             model,
             models,
-            warnings,
+            warnings: Vec::new(),
         },
         session,
     })
@@ -223,34 +220,26 @@ impl ModelChange {
     }
 }
 
-struct ModeChange {
-    cx: ConnectionTo<Agent>,
-    shared: Arc<Shared>,
-    session: Arc<Value>,
-    acp_id: String,
+fn mode_applier(
+    cx: &ConnectionTo<Agent>,
+    shared: &Arc<Shared>,
+    session: &Value,
+    acp_id: &str,
     timeout: std::time::Duration,
-}
-
-impl ModeChange {
-    fn spawn(self, mode: PermissionMode, reply: oneshot::Sender<Result<()>>) {
-        self.shared.set_permission_mode(mode);
-        let Some(value) = offered_mode(&self.session, mode) else {
-            let _ = reply.send(Ok(()));
-            return;
-        };
-        tokio::spawn(async move {
-            let change = set_mode(&self.cx, &self.acp_id, &value);
-            let result = match tokio::time::timeout(self.timeout, change).await {
-                Ok(result) => result,
-                Err(_) => Err(format!("sem resposta em {}s", self.timeout.as_secs())),
-            };
-            if let Err(error) = result {
-                self.shared
-                    .emit(AgentEvent::Error(mode_warning(&value, &error)));
-            }
-            let _ = reply.send(Ok(()));
-        });
-    }
+) -> mpsc::UnboundedSender<ModeRequest> {
+    let cx = cx.clone();
+    let acp_id = acp_id.to_owned();
+    let shared = Arc::clone(shared);
+    spawn_mode_applier(
+        offered_modes(session),
+        move |value| {
+            let cx = cx.clone();
+            let acp_id = acp_id.clone();
+            async move { set_mode(&cx, &acp_id, &value).await }
+        },
+        move |mode: PermissionMode| shared.set_permission_mode(mode),
+        timeout,
+    )
 }
 
 pub(super) async fn run_connection(
@@ -282,6 +271,7 @@ pub(super) async fn run_connection(
     if ready.send(Ok(opened)).is_err() {
         return Ok(false);
     }
+    let modes = mode_applier(&cx, &shared, &session, &acp_id, options.set_model_timeout);
     let mut awaiting = shared.awaiting();
     let mut turn: Option<Turn> = None;
     let mut remaining = options.turn_timeout;
@@ -316,14 +306,9 @@ pub(super) async fn run_connection(
                     timeout: options.set_model_timeout,
                 }
                 .spawn(model, reply),
-                Some(Command::SetPermissionMode { mode, reply }) => ModeChange {
-                    cx: cx.clone(),
-                    shared: Arc::clone(&shared),
-                    session: Arc::clone(&session),
-                    acp_id: acp_id.clone(),
-                    timeout: options.set_model_timeout,
+                Some(Command::SetPermissionMode { mode, reply }) => {
+                    let _ = modes.send((mode, reply));
                 }
-                .spawn(mode, reply),
             },
             changed = awaiting.changed(), if turn.is_some() => {
                 if changed.is_ok() {

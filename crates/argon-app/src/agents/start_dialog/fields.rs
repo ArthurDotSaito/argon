@@ -1,3 +1,4 @@
+use argon_core::PermissionMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::select::Select;
@@ -65,6 +66,8 @@ impl StartDialog {
         let permissions = Select::new(&self.permission_select)
             .small()
             .disabled(self.selected_option().is_none() || self.is_launching());
+        let risk_note = (self.permission_mode == PermissionMode::FullAccess)
+            .then(|| note(labels::FULL_ACCESS_RISK, theme.warning).pl(px(FIELD_LABEL_WIDTH + 8.)));
         let template_placeholder = match &self.templates {
             Load::Loading => labels::LOADING_TEMPLATES,
             Load::Ready(_) | Load::Failed(_) => labels::NO_TEMPLATES,
@@ -113,12 +116,17 @@ impl StartDialog {
                     .child(div().flex_1().child(model)),
             )
             .child(
-                h_flex()
+                v_flex()
                     .flex_1()
-                    .gap_2()
-                    .items_center()
-                    .child(section_label(labels::PERMISSIONS, cx))
-                    .child(div().flex_1().child(permissions)),
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(section_label(labels::PERMISSIONS, cx))
+                            .child(div().flex_1().child(permissions)),
+                    )
+                    .children(risk_note),
             )
             .child(
                 v_flex()

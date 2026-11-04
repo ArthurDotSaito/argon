@@ -37,7 +37,6 @@ pub const ENV: &str = "Env";
 pub const DEFAULT_MODEL: &str = "Modelo padrão";
 pub const AGENT_DEFAULT_MODEL: &str = "Padrão do agente";
 pub const PERMISSION_MODE: &str = "Modo de permissão";
-pub const FULL_ACCESS_NOTE: &str = "Aprova automaticamente todo pedido de permissão do agente — comandos, edições e rede — sem mostrar o card. O agente lê código de PRs de terceiros: ligue só se aceitar esse risco. Vale a partir da próxima sessão.";
 pub const USE_ACP: &str = "Usar adapter ACP (legado)";
 pub const USE_ACP_NOTE: &str =
     "Roda este agente pelo adapter ACP em vez do driver nativo. Vale a partir da próxima sessão.";
@@ -185,10 +184,10 @@ pub fn copy_of(name: &str) -> String {
 pub fn permission_mode_hint(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Supervised => {
-            "Libera só leituras e buscas dentro do worktree; todo o resto pede confirmação."
+            "O Argon aprova sozinho só leituras e buscas dentro do worktree do PR; todo o resto pede confirmação."
         }
         PermissionMode::AcceptEdits => {
-            "Também libera edições de arquivos dentro do worktree; comandos e rede pedem confirmação."
+            "O Argon aprova sozinho leituras, buscas e edições dentro do worktree do PR; comandos, rede e qualquer caminho fora dele pedem confirmação."
         }
         PermissionMode::FullAccess => "Aprova todo pedido de permissão do agente sem perguntar.",
     }

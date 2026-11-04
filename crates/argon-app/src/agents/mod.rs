@@ -31,6 +31,7 @@ pub mod warmup;
 pub(crate) use choice::{Choice, permission_choices};
 pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};
 pub(crate) use detection::{AgentOption, CardState, card_state};
+pub(crate) use labels::FULL_ACCESS_RISK;
 pub use labels::{BUTTON_TOOLTIP, CLOSED_TOOLTIP, PR_CLOSED};
 pub use panel::AgentPanel;
 pub use panel_labels::status_bar as activity_label;

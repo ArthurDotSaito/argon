@@ -13,6 +13,8 @@ const PATH_KEYS: [&str; 5] = ["path", "file_path", "filePath", "abs_path", "dire
 const PATTERN_KEYS: [&str; 3] = ["pattern", "glob", "include"];
 const REGEX_KEY: &str = "pattern";
 const GLOB_CHARS: [char; 4] = ['*', '?', '[', '{'];
+const HOME_PREFIX: char = '~';
+const EXPANSION_CHARS: [char; 2] = ['$', '%'];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionPrompt {
@@ -110,7 +112,18 @@ fn comparable(path: &Path) -> String {
     }
 }
 
+fn is_unresolvable(candidate: &str) -> bool {
+    candidate.starts_with(HOME_PREFIX)
+        || candidate.contains(EXPANSION_CHARS)
+        || Path::new(candidate)
+            .components()
+            .any(|component| component == Component::ParentDir)
+}
+
 pub fn is_inside(cwd: &Path, candidate: &str) -> bool {
+    if is_unresolvable(candidate) {
+        return false;
+    }
     let candidate = Path::new(candidate);
     let joined = if candidate.is_absolute() || candidate.has_root() {
         candidate.to_path_buf()
