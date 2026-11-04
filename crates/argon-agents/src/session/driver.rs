@@ -15,6 +15,8 @@ use super::writer::{Op, SessionWriter};
 use crate::registry::ModelInfo;
 use crate::util::lock;
 
+pub(super) const ENDED_BEFORE_ACTIVATION: &str = "o agente encerrou antes de abrir a sessão";
+
 #[path = "driver_permissions.rs"]
 mod permission_flow;
 
@@ -35,6 +37,7 @@ pub struct Snapshot {
 
 struct State {
     active: bool,
+    early_failure: Option<String>,
     in_turn: bool,
     status: SessionStatus,
     model: String,
@@ -77,6 +80,7 @@ impl Shared {
             awaiting: watch::channel(false).0,
             state: Mutex::new(State {
                 active: false,
+                early_failure: None,
                 in_turn: false,
                 status: SessionStatus::Running,
                 model: String::new(),
@@ -196,6 +200,11 @@ impl Shared {
             session: self.config.id.clone(),
             status,
         });
+        if let Some(message) = state.early_failure.take() {
+            self.fail_locked(&mut state, message);
+            drop(state);
+            self.release();
+        }
     }
 
     pub(super) fn start_in_mode(&self, mode: PermissionMode) {
@@ -316,21 +325,35 @@ impl Shared {
         self.release();
     }
 
-    pub fn fail(&self, message: String) {
-        let mut state = self.lock();
-        self.cancel_pending_locked(&mut state);
+    fn fail_locked(&self, state: &mut State, message: String) {
+        self.cancel_pending_locked(state);
         state.in_turn = false;
         state.buffer.take();
-        self.emit_locked(&mut state, AgentEvent::Error(message));
-        self.close_record(&mut state);
-        self.status_locked(&mut state, SessionStatus::Failed);
+        self.emit_locked(state, AgentEvent::Error(message));
+        self.close_record(state);
+        self.status_locked(state, SessionStatus::Failed);
+    }
+
+    pub fn fail(&self, message: String) {
+        let mut state = self.lock();
+        if state.active {
+            self.fail_locked(&mut state, message);
+        } else {
+            state.early_failure = Some(message);
+        }
         drop(state);
         self.release();
     }
 
     pub fn close(&self) {
         let mut state = self.lock();
-        self.close_record(&mut state);
+        if state.active {
+            self.close_record(&mut state);
+        } else {
+            state
+                .early_failure
+                .get_or_insert_with(|| ENDED_BEFORE_ACTIVATION.to_owned());
+        }
     }
 }
 

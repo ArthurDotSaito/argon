@@ -5,7 +5,7 @@ use argon_store::{NewAgentSession, SessionStatus};
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
-use super::driver::{Shared, SharedConfig};
+use super::driver::{ENDED_BEFORE_ACTIVATION, Shared, SharedConfig};
 use super::failure::{STDERR_LINES, classify, transport_error, with_stderr};
 use super::stderr::StderrTail;
 use super::writer::{Op, SessionWriter};
@@ -72,7 +72,7 @@ fn forward_writer_errors(writer: &SessionWriter, shared: &Arc<Shared>) {
 fn startup_error(tail: &StderrTail, spec: &AgentSpec) -> SessionError {
     let stderr = tail.last(STDERR_LINES).join("\n");
     if stderr.is_empty() {
-        transport_error(spec, "o agente encerrou antes de abrir a sessão".to_owned())
+        transport_error(spec, ENDED_BEFORE_ACTIVATION.to_owned())
     } else {
         classify(spec, stderr)
     }
@@ -223,11 +223,81 @@ pub(super) async fn launch(
 
 #[cfg(test)]
 mod tests {
-    use argon_core::{AgentKind, Config};
+    use std::path::PathBuf;
+
+    use argon_core::{AgentKind, Config, PrKey};
+    use argon_store::Store;
 
     use super::*;
     use crate::Transport;
     use crate::registry::agent_spec;
+
+    const DRIVER_ERROR: &str = "boom";
+
+    fn dies_after_ready(run: DriverRun) -> DriverFuture {
+        Box::pin(async move {
+            let _ = run.ready.send(Ok(Ready {
+                agent_session_id: "agent".to_owned(),
+                model: "sonnet".to_owned(),
+                models: Vec::new(),
+                warnings: Vec::new(),
+                permission_mode: None,
+            }));
+            Err(DRIVER_ERROR.to_owned())
+        })
+    }
+
+    fn context(id: &str, cwd: PathBuf) -> SessionContext {
+        SessionContext {
+            id: id.to_owned(),
+            pr: PrKey::new("github.com", "PR_1"),
+            template_id: "review-padrao".to_owned(),
+            nonce: "00112233445566778899aabbccddeeff".to_owned(),
+            allowed_files: Vec::new(),
+            cwd,
+            model: String::new(),
+            permission_mode: PermissionMode::Supervised,
+        }
+    }
+
+    #[tokio::test]
+    async fn driver_dying_before_activation_fails_the_session() {
+        let dir = std::env::temp_dir().join(format!("argon-bootstrap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("argon.db");
+        let _ = std::fs::remove_file(&db);
+        let writer = SessionWriter::from_store(Store::open(&db).unwrap()).unwrap();
+        let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
+        spec.transport = Transport::ClaudeStream;
+
+        let (_, agent) = launch(
+            &spec,
+            context("s1", dir.clone()),
+            writer.clone(),
+            None,
+            SessionOptions::default(),
+            dies_after_ready,
+        )
+        .await
+        .unwrap();
+        writer.flush().await;
+
+        assert!(agent.is_finished());
+        assert_eq!(agent.status(), SessionStatus::Failed);
+        let row = Store::open(&db).unwrap().session("s1").unwrap().unwrap();
+        assert_eq!(row.status, SessionStatus::Failed);
+        let events = writer.events_since("s1", 0).await.unwrap();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [(_, AgentEvent::Error(message))]
+                    if message == &format!("o agente encerrou inesperadamente: {DRIVER_ERROR}")
+            ),
+            "{events:?}"
+        );
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn startup_error_names_acp_only_for_the_acp_transport() {
