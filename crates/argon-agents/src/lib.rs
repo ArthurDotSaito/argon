@@ -1,6 +1,8 @@
 mod claude;
 pub mod defaults;
 mod http;
+#[allow(dead_code)]
+mod jsonrpc;
 mod opencode;
 pub mod process;
 pub mod redact;

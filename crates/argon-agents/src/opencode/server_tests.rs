@@ -120,7 +120,7 @@ fn env_keys_are_matched_case_insensitively() {
 async fn read_all_lines(bytes: &[u8]) -> Vec<String> {
     let mut reader = bytes;
     let mut lines = Vec::new();
-    while let Some(line) = read_line_lossy(&mut reader).await.unwrap() {
+    while let Some(line) = read_line_lossy(&mut reader, MAX_LINE_BYTES).await.unwrap() {
         lines.push(line);
     }
     lines

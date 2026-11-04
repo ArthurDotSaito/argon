@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -9,14 +8,14 @@ use argon_core::Paths;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::Value;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::{ChildStderr, ChildStdout};
 
 use crate::http::LocalApi;
 use crate::process::{KillOnDropChild, spawn_in_job};
 use crate::registry::AgentSpec;
 use crate::session::StderrTail;
-use crate::util::{Resolved, json_text, lock, resolve_command};
+use crate::util::{Resolved, json_text, lock, read_line_lossy, resolve_command};
 
 const SERVE_ARGS: [&str; 6] = ["serve", "--stdio", "--port", "0", "--hostname", "127.0.0.1"];
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
@@ -137,7 +136,7 @@ impl Startup<'_> {
         child: &mut KillOnDropChild,
     ) -> Result<u16, String> {
         loop {
-            match read_line_lossy(reader).await {
+            match read_line_lossy(reader, MAX_LINE_BYTES).await {
                 Ok(Some(line)) => {
                     if let Some(port) = port_from_line(&line) {
                         return Ok(port);
@@ -211,33 +210,6 @@ async fn kill(child: &mut KillOnDropChild) {
     let _ = child.wait().await;
 }
 
-async fn read_line_lossy<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<Option<String>> {
-    let mut line = Vec::new();
-    let mut any_bytes = false;
-    loop {
-        let chunk = reader.fill_buf().await?;
-        if chunk.is_empty() {
-            break;
-        }
-        any_bytes = true;
-        let (consumed, complete) = match chunk.iter().position(|byte| *byte == b'\n') {
-            Some(index) => (index + 1, true),
-            None => (chunk.len(), false),
-        };
-        let room = MAX_LINE_BYTES.saturating_sub(line.len());
-        line.extend_from_slice(&chunk[..consumed.min(room)]);
-        reader.consume(consumed);
-        if complete {
-            break;
-        }
-    }
-    if !any_bytes {
-        return Ok(None);
-    }
-    let text = String::from_utf8_lossy(&line);
-    Ok(Some(text.trim_end_matches(['\r', '\n']).to_owned()))
-}
-
 fn drain_stdout(mut reader: BufReader<ChildStdout>) {
     tokio::spawn(async move {
         let _ = tokio::io::copy(&mut reader, &mut tokio::io::sink()).await;
@@ -247,7 +219,7 @@ fn drain_stdout(mut reader: BufReader<ChildStdout>) {
 fn drain_stderr(stderr: ChildStderr, tail: Arc<StderrTail>) {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
-        while let Ok(Some(line)) = read_line_lossy(&mut reader).await {
+        while let Ok(Some(line)) = read_line_lossy(&mut reader, MAX_LINE_BYTES).await {
             tracing::debug!(target: "argon_agents::agent_stderr", "{line}");
             tail.push(line);
         }
