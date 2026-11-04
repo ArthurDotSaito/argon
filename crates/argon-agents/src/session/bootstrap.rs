@@ -145,6 +145,7 @@ pub(super) async fn launch(
         ready: ready_tx,
         stderr: Arc::clone(&tail),
     });
+    forward_writer_errors(&writer, &shared);
     supervise(
         driver,
         Arc::clone(&shared),
@@ -189,7 +190,6 @@ pub(super) async fn launch(
         }
     };
     aborter.disarm();
-    forward_writer_errors(&writer, &shared);
     let status = if load.is_some() {
         SessionStatus::Completed
     } else {
@@ -224,6 +224,7 @@ pub(super) async fn launch(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use argon_core::{AgentKind, Config, PrKey};
     use argon_store::Store;
@@ -260,16 +261,15 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn driver_dying_before_activation_fails_the_session() {
-        let dir = std::env::temp_dir().join(format!("argon-bootstrap-{}", std::process::id()));
+    async fn launch_dying(name: &str) -> (PathBuf, SessionWriter, AgentSessionHandle) {
+        let dir =
+            std::env::temp_dir().join(format!("argon-bootstrap-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let db = dir.join("argon.db");
-        let _ = std::fs::remove_file(&db);
-        let writer = SessionWriter::from_store(Store::open(&db).unwrap()).unwrap();
+        let writer =
+            SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
         let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
         spec.transport = Transport::ClaudeStream;
-
         let (_, agent) = launch(
             &spec,
             context("s1", dir.clone()),
@@ -281,6 +281,28 @@ mod tests {
         .await
         .unwrap();
         writer.flush().await;
+        (dir, writer, agent)
+    }
+
+    #[tokio::test]
+    async fn early_failure_releases_the_writer_error_forwarder() {
+        let (dir, _writer, agent) = launch_dying("forwarder").await;
+
+        for _ in 0..500 {
+            if Arc::strong_count(&agent.shared) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(Arc::strong_count(&agent.shared), 1);
+        drop(agent);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn driver_dying_before_activation_fails_the_session() {
+        let (dir, writer, agent) = launch_dying("activate").await;
+        let db = dir.join("argon.db");
 
         assert!(agent.is_finished());
         assert_eq!(agent.status(), SessionStatus::Failed);
