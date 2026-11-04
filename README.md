@@ -22,11 +22,11 @@ O Argon abre uma sessão de revisão por agente de código instalado na máquina
 | --- | --- | --- | --- |
 | Claude Code | nativo (`claude -p` com stream-json) ou ACP | `claude` | 2.1.316 |
 | Codex | nativo (`codex app-server`) ou ACP | `codex` | codex-cli 0.157.0 |
-| OpenCode | nativo (`opencode serve` privado) ou ACP | `opencode` | 2.2.5 |
+| OpenCode | nativo (`opencode serve` privado, padrão) ou ACP | `opencode` | 2.2.5 |
 | Command Code | ACP | `command-code` | via ACP |
 
 - **Nativo**: o Argon fala direto com o CLI. **ACP**: o Argon fala com um adapter ACP, que o `npx` baixa na hora (Claude Code e Codex) ou que já vem no CLI (OpenCode e Command Code). O ACP continua como único caminho do Command Code e como fallback por agente, na opção "Usar adapter ACP (legado)" das configurações.
-- Enquanto a validação ponta a ponta não termina, o lançamento padrão de Claude Code, Codex e OpenCode ainda é ACP. Os drivers nativos são opt-in pelo exemplo `run_session` (veja "Notas para desenvolvedores").
+- O OpenCode já roda no driver nativo por padrão. Claude Code e Codex continuam em ACP até concluir a validação ponta a ponta; os drivers nativos deles podem ser exercitados pelo exemplo `run_session` (veja "Notas para desenvolvedores").
 
 ### Segurança
 
@@ -38,7 +38,7 @@ A configuração de agente que vem dentro do PR revisado não é confiável. Cad
 
 O que cada driver nativo pede ao Argon:
 
-- **Claude Code e OpenCode**: comandos, edições e buscas na web viram pedido de permissão para o Argon. No Claude Code, as regras `permissions.allow` do próprio usuário em `~/.claude/settings.json` continuam valendo nas revisões do Argon: o que elas liberam roda sem card.
+- **Claude Code e OpenCode**: comandos, edições e buscas na web viram pedido de permissão para o Argon. No OpenCode, negar um card encerra o turno; para continuar, mande outra mensagem ao agente. No Claude Code, as regras `permissions.allow` do próprio usuário em `~/.claude/settings.json` continuam valendo nas revisões do Argon: o que elas liberam roda sem card.
 - **Codex**: em Supervisionado, o Codex roda comandos dentro da própria sandbox somente leitura, sem card. Ele só pede ao Argon as escaladas: sair da sandbox, usar a rede ou gravar arquivos. Leituras fora da worktree podem não gerar card.
 - Os títulos dos cards passam por um único filtro: caracteres de controle, bidi e de largura zero viram espaço, e o texto é cortado em 2000 caracteres (comandos, rede e outros) ou 300 (leituras, buscas e edições), sempre com " …" visível quando há corte.
 
@@ -64,10 +64,11 @@ Os cartões de agente mostram quanto do plano já foi usado:
 
 ```
 cargo run -p argon-agents --example run_session -- <claude|codex|opencode|command-code> <owner/repo#n> [modelo] \
-  [--transport acp|claude-stream|codex-app-server|opencode-serve] [--cancel-after s] [--startup-timeout s]
+  [--transport acp|claude-stream|codex-app-server|opencode-serve] [--cancel-after s] [--startup-timeout s] \
+  [--mode supervised|accept-edits|full-access] [--prompt texto]
 ```
 
-Sem `--transport` vale o padrão atual (ACP). Para exercitar os drivers nativos use `claude-stream`, `codex-app-server` ou `opencode-serve`. Requer `gh` autenticado para o `github.com`.
+Sem `--transport` vale o padrão do agente. `--mode` troca o modo de permissão da sessão e `--prompt` troca o prompt de revisão por um texto livre, útil para conferir que comandos e edições viram card. O exemplo nega todo pedido de permissão que chega a ele. Requer `gh` autenticado para o `github.com`.
 
 Disco: os builds do workspace são grandes. Use `CARGO_INCREMENTAL=0` (`$env:CARGO_INCREMENTAL='0'` no PowerShell) e apague a pasta `target/` quando precisar liberar espaço.
 

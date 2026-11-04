@@ -259,6 +259,7 @@ mod tests {
             AgentKind::OpenCode,
             AgentCfg {
                 args: vec!["acp".into(), "--port=0".into()],
+                use_acp: true,
                 ..AgentCfg::default()
             },
         );
@@ -355,6 +356,7 @@ mod tests {
             AgentKind::OpenCode,
             AgentCfg {
                 command: Some(PathBuf::from("cmd")),
+                use_acp: true,
                 ..AgentCfg::default()
             },
         );
@@ -619,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_spec_for_matches_the_current_acp_defaults() {
+    fn agent_spec_for_resolves_only_declared_launches() {
         let cfg = Config::default();
         for defaults in &AGENT_DEFAULTS {
             let kind = defaults.kind;
@@ -628,11 +630,23 @@ mod tests {
                 Some(agent_spec(kind, &cfg)),
                 "{kind:?}"
             );
-            assert_eq!(
-                agent_spec_for(kind, &cfg, Transport::OpencodeServe),
-                None,
-                "{kind:?}"
-            );
+            for transport in [
+                Transport::Acp,
+                Transport::ClaudeStream,
+                Transport::CodexAppServer,
+                Transport::OpencodeServe,
+                Transport::Headless,
+            ] {
+                let declared = [Some(defaults.launch), defaults.acp_fallback]
+                    .into_iter()
+                    .flatten()
+                    .any(|launch| launch.transport == transport);
+                assert_eq!(
+                    agent_spec_for(kind, &cfg, transport).is_some(),
+                    declared,
+                    "{kind:?} {transport:?}"
+                );
+            }
         }
     }
 

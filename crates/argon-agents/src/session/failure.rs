@@ -91,8 +91,12 @@ mod tests {
             SessionError::NeedsLogin { hint } if hint.contains("opencode auth login")
         ));
         assert!(matches!(
-            classify(&opencode, "boom".into()),
+            classify(&command_code, "boom".into()),
             SessionError::Acp(text) if text == "boom"
+        ));
+        assert!(matches!(
+            classify(&opencode, "boom".into()),
+            SessionError::Agent(text) if text == "boom"
         ));
     }
 
