@@ -98,7 +98,7 @@ pub fn severity_short(severity: Severity) -> &'static str {
 pub fn permission_option(kind: &str, fallback: &str) -> String {
     match kind {
         "allow_once" => "Permitir uma vez".into(),
-        "allow_always" => "Permitir sempre".into(),
+        "allow_always" => "Permitir nesta sessão".into(),
         "reject_once" => "Recusar".into(),
         "reject_always" => "Recusar sempre".into(),
         _ => fallback.into(),

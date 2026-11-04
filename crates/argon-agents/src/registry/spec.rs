@@ -274,13 +274,14 @@ mod tests {
             AgentKind::Codex,
             AgentCfg {
                 command: Some(PathBuf::from("codex-acp")),
+                use_acp: true,
                 ..AgentCfg::default()
             },
         );
         let spec = agent_spec(AgentKind::Codex, &cfg);
         assert_eq!(spec.command, Path::new("codex-acp"));
         assert!(spec.args.is_empty());
-        let launch = agent_defaults(AgentKind::Codex).launch;
+        let launch = agent_defaults(AgentKind::Codex).acp_fallback.unwrap();
         assert!(is_command_overridden(AgentKind::Codex, launch, &cfg));
         assert!(!is_command_overridden(
             AgentKind::Codex,

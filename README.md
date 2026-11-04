@@ -21,12 +21,12 @@ O Argon abre uma sessão de revisão por agente de código instalado na máquina
 | Agente | Protocolo | CLI exigido | Versão validada |
 | --- | --- | --- | --- |
 | Claude Code | nativo (`claude -p` com stream-json, padrão) ou ACP | `claude` | 2.1.316 |
-| Codex | nativo (`codex app-server`) ou ACP | `codex` | codex-cli 0.157.0 |
+| Codex | nativo (`codex app-server`, padrão) ou ACP | `codex` | codex-cli 0.157.0 |
 | OpenCode | nativo (`opencode serve` privado, padrão) ou ACP | `opencode` | 2.2.5 |
 | Command Code | ACP | `command-code` | via ACP |
 
 - **Nativo**: o Argon fala direto com o CLI. **ACP**: o Argon fala com um adapter ACP, que o `npx` baixa na hora (Claude Code e Codex) ou que já vem no CLI (OpenCode e Command Code). O ACP continua como único caminho do Command Code e como fallback por agente, na opção "Usar adapter ACP (legado)" das configurações.
-- OpenCode e Claude Code já rodam no driver nativo por padrão. O Codex continua em ACP até concluir a validação ponta a ponta; o driver nativo dele pode ser exercitado pelo exemplo `run_session` (veja "Notas para desenvolvedores").
+- Claude Code, Codex e OpenCode rodam no driver nativo por padrão. O adapter ACP de cada um continua disponível na opção "Usar adapter ACP (legado)".
 - No Claude Code nativo, se o processo do CLI sair entre um turno e outro, a sessão continua: a próxima mensagem retoma a conversa com `--resume`.
 
 ### Segurança
@@ -75,7 +75,7 @@ Disco: os builds do workspace são grandes. Use `CARGO_INCREMENTAL=0` (`$env:CAR
 
 ## Próximos passos
 
-Os drivers nativos viram o padrão de Claude Code, Codex e OpenCode depois da validação ponta a ponta com os CLIs reais. Só então o fallback ACP desses três poderá ser removido; o ACP segue no Command Code.
+Depois de um período de uso com os drivers nativos como padrão, o fallback ACP de Claude Code, Codex e OpenCode poderá ser removido; o ACP segue no Command Code.
 
 ## Créditos
 
