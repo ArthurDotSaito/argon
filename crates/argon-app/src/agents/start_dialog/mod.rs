@@ -2,6 +2,7 @@ mod cards;
 mod fields;
 mod launch;
 mod loaders;
+mod models;
 mod preview;
 mod render;
 mod selection;

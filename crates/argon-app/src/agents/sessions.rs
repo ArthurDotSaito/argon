@@ -10,6 +10,7 @@ use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subs
 use super::card_status::CardStatus;
 use super::detection::DetectionCache;
 use super::launches::PendingLaunch;
+use super::model_listing::ModelListings;
 use super::sink::SessionStore;
 use super::thread_model::{SessionInfo, ThreadEvent, ThreadModel};
 
@@ -62,6 +63,7 @@ pub struct AgentSessions {
     sessions: Vec<ActiveSession>,
     last_agent: Option<AgentKind>,
     detection: DetectionCache,
+    listings: ModelListings,
     paths: Paths,
     store: SessionStore,
     worktrees: WorktreeManager,
@@ -96,18 +98,24 @@ impl AgentSessions {
         if let Some(existing) = Self::global(cx) {
             return existing;
         }
-        let sessions = cx.new(|_| Self {
-            sessions: Vec::new(),
-            last_agent: None,
-            detection: DetectionCache::default(),
-            store: SessionStore::new(paths.db_file()),
-            worktrees: WorktreeManager::new(&paths),
-            launches: HashMap::new(),
-            threads: HashMap::new(),
-            thread_subscriptions: HashMap::new(),
-            resumes: HashMap::new(),
-            closing: Closing::Open,
-            paths,
+        let sessions = cx.new(|_| {
+            let listings = ModelListings::load(&paths);
+            let mut detection = DetectionCache::default();
+            listings.seed(&mut detection);
+            Self {
+                sessions: Vec::new(),
+                last_agent: None,
+                detection,
+                listings,
+                store: SessionStore::new(paths.db_file()),
+                worktrees: WorktreeManager::new(&paths),
+                launches: HashMap::new(),
+                threads: HashMap::new(),
+                thread_subscriptions: HashMap::new(),
+                resumes: HashMap::new(),
+                closing: Closing::Open,
+                paths,
+            }
         });
         cx.set_global(AgentSessionsHandle(sessions.clone()));
         sessions
@@ -162,6 +170,10 @@ impl AgentSessions {
 
     pub fn detection_mut(&mut self) -> &mut DetectionCache {
         &mut self.detection
+    }
+
+    pub(super) fn listings_mut(&mut self) -> &mut ModelListings {
+        &mut self.listings
     }
 
     pub(super) fn launches(&self) -> &HashMap<String, PendingLaunch> {

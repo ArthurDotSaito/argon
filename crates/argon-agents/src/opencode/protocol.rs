@@ -91,6 +91,8 @@ pub(crate) fn kind_for(name: &str) -> &'static str {
     }
 }
 
+pub(crate) const MODELS_PATH: &str = "/api/model";
+
 pub(crate) fn parse_models(body: &Value) -> Vec<ModelInfo> {
     let mut models = BTreeMap::new();
     let items = body

@@ -10,7 +10,7 @@ use argon_core::Config;
 use gpui_kit::component::v_flex;
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Task, Window,
+    Subscription, Task, Window,
 };
 
 use self::form::AgentForm;
@@ -45,6 +45,7 @@ pub(super) fn store_cache(results: &[DetectionResult], at: Instant, cx: &mut App
 pub struct AgentsSection {
     forms: Vec<Entity<AgentForm>>,
     _task: Option<Task<()>>,
+    _sessions: Option<Subscription>,
 }
 
 impl AgentsSection {
@@ -54,9 +55,24 @@ impl AgentsSection {
             .iter()
             .map(|defaults| cx.new(|cx| AgentForm::new(defaults.kind, &config, window, cx)))
             .collect();
-        let mut this = Self { forms, _task: None };
+        let sessions = AgentSessions::global(cx).map(|sessions| {
+            cx.observe_in(&sessions, window, |this, _, window, cx| {
+                this.apply_listed_models(window, cx)
+            })
+        });
+        let mut this = Self {
+            forms,
+            _task: None,
+            _sessions: sessions,
+        };
         this.detect(config, window, cx);
         this
+    }
+
+    fn apply_listed_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for form in &self.forms {
+            form.update(cx, |form, cx| form.apply_listed_models(window, cx));
+        }
     }
 
     fn detect(&mut self, config: Config, window: &mut Window, cx: &mut Context<Self>) {

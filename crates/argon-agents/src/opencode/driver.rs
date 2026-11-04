@@ -10,8 +10,8 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::protocol::{
-    OpencodeEvent, create_session_body, decode, model_body, parse_models, permission_body,
-    prompt_body,
+    MODELS_PATH, OpencodeEvent, create_session_body, decode, model_body, parse_models,
+    permission_body, prompt_body,
 };
 use super::server::{OpencodeServer, start};
 use crate::http::LocalApi;
@@ -33,7 +33,6 @@ use state::{
 const EVENTS_PATH: &str = "/api/event";
 const SESSIONS_PATH: &str = "/api/session";
 const ACTIVE_PATH: &str = "/api/session/active";
-const MODELS_PATH: &str = "/api/model";
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);

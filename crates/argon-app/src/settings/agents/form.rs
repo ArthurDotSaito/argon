@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use argon_agents::{AgentSpec, Support, agent_spec, support_for};
+use argon_agents::{AgentSpec, Detection, Support, agent_spec, support_for};
 use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::{SelectEvent, SelectState};
@@ -9,7 +9,7 @@ use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Tas
 
 use super::fields::{FieldError, join_args, parse_env, split_args};
 use super::{DetectionResult, run_detection, store_cache};
-use crate::agents::{CardState, Choice, card_state, permission_choices};
+use crate::agents::{AgentSessions, CardState, Choice, card_state, permission_choices};
 use crate::config_watch;
 use crate::settings::labels;
 
@@ -223,9 +223,38 @@ impl AgentForm {
             return;
         };
         self.status = Status::Done(card_state(support, detection));
-        self.detected = Some(spec.clone());
+        let mut spec = spec.clone();
+        if let Some(sessions) = AgentSessions::global(cx) {
+            sessions.read(cx).apply_listed_models(&mut spec);
+            if matches!(detection, Detection::Found { .. }) {
+                let specs = vec![spec.clone()];
+                sessions.update(cx, |sessions, cx| sessions.refresh_models(specs, cx));
+            }
+        }
+        self.detected = Some(spec);
         self.refresh_models(window, cx);
         cx.notify();
+    }
+
+    pub(super) fn apply_listed_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(sessions) = AgentSessions::global(cx) else {
+            return;
+        };
+        let Some(spec) = self.detected.as_ref() else {
+            return;
+        };
+        let listed = sessions
+            .read(cx)
+            .listed_models(self.kind)
+            .filter(|listed| spec.models != *listed)
+            .map(<[_]>::to_vec);
+        if let Some(models) = listed {
+            if let Some(spec) = self.detected.as_mut() {
+                spec.models = models;
+            }
+            self.refresh_models(window, cx);
+            cx.notify();
+        }
     }
 
     fn refresh_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {

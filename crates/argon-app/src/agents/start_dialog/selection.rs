@@ -42,33 +42,22 @@ impl StartDialog {
         if self.is_launching() || self.agent == Some(kind) {
             return;
         }
-        let Some(option) = self
-            .agents
-            .ready()
-            .and_then(|options| options.iter().find(|option| option.spec.kind == kind))
-            .filter(|option| option.state.is_selectable())
-        else {
+        let selectable = self.agents.ready().is_some_and(|options| {
+            options
+                .iter()
+                .any(|option| option.spec.kind == kind && option.state.is_selectable())
+        });
+        if !selectable {
             return;
-        };
-        let model = default_model(&option.spec);
+        }
         let permission_mode = self
             .config
             .agents
             .get(&kind)
             .map(AgentCfg::permission_mode)
             .unwrap_or_default();
-        let choices: Vec<Choice> = model_choices(&option.spec)
-            .into_iter()
-            .map(|model| Choice::new(model.id, model.label))
-            .collect();
         self.agent = Some(kind);
-        self.model = model.clone();
-        self.model_select.update(cx, |select, cx| {
-            select.set_items(choices, window, cx);
-            if let Some(model) = &model {
-                select.set_selected_value(model, window, cx);
-            }
-        });
+        self.set_model_choices(None, window, cx);
         self.permission_mode = permission_mode;
         let mode = permission_mode.as_str().to_owned();
         self.permission_select.update(cx, |select, cx| {
@@ -76,6 +65,32 @@ impl StartDialog {
         });
         self.clear_failure();
         cx.notify();
+    }
+
+    pub(super) fn set_model_choices(
+        &mut self,
+        preferred: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(option) = self.selected_option() else {
+            return;
+        };
+        let listed = model_choices(&option.spec);
+        let model = preferred
+            .filter(|id| listed.iter().any(|model| &model.id == id))
+            .or_else(|| default_model(&option.spec));
+        let choices: Vec<Choice> = listed
+            .into_iter()
+            .map(|model| Choice::new(model.id, model.label))
+            .collect();
+        self.model = model.clone();
+        self.model_select.update(cx, |select, cx| {
+            select.set_items(choices, window, cx);
+            if let Some(model) = &model {
+                select.set_selected_value(model, window, cx);
+            }
+        });
     }
 
     pub(super) fn model_label(&self) -> Option<String> {

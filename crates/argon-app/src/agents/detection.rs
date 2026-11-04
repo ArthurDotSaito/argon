@@ -111,6 +111,10 @@ impl DetectionCache {
         self.entry = Some((at, options));
     }
 
+    pub fn reported(&self, kind: AgentKind) -> Option<&[ModelInfo]> {
+        self.reported.get(&kind).map(Vec::as_slice)
+    }
+
     pub fn report_models(&mut self, kind: AgentKind, models: &[ModelInfo]) {
         if models.is_empty() {
             return;

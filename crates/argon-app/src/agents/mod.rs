@@ -12,6 +12,7 @@ mod launcher;
 mod launches;
 mod lifecycle;
 mod message_text;
+mod model_listing;
 mod panel;
 mod panel_labels;
 mod permission_card;

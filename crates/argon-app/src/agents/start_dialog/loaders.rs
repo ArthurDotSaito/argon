@@ -21,6 +21,7 @@ impl StartDialog {
         });
         if let Some(options) = cached {
             self.set_agents(options, window, cx);
+            self.refresh_listed_models(cx);
             return;
         }
         let Some(services) = app_services(cx) else {
@@ -39,6 +40,7 @@ impl StartDialog {
                             AgentOption::new(spec, &support, &detection)
                         })
                         .collect();
+                    let options = Self::with_listed_models(options, cx);
                     if let Some(sessions) = Self::sessions(cx) {
                         let cached = options.clone();
                         sessions.update(cx, |sessions, _| {
@@ -46,6 +48,7 @@ impl StartDialog {
                         });
                     }
                     this.set_agents(options, window, cx);
+                    this.refresh_listed_models(cx);
                 }
                 Err(error) => {
                     this.agents = Load::Failed(labels::detection_failed(&error.to_string()).into());
