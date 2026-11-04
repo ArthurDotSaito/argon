@@ -327,10 +327,10 @@ exit /b 0
 echo {"type":"result","subtype":"success","is_error":true,"result":"Invalid API key - Please run /login"}
 exit /b 0
 :crash
-echo boom 1>&2
+>&2 echo boom
 exit /b 3
 :early
-echo boom 1>&2
+>&2 echo boom
 exit /b 1
 "#;
 
@@ -526,17 +526,16 @@ async fn exit_during_a_turn_fails_the_turn_and_the_next_prompt_resumes() {
     fake.turn("primeiro").await;
     assert_eq!(fake.status(), SessionStatus::Failed);
     assert!(!fake.session.turns.in_turn());
-    let errors = fake.errors().await;
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert!(
-        errors[0].starts_with("processo do Claude saiu (código 3)"),
-        "{errors:?}"
-    );
+    let crashed = "processo do Claude saiu (código 3)
+--- stderr do agente ---
+boom";
+    assert_eq!(fake.errors().await, [crashed]);
 
     fake.turn("segundo").await;
     let launches = fake.launches();
     assert_eq!(launches.len(), 2, "{launches:?}");
     assert!(started_with(&launches[1], RESUME_FLAG, &id), "{launches:?}");
+    assert_eq!(fake.errors().await, [crashed, crashed]);
 }
 
 #[tokio::test]

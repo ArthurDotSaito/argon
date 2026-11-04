@@ -19,6 +19,10 @@ impl StderrTail {
         lines.push_back(line);
     }
 
+    pub fn clear(&self) {
+        lock(&self.lines).clear();
+    }
+
     pub fn last(&self, count: usize) -> Vec<String> {
         let lines = lock(&self.lines);
         let skip = lines.len().saturating_sub(count);
@@ -44,5 +48,14 @@ mod tests {
         assert_eq!(last.len(), 20);
         assert_eq!(last[0], "line 230");
         assert_eq!(last[19], "line 249");
+    }
+
+    #[test]
+    fn clear_drops_earlier_lines() {
+        let tail = StderrTail::default();
+        tail.push("old".to_owned());
+        tail.clear();
+        tail.push("new".to_owned());
+        assert_eq!(tail.last(20), ["new"]);
     }
 }

@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::protocol::{ClaudeLine, allow, deny, interrupt, parse_line, user_message};
@@ -16,8 +17,8 @@ use crate::registry::AgentSpec;
 use crate::session::{
     AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk,
     PermissionDecision, PermissionReply, Ready, Result, STDERR_LINES, SessionError, Shared,
-    StderrTail, decide_permission, explain_failure, session_grant_applies, start_agent, terminate,
-    with_stderr,
+    Started, StderrTail, decide_permission, explain_failure, session_grant_applies, start_tracked,
+    terminate, with_stderr,
 };
 use crate::util::{Resolved, read_line_lossy, resolve_command};
 
@@ -48,6 +49,7 @@ const MODEL_FLAG: &str = "--model";
 const UUID_BYTES: usize = 16;
 const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
+const STDERR_GRACE: Duration = Duration::from_secs(2);
 const ALLOW_ONCE: &str = "allow_once";
 const ALLOW_ALWAYS: &str = "allow_always";
 const DENIED: &str = "Negado no Argon.";
@@ -188,6 +190,7 @@ fn spawn_reader(stdout: ChildStdout, generation: u64, outputs: mpsc::UnboundedSe
 struct Claude {
     child: KillOnDropChild,
     outbox: mpsc::UnboundedSender<String>,
+    stderr: Option<JoinHandle<()>>,
     generation: u64,
 }
 
@@ -204,22 +207,35 @@ impl Claude {
             args,
             ..spec.clone()
         };
-        let (child, stdin, stdout) = start_agent(&spec, cwd, tail)?;
+        let Started {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        } = start_tracked(&spec, cwd, tail)?;
         spawn_reader(stdout, generation, outputs.clone());
         Ok(Claude {
             child,
             outbox: spawn_writer(stdin, generation, outputs.clone()),
+            stderr,
             generation,
         })
     }
 
     async fn stop(self) -> Option<i32> {
         let Claude {
-            mut child, outbox, ..
+            mut child,
+            outbox,
+            stderr,
+            ..
         } = self;
         drop(outbox);
         terminate(&mut child).await;
-        child.wait().await.ok().and_then(|status| status.code())
+        let code = child.wait().await.ok().and_then(|status| status.code());
+        if let Some(stderr) = stderr {
+            let _ = tokio::time::timeout(STDERR_GRACE, stderr).await;
+        }
+        code
     }
 }
 
@@ -339,6 +355,7 @@ impl Session {
             Start::New(&self.id)
         };
         let args = launch_args(&self.spec.args, start, &self.launch_model);
+        self.tail.clear();
         self.generation += 1;
         self.claude = Some(Claude::spawn(
             &self.spec,

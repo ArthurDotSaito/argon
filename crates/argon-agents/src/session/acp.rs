@@ -8,6 +8,7 @@ use agent_client_protocol::{Client, ConnectTo, Lines};
 use futures::StreamExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
+use tokio::task::JoinHandle;
 
 use super::acp_permissions::handle_request;
 use super::bootstrap::{DriverFuture, DriverRun};
@@ -61,14 +62,14 @@ fn transport(stdin: ChildStdin, stdout: ChildStdout) -> impl ConnectTo<Client> {
     Lines::new(Box::pin(outgoing), incoming.boxed())
 }
 
-fn drain_stderr(stderr: ChildStderr, tail: Arc<StderrTail>) {
+fn drain_stderr(stderr: ChildStderr, tail: Arc<StderrTail>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             tracing::debug!(target: "argon_agents::agent_stderr", "{line}");
             tail.push(line);
         }
-    });
+    })
 }
 
 pub(crate) async fn terminate(child: &mut KillOnDropChild) {
@@ -79,18 +80,37 @@ pub(crate) async fn terminate(child: &mut KillOnDropChild) {
     let _ = child.wait().await;
 }
 
+pub(crate) struct Started {
+    pub child: KillOnDropChild,
+    pub stdin: ChildStdin,
+    pub stdout: ChildStdout,
+    pub stderr: Option<JoinHandle<()>>,
+}
+
+pub(crate) fn start_tracked(
+    spec: &AgentSpec,
+    cwd: &Path,
+    tail: Arc<StderrTail>,
+) -> Result<Started> {
+    let mut child = spawn(spec, cwd)?;
+    let stdin = child.stdin.take().ok_or(SessionError::Closed)?;
+    let stdout = child.stdout.take().ok_or(SessionError::Closed)?;
+    let stderr = child.stderr.take().map(|stderr| drain_stderr(stderr, tail));
+    Ok(Started {
+        child,
+        stdin,
+        stdout,
+        stderr,
+    })
+}
+
 pub(crate) fn start(
     spec: &AgentSpec,
     cwd: &Path,
     tail: Arc<StderrTail>,
 ) -> Result<(KillOnDropChild, ChildStdin, ChildStdout)> {
-    let mut child = spawn(spec, cwd)?;
-    let stdin = child.stdin.take().ok_or(SessionError::Closed)?;
-    let stdout = child.stdout.take().ok_or(SessionError::Closed)?;
-    if let Some(stderr) = child.stderr.take() {
-        drain_stderr(stderr, tail);
-    }
-    Ok((child, stdin, stdout))
+    let started = start_tracked(spec, cwd, tail)?;
+    Ok((started.child, started.stdin, started.stdout))
 }
 
 pub(super) fn run(run: DriverRun) -> DriverFuture {

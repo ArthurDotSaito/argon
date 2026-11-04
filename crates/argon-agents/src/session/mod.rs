@@ -24,7 +24,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use crate::Transport;
 use crate::registry::AgentSpec;
 
-pub(crate) use acp::{start as start_agent, terminate};
+pub(crate) use acp::{Started, start as start_agent, start_tracked, terminate};
 pub(crate) use bootstrap::{DriverFuture, DriverRun, Ready};
 pub(crate) use driver::Shared;
 pub use driver::Snapshot;
