@@ -18,20 +18,6 @@ pub struct KillOnDropChild {
     job: Arc<job::Job>,
 }
 
-#[derive(Clone)]
-pub struct TreeKiller {
-    #[cfg(windows)]
-    job: Arc<job::Job>,
-}
-
-impl TreeKiller {
-    pub fn kill(&self) -> io::Result<()> {
-        #[cfg(windows)]
-        self.job.terminate()?;
-        Ok(())
-    }
-}
-
 pub fn spawn_in_job(command: &mut Command) -> io::Result<KillOnDropChild> {
     command.kill_on_drop(true);
     #[cfg(windows)]
@@ -68,13 +54,6 @@ impl KillOnDropChild {
         #[cfg(windows)]
         self.job.terminate()?;
         self.child.start_kill()
-    }
-
-    pub fn killer(&self) -> TreeKiller {
-        TreeKiller {
-            #[cfg(windows)]
-            job: Arc::clone(&self.job),
-        }
     }
 }
 
