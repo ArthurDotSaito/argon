@@ -33,7 +33,7 @@ O Argon abre uma sessão de revisão por agente de código instalado na máquina
 A configuração de agente que vem dentro do PR revisado não é confiável. Cada driver nativo a ignora:
 
 - **Claude Code**: `--setting-sources user --strict-mcp-config --permission-mode default`, sem settings nem MCP do projeto.
-- **OpenCode**: `OPENCODE_CONFIG_DIR` apontando para uma pasta do Argon e `OPENCODE_DISABLE_PROJECT_CONFIG` ligado. O Argon mantém nessa pasta um `opencode.json` com `"permission": {"*": "ask"}`, então toda ferramenta pede permissão ao Argon.
+- **OpenCode**: `OPENCODE_CONFIG_DIR` apontando para uma pasta do Argon e `OPENCODE_DISABLE_PROJECT_CONFIG` ligado. O Argon mantém nessa pasta um `opencode.json` com `"permission": {"*": "ask"}`, então toda ferramenta pede permissão ao Argon. A mesma política vai também em `OPENCODE_CONFIG_CONTENT`, que tem a maior precedência, e o Argon sempre sobrescreve essa variável, mesmo que o env do agente a defina.
 - **Codex**: o diretório da revisão entra em cada thread com `trust_level = "untrusted"` e `approvalsReviewer: "user"`, então as aprovações que o Codex pede chegam ao Argon.
 
 O que cada driver nativo pede ao Argon:

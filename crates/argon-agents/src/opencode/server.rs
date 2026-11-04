@@ -29,6 +29,7 @@ const PASSWORD_BYTES: usize = 24;
 const REQUIRED_MAJOR: u64 = 2;
 const PASSWORD_ENV: &str = "OPENCODE_PASSWORD";
 const CONFIG_DIR_ENV: &str = "OPENCODE_CONFIG_DIR";
+const CONFIG_CONTENT_ENV: &str = "OPENCODE_CONFIG_CONTENT";
 const DISABLE_PROJECT_CONFIG_ENV: &str = "OPENCODE_DISABLE_PROJECT_CONFIG";
 const DISABLE_AUTOUPDATE_ENV: &str = "OPENCODE_DISABLE_AUTOUPDATE";
 const CONFIG_FILE: &str = "opencode.json";
@@ -238,6 +239,10 @@ fn ask_everything() -> Value {
     json!({"*": "ask"})
 }
 
+fn inline_config() -> String {
+    json!({ PERMISSION_KEY: ask_everything() }).to_string()
+}
+
 fn permission_config(existing: Option<&str>) -> Result<Option<String>, String> {
     let mut config = match existing.map(serde_json::from_str::<Value>) {
         None => Map::from_iter([(SCHEMA_KEY.to_owned(), json!(SCHEMA_URL))]),
@@ -313,7 +318,9 @@ fn server_env(
     password: &str,
 ) -> BTreeMap<String, String> {
     let mut env = spec_env.clone();
-    env.retain(|key, _| !key.eq_ignore_ascii_case(PASSWORD_ENV));
+    env.retain(|key, _| {
+        !key.eq_ignore_ascii_case(PASSWORD_ENV) && !key.eq_ignore_ascii_case(CONFIG_CONTENT_ENV)
+    });
     let defaults = [
         (CONFIG_DIR_ENV, config_dir.display().to_string()),
         (DISABLE_PROJECT_CONFIG_ENV, "true".to_owned()),
@@ -324,6 +331,7 @@ fn server_env(
             env.insert(key.to_owned(), value);
         }
     }
+    env.insert(CONFIG_CONTENT_ENV.to_owned(), inline_config());
     env.insert(PASSWORD_ENV.to_owned(), password.to_owned());
     env
 }

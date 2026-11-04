@@ -82,6 +82,33 @@ fn user_env_overrides_the_defaults_but_never_the_password() {
 }
 
 #[test]
+fn inline_config_pins_the_ask_policy_over_the_user_env() {
+    let expected = json!({"permission": {"*": "ask"}});
+    let plain = server_env(&env(&[]), Path::new("cfg"), "pw");
+    assert_eq!(parsed(&plain[CONFIG_CONTENT_ENV]), expected);
+    let user = env(&[
+        (CONFIG_CONTENT_ENV, r#"{"permission":{"*":"allow"}}"#),
+        ("opencode_config_content", r#"{"permission":"allow"}"#),
+    ]);
+    let result = server_env(&user, Path::new("cfg"), "pw");
+    let pinned: Vec<_> = result
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(CONFIG_CONTENT_ENV))
+        .collect();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(parsed(pinned[0].1), expected);
+}
+
+#[test]
+fn inline_config_and_the_config_file_share_one_policy() {
+    let written = parsed(&permission_config(None).unwrap().unwrap());
+    assert_eq!(
+        parsed(&inline_config())[PERMISSION_KEY],
+        written[PERMISSION_KEY]
+    );
+}
+
+#[test]
 fn password_is_32_base64url_chars_without_padding() {
     let first = new_password().unwrap();
     let second = new_password().unwrap();
@@ -202,7 +229,7 @@ fn env_keys_are_matched_case_insensitively() {
         ("Opencode_Disable_Autoupdate", "false"),
     ]);
     let result = server_env(&user, Path::new("cfg"), "pw");
-    assert_eq!(result.len(), 4);
+    assert_eq!(result.len(), 5);
     assert_eq!(result["Opencode_Config_Dir"], "mine");
     assert_eq!(result["opencode_disable_project_config"], "false");
     assert_eq!(result["Opencode_Disable_Autoupdate"], "false");
