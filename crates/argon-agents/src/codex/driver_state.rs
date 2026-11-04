@@ -216,6 +216,8 @@ pub(super) fn mode_refusal(mode: PermissionMode, sandbox: &Sandbox) -> Option<Se
     })
 }
 
+pub(super) const LEFT_FULL_ACCESS: &str = "o turno do Codex foi interrompido para sair do Acesso total; mande outra mensagem para continuar no modo mais restrito";
+
 fn breadth(mode: PermissionMode) -> u8 {
     match mode {
         PermissionMode::Supervised => 0,
@@ -228,6 +230,7 @@ fn breadth(mode: PermissionMode) -> u8 {
 pub(super) enum ModeChange {
     ApplyNow(PermissionMode),
     AtTurnEnd(PermissionMode),
+    InterruptTurn(PermissionMode),
 }
 
 #[derive(Debug, Default)]
@@ -244,9 +247,12 @@ impl ModeSwitch {
     ) -> ModeChange {
         if in_turn && breadth(mode) > breadth(current) {
             self.pending = Some(mode);
-            ModeChange::AtTurnEnd(mode)
+            return ModeChange::AtTurnEnd(mode);
+        }
+        self.pending = None;
+        if in_turn && current == PermissionMode::FullAccess && mode != current {
+            ModeChange::InterruptTurn(mode)
         } else {
-            self.pending = None;
             ModeChange::ApplyNow(mode)
         }
     }

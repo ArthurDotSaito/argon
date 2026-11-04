@@ -1,8 +1,13 @@
 use serde_json::json;
 
+use argon_core::{AgentKind, Config, PrKey};
+use argon_store::{NewAgentSession, SessionStatus, Store};
+
 use super::state::*;
 use super::*;
 use crate::codex::protocol::{resume_params, thread_params};
+use crate::registry::agent_spec;
+use crate::session::SessionWriter;
 use crate::session::{REJECT_ONCE, native_options_for};
 
 fn cwd() -> PathBuf {
@@ -409,13 +414,161 @@ fn restricting_or_keeping_the_mode_mid_turn_applies_at_once() {
         ModeChange::ApplyNow(PermissionMode::AcceptEdits)
     );
     assert_eq!(
-        switch.request(
-            PermissionMode::AcceptEdits,
-            PermissionMode::FullAccess,
-            true
-        ),
-        ModeChange::ApplyNow(PermissionMode::AcceptEdits)
+        switch.request(PermissionMode::FullAccess, PermissionMode::FullAccess, true),
+        ModeChange::ApplyNow(PermissionMode::FullAccess)
     );
+}
+
+#[test]
+fn leaving_full_access_mid_turn_interrupts_the_turn() {
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        let mut switch = ModeSwitch::default();
+        switch.request(PermissionMode::FullAccess, PermissionMode::Supervised, true);
+        assert_eq!(
+            switch.request(mode, PermissionMode::FullAccess, true),
+            ModeChange::InterruptTurn(mode)
+        );
+        assert_eq!(switch.take(), None);
+        assert_eq!(
+            switch.request(mode, PermissionMode::FullAccess, false),
+            ModeChange::ApplyNow(mode)
+        );
+    }
+}
+
+async fn live_session(mode: PermissionMode, turns: Turns) -> Session {
+    let writer = SessionWriter::from_store(Store::open_in_memory().unwrap()).unwrap();
+    writer
+        .create_session(NewAgentSession {
+            id: "s1".into(),
+            pr: PrKey::new("github.com", "PR_1"),
+            agent: AgentKind::Codex,
+            model: String::new(),
+            template: "review-padrao".into(),
+            worktree_path: None,
+            acp_session_id: Some("th_1".into()),
+            transport: "codex".into(),
+            permission_mode: mode.as_str().into(),
+            nonce: String::new(),
+            allowed_files: Vec::new(),
+        })
+        .await
+        .unwrap();
+    let tail = Arc::new(StderrTail::default());
+    let shared = Arc::new(Shared::for_tests("s1", cwd(), writer, Arc::clone(&tail)));
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.set_permission_mode(mode);
+    let (feed, _) = mpsc::unbounded_channel();
+    let (answers, _) = mpsc::unbounded_channel();
+    let timeout = Duration::from_secs(600);
+    Session {
+        shared,
+        spec: agent_spec(AgentKind::Codex, &Config::default()),
+        cwd: cwd(),
+        agent_cwd: cwd(),
+        tail,
+        untrusted: Vec::new(),
+        thread: "th_1".to_owned(),
+        models: Vec::new(),
+        chosen_model: None,
+        mode,
+        switch: ModeSwitch::default(),
+        sandbox: Ok(()),
+        codex: None,
+        generation: 1,
+        decoder: Decoder::new(),
+        feed,
+        turns,
+        grants: HashSet::new(),
+        answers,
+        cancel_deadline: None,
+        turn_timeout: timeout,
+        remaining: timeout,
+        running_since: None,
+    }
+}
+
+fn notices(events: &mut tokio::sync::broadcast::Receiver<(u64, AgentEvent)>) -> Vec<String> {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|(_, event)| match event {
+            AgentEvent::Error(message) => Some(message),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn session_leaving_full_access_mid_turn_cancels_it_and_says_why() {
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        let mut session = live_session(PermissionMode::FullAccess, running("u1")).await;
+        let (_, mut events) = session.shared.subscribe();
+
+        assert!(session.change_mode(mode).is_ok());
+
+        assert_eq!(session.mode, mode);
+        assert_eq!(session.shared.subscribe().0.permission_mode, mode);
+        assert!(session.turns.is_cancelled());
+        assert!(session.cancel_deadline.is_some());
+        assert_eq!(notices(&mut events), vec![LEFT_FULL_ACCESS.to_owned()]);
+        assert!(LEFT_FULL_ACCESS.contains("interrompido"));
+    }
+}
+
+#[tokio::test]
+async fn session_mode_changes_that_keep_the_turn_running() {
+    let cases = [
+        (
+            PermissionMode::FullAccess,
+            Turns::default(),
+            PermissionMode::Supervised,
+        ),
+        (
+            PermissionMode::AcceptEdits,
+            running("u1"),
+            PermissionMode::Supervised,
+        ),
+        (
+            PermissionMode::Supervised,
+            running("u1"),
+            PermissionMode::FullAccess,
+        ),
+        (
+            PermissionMode::FullAccess,
+            running("u1"),
+            PermissionMode::FullAccess,
+        ),
+    ];
+    for (current, turns, requested) in cases {
+        let in_turn = turns.in_turn();
+        let mut session = live_session(current, turns).await;
+        let (_, mut events) = session.shared.subscribe();
+
+        assert!(session.change_mode(requested).is_ok());
+
+        assert!(
+            !session.turns.is_cancelled(),
+            "{current:?} -> {requested:?}"
+        );
+        assert_eq!(session.turns.in_turn(), in_turn);
+        assert!(session.cancel_deadline.is_none());
+        assert!(
+            notices(&mut events).is_empty(),
+            "{current:?} -> {requested:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn leaving_full_access_after_a_cancel_does_not_repeat_the_notice() {
+    let mut turns = running("u1");
+    turns.cancel();
+    let mut session = live_session(PermissionMode::FullAccess, turns).await;
+    let (_, mut events) = session.shared.subscribe();
+
+    assert!(session.change_mode(PermissionMode::Supervised).is_ok());
+
+    assert_eq!(session.mode, PermissionMode::Supervised);
+    assert!(notices(&mut events).is_empty());
 }
 
 #[test]

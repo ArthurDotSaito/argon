@@ -26,8 +26,8 @@ mod state;
 
 use launch::{Codex, Feed, Open, Tagged, ThreadSetup, list_models, open_thread, workspace};
 use state::{
-    Close, ModeChange, ModeSwitch, Sandbox, Turns, auto_allowed, check_model, exit_message,
-    grants_session, mode_refusal, pick_model, sandbox_warning,
+    Close, LEFT_FULL_ACCESS, ModeChange, ModeSwitch, Sandbox, Turns, auto_allowed, check_model,
+    exit_message, grants_session, mode_refusal, pick_model, sandbox_warning,
 };
 
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
@@ -194,6 +194,14 @@ impl Session {
         }
         match self.switch.request(mode, self.mode, self.turns.in_turn()) {
             ModeChange::ApplyNow(mode) => self.apply_mode(mode),
+            ModeChange::InterruptTurn(mode) => {
+                self.apply_mode(mode);
+                if self.interrupt_turn() {
+                    self.shared.cancel_pending();
+                    self.shared
+                        .emit(AgentEvent::Error(LEFT_FULL_ACCESS.to_owned()));
+                }
+            }
             ModeChange::AtTurnEnd(mode) => {
                 tracing::info!(
                     mode = mode.as_str(),
@@ -299,11 +307,17 @@ impl Session {
     }
 
     fn cancel(&mut self) {
-        if self.turns.cancel() {
-            self.cancel_deadline = Some(Instant::now() + CANCEL_GRACE);
-            self.interrupt();
-        }
+        self.interrupt_turn();
         self.shared.cancel_pending();
+    }
+
+    fn interrupt_turn(&mut self) -> bool {
+        if !self.turns.cancel() {
+            return false;
+        }
+        self.cancel_deadline = Some(Instant::now() + CANCEL_GRACE);
+        self.interrupt();
+        true
     }
 
     fn interrupt(&self) {

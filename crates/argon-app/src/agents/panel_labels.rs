@@ -38,8 +38,7 @@ pub const NO_LINE_SELECTED: &str = "Selecione uma linha no diff do PR para refer
 pub const DRAFTS_ONLY: &str = "só rascunhos";
 pub const BUSY: &str = "Aguarde o turno atual terminar";
 pub const PERMISSION_MODE_TOOLTIP: &str = "Modo de permissão desta sessão";
-pub const PERMISSION_MODE_TURN_HINT: &str =
-    "Mudanças que ampliam permissões podem valer só a partir da próxima pergunta.";
+pub const PERMISSION_MODE_TURN_HINT: &str = "Ampliar permissões pode valer só a partir da próxima pergunta. No Codex, sair do Acesso total interrompe o turno.";
 pub const FULL_ACCESS_TITLE: &str = "Ativar acesso total?";
 pub const FULL_ACCESS_CONFIRM: &str = "Ativar acesso total";
 pub use super::labels::SERVICES_UNAVAILABLE;
