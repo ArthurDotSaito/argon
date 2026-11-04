@@ -38,6 +38,7 @@ pub struct AgentForm {
     pub(super) model_select: Entity<SelectState<Vec<Choice>>>,
     pub(super) model: Option<String>,
     pub(super) full_access: bool,
+    pub(super) use_acp: bool,
     pub(super) error: Option<SharedString>,
     test_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -109,6 +110,7 @@ impl AgentForm {
             detected: None,
             model: saved.default_model.clone(),
             full_access: saved.full_access,
+            use_acp: saved.use_acp,
             command,
             args,
             env: Vec::new(),
@@ -175,6 +177,7 @@ impl AgentForm {
             env: parse_env(&rows)?,
             default_model: self.model.clone(),
             full_access: self.full_access,
+            use_acp: self.use_acp,
         })
     }
 
@@ -304,6 +307,7 @@ impl AgentForm {
         }
         self.model = saved.default_model;
         self.full_access = saved.full_access;
+        self.use_acp = saved.use_acp;
         self.error = None;
         self.refresh_models(window, cx);
         cx.notify();

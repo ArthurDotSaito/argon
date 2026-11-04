@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use argon_agents::defaults::agent_defaults;
 use argon_agents::{
-    AgentSessionHandle, SessionContext, Transport, WorktreeManager, agent_spec, resume_session,
+    AgentSessionHandle, SessionContext, Transport, WorktreeManager, agent_spec_for, resume_session,
 };
 use argon_core::Config;
 use argon_store::{ARCHIVE_PENDING, SessionRow, SessionStatus};
@@ -52,6 +52,8 @@ async fn resume(
     let (acp_session, worktree) = resume_target(&row).map_err(str::to_owned)?;
     let transport = Transport::parse(&row.transport)
         .ok_or_else(|| labels::unknown_transport(&row.transport))?;
+    let spec = agent_spec_for(row.agent, &config, transport)
+        .ok_or_else(|| labels::transport_unavailable(&row.transport))?;
     if !tokio::fs::try_exists(&worktree).await.unwrap_or(false) {
         return Err(labels::WORKTREE_GONE.to_owned());
     }
@@ -62,7 +64,6 @@ async fn resume(
     let writer = tokio::task::spawn_blocking(move || store.writer())
         .await
         .map_err(|error| error.to_string())??;
-    let spec = agent_spec(row.agent, &config);
     let ctx = SessionContext {
         id: row.id.clone(),
         pr: row.pr.clone(),

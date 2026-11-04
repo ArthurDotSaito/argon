@@ -86,6 +86,8 @@ pub struct AgentCfg {
     pub env: BTreeMap<String, String>,
     pub default_model: Option<String>,
     pub full_access: bool,
+    #[serde(default)]
+    pub use_acp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,6 +252,7 @@ mod tests {
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
                 full_access: true,
+                use_acp: true,
             },
         );
         agents.insert(AgentKind::Antigravity, AgentCfg::default());
@@ -361,6 +364,15 @@ mod tests {
             parsed.agents[&AgentKind::Codex].default_model.as_deref(),
             Some("m")
         );
+    }
+
+    #[test]
+    fn agent_without_use_acp_defaults_to_false() {
+        let text = "[agents.claude-code]\nfull_access = true\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        let agent = &parsed.agents[&AgentKind::ClaudeCode];
+        assert!(agent.full_access);
+        assert!(!agent.use_acp);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use argon_agents::Support;
+use argon_agents::defaults::agent_defaults;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -118,6 +119,20 @@ impl AgentForm {
             .child(note(labels::FULL_ACCESS_NOTE, cx.theme().muted_foreground))
     }
 
+    fn use_acp_control(&self, cx: &mut Context<Self>) -> Div {
+        let toggle = Switch::new(("settings-agent-use-acp", self.kind as usize))
+            .checked(self.use_acp)
+            .small()
+            .on_click(cx.listener(|this, on: &bool, _, cx| {
+                this.use_acp = *on;
+                cx.notify();
+            }));
+        v_flex()
+            .gap_1()
+            .child(h_flex().child(toggle))
+            .child(note(labels::USE_ACP_NOTE, cx.theme().muted_foreground))
+    }
+
     fn actions(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let dirty = self.is_dirty(cx);
@@ -173,6 +188,10 @@ impl Render for AgentForm {
                 .children(env)
         });
         let model = Select::new(&self.model_select).small();
+        let use_acp = agent_defaults(self.kind)
+            .acp_fallback
+            .is_some()
+            .then(|| field(labels::USE_ACP, self.use_acp_control(cx), cx));
         card(cx)
             .child(header)
             .child(field(
@@ -185,6 +204,7 @@ impl Render for AgentForm {
             .child(field(labels::ENV, self.env_rows(cx), cx))
             .child(field(labels::DEFAULT_MODEL, model, cx))
             .child(field(labels::FULL_ACCESS, self.full_access_control(cx), cx))
+            .children(use_acp)
             .child(self.actions(cx))
     }
 }

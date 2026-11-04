@@ -34,6 +34,14 @@ impl Transport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Launch {
+    pub transport: Transport,
+    pub command: &'static str,
+    pub args: &'static [&'static str],
+    pub warmup_args: Option<&'static [&'static str]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelSelection {
     AcpConfigOption { config_id: &'static str },
     CliFlag { flag: &'static str },
@@ -58,9 +66,8 @@ pub struct HeadlessFlags {
 pub struct AgentDefaults {
     pub kind: AgentKind,
     pub label: &'static str,
-    pub transport: Transport,
-    pub command: &'static str,
-    pub args: &'static [&'static str],
+    pub launch: Launch,
+    pub acp_fallback: Option<Launch>,
     pub env: &'static [(&'static str, &'static str)],
     pub cli_command: &'static str,
     pub version_args: &'static [&'static str],
@@ -76,7 +83,6 @@ pub struct AgentDefaults {
     pub headless: Option<HeadlessFlags>,
     pub tested_version: &'static str,
     pub turn_verified: bool,
-    pub warmup_args: Option<&'static [&'static str]>,
 }
 
 const MODEL_OPTION: ModelSelection = ModelSelection::AcpConfigOption { config_id: "model" };
@@ -246,9 +252,13 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
     AgentDefaults {
         kind: AgentKind::ClaudeCode,
         label: "Claude Code",
-        transport: Transport::Acp,
-        command: "npx",
-        args: &["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"],
+        launch: Launch {
+            transport: Transport::Acp,
+            command: "npx",
+            args: &["-y", "@agentclientprotocol/claude-agent-acp@0.100.0"],
+            warmup_args: Some(&["--cli", "--version"]),
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "claude",
         version_args: &["--version"],
@@ -264,14 +274,17 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "claude-agent-acp 0.100.0 / claude 2.1.316",
         turn_verified: true,
-        warmup_args: Some(&["--cli", "--version"]),
     },
     AgentDefaults {
         kind: AgentKind::Codex,
         label: "Codex",
-        transport: Transport::Acp,
-        command: "npx",
-        args: &["-y", "@agentclientprotocol/codex-acp@2.5.0"],
+        launch: Launch {
+            transport: Transport::Acp,
+            command: "npx",
+            args: &["-y", "@agentclientprotocol/codex-acp@2.5.0"],
+            warmup_args: Some(&["--version"]),
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "codex",
         version_args: &["--version"],
@@ -287,14 +300,17 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "codex-acp 2.5.0 / codex 0.160.0",
         turn_verified: false,
-        warmup_args: Some(&["--version"]),
     },
     AgentDefaults {
         kind: AgentKind::OpenCode,
         label: "OpenCode",
-        transport: Transport::Acp,
-        command: "opencode",
-        args: &["acp"],
+        launch: Launch {
+            transport: Transport::Acp,
+            command: "opencode",
+            args: &["acp"],
+            warmup_args: None,
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "opencode",
         version_args: &["--version"],
@@ -310,14 +326,17 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "opencode 2.2.5",
         turn_verified: true,
-        warmup_args: None,
     },
     AgentDefaults {
         kind: AgentKind::CommandCode,
         label: "Command Code",
-        transport: Transport::Acp,
-        command: "command-code",
-        args: &["acp"],
+        launch: Launch {
+            transport: Transport::Acp,
+            command: "command-code",
+            args: &["acp"],
+            warmup_args: None,
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "command-code",
         version_args: &["--version"],
@@ -333,14 +352,17 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "command-code 1.88.2",
         turn_verified: false,
-        warmup_args: None,
     },
     AgentDefaults {
         kind: AgentKind::Antigravity,
         label: "Antigravity",
-        transport: Transport::Headless,
-        command: "agy",
-        args: &["--output-format", "stream-json", "--print"],
+        launch: Launch {
+            transport: Transport::Headless,
+            command: "agy",
+            args: &["--output-format", "stream-json", "--print"],
+            warmup_args: None,
+        },
+        acp_fallback: None,
         env: &[],
         cli_command: "agy",
         version_args: &["--version"],
@@ -362,7 +384,6 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         }),
         tested_version: "agy 1.4.7",
         turn_verified: false,
-        warmup_args: None,
     },
 ];
 
@@ -393,6 +414,15 @@ mod tests {
             assert_eq!(Transport::parse(transport.as_str()), Some(transport));
         }
         assert_eq!(Transport::parse("bogus"), None);
+    }
+
+    #[test]
+    fn acp_fallbacks_always_use_the_acp_transport() {
+        for defaults in &AGENT_DEFAULTS {
+            if let Some(fallback) = defaults.acp_fallback {
+                assert_eq!(fallback.transport, Transport::Acp, "{:?}", defaults.kind);
+            }
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use argon_core::{AgentCfg, AgentKind, Config};
 
-use crate::defaults::{AgentDefaults, ModelSelection, Transport, agent_defaults};
+use crate::defaults::{AgentDefaults, Launch, ModelSelection, Transport, agent_defaults};
 
 const ANTIGRAVITY_REASON: &str =
     "Ainda não suportado — o modo headless exige liberar ferramentas sem confirmação";
@@ -48,14 +48,49 @@ pub fn support_for(kind: AgentKind) -> Support {
 }
 
 pub fn agent_spec(kind: AgentKind, cfg: &Config) -> AgentSpec {
-    let defaults = agent_defaults(kind);
+    spec_from_defaults(agent_defaults(kind), cfg)
+}
+
+pub fn agent_spec_for(kind: AgentKind, cfg: &Config, transport: Transport) -> Option<AgentSpec> {
+    spec_for_transport(agent_defaults(kind), cfg, transport)
+}
+
+pub(super) fn spec_from_defaults(defaults: &AgentDefaults, cfg: &Config) -> AgentSpec {
+    build_spec(defaults, effective_launch(defaults, cfg), cfg)
+}
+
+pub(super) fn effective_launch(defaults: &AgentDefaults, cfg: &Config) -> Launch {
+    let use_acp = cfg
+        .agents
+        .get(&defaults.kind)
+        .is_some_and(|agent| agent.use_acp);
+    match defaults.acp_fallback {
+        Some(fallback) if use_acp => fallback,
+        _ => defaults.launch,
+    }
+}
+
+fn spec_for_transport(
+    defaults: &AgentDefaults,
+    cfg: &Config,
+    transport: Transport,
+) -> Option<AgentSpec> {
+    [Some(defaults.launch), defaults.acp_fallback]
+        .into_iter()
+        .flatten()
+        .find(|launch| launch.transport == transport)
+        .map(|launch| build_spec(defaults, launch, cfg))
+}
+
+fn build_spec(defaults: &AgentDefaults, launch: Launch, cfg: &Config) -> AgentSpec {
+    let kind = defaults.kind;
     let overrides = cfg.agents.get(&kind);
     AgentSpec {
         kind,
         label: defaults.label,
-        transport: defaults.transport,
-        command: command_for(kind, defaults, overrides),
-        args: args_for(kind, defaults, overrides),
+        transport: launch.transport,
+        command: command_for(kind, launch, overrides),
+        args: args_for(kind, launch, overrides),
         env: env_for(defaults, overrides),
         models: defaults
             .models
@@ -109,20 +144,16 @@ fn command_override(kind: AgentKind, overrides: Option<&AgentCfg>) -> Option<Pat
     Some(command)
 }
 
-fn command_for(kind: AgentKind, defaults: &AgentDefaults, overrides: Option<&AgentCfg>) -> PathBuf {
-    command_override(kind, overrides).unwrap_or_else(|| PathBuf::from(defaults.command))
+fn command_for(kind: AgentKind, launch: Launch, overrides: Option<&AgentCfg>) -> PathBuf {
+    command_override(kind, overrides).unwrap_or_else(|| PathBuf::from(launch.command))
 }
 
-fn args_for(
-    kind: AgentKind,
-    defaults: &AgentDefaults,
-    overrides: Option<&AgentCfg>,
-) -> Vec<String> {
+fn args_for(kind: AgentKind, launch: Launch, overrides: Option<&AgentCfg>) -> Vec<String> {
     match overrides {
         Some(agent) if command_override(kind, overrides).is_some() || !agent.args.is_empty() => {
             agent.args.clone()
         }
-        _ => defaults.args.iter().map(ToString::to_string).collect(),
+        _ => launch.args.iter().map(ToString::to_string).collect(),
     }
 }
 
@@ -162,6 +193,7 @@ mod tests {
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
                 full_access: true,
+                use_acp: false,
             },
         );
         let spec = agent_spec(AgentKind::ClaudeCode, &cfg);
@@ -176,8 +208,8 @@ mod tests {
     fn empty_config_keeps_defaults() {
         let spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
         let defaults = agent_defaults(AgentKind::ClaudeCode);
-        assert_eq!(spec.command, Path::new(defaults.command));
-        assert_eq!(spec.args, defaults.args);
+        assert_eq!(spec.command, Path::new(defaults.launch.command));
+        assert_eq!(spec.args, defaults.launch.args);
         assert_eq!(spec.default_model, defaults.default_model);
         assert_eq!(spec.models.len(), defaults.models.len());
         assert!(
@@ -300,6 +332,124 @@ mod tests {
             agent_spec(AgentKind::OpenCode, &cfg).command,
             Path::new("cmd")
         );
+    }
+
+    const NATIVE_LAUNCH: Launch = Launch {
+        transport: Transport::ClaudeStream,
+        command: "claude",
+        args: &["--stream"],
+        warmup_args: None,
+    };
+    const ACP_LAUNCH: Launch = Launch {
+        transport: Transport::Acp,
+        command: "npx",
+        args: &["-y", "adapter"],
+        warmup_args: None,
+    };
+
+    fn defaults_with(launch: Launch, acp_fallback: Option<Launch>) -> AgentDefaults {
+        AgentDefaults {
+            launch,
+            acp_fallback,
+            ..*agent_defaults(AgentKind::ClaudeCode)
+        }
+    }
+
+    fn use_acp_config(use_acp: bool) -> Config {
+        config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp,
+                ..AgentCfg::default()
+            },
+        )
+    }
+
+    #[test]
+    fn default_config_resolves_the_default_launch() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let spec = spec_from_defaults(&defaults, &use_acp_config(false));
+        assert_eq!(spec.transport, Transport::ClaudeStream);
+        assert_eq!(spec.command, Path::new("claude"));
+        assert_eq!(spec.args, ["--stream"]);
+    }
+
+    #[test]
+    fn use_acp_without_fallback_keeps_the_default_launch() {
+        let defaults = defaults_with(NATIVE_LAUNCH, None);
+        let spec = spec_from_defaults(&defaults, &use_acp_config(true));
+        assert_eq!(spec.transport, Transport::ClaudeStream);
+        assert_eq!(spec.command, Path::new("claude"));
+        assert_eq!(spec.args, ["--stream"]);
+    }
+
+    #[test]
+    fn use_acp_with_fallback_resolves_the_fallback_launch() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let spec = spec_from_defaults(&defaults, &use_acp_config(true));
+        assert_eq!(spec.transport, Transport::Acp);
+        assert_eq!(spec.command, Path::new("npx"));
+        assert_eq!(spec.args, ["-y", "adapter"]);
+    }
+
+    #[test]
+    fn overrides_apply_on_top_of_the_fallback_launch() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp: true,
+                args: vec!["--verbose".into()],
+                env: BTreeMap::from([("KEY".into(), "value".into())]),
+                ..AgentCfg::default()
+            },
+        );
+        let spec = spec_from_defaults(&defaults, &cfg);
+        assert_eq!(spec.transport, Transport::Acp);
+        assert_eq!(spec.command, Path::new("npx"));
+        assert_eq!(spec.args, ["--verbose"]);
+        assert_eq!(spec.env["KEY"], "value");
+    }
+
+    #[test]
+    fn spec_for_transport_picks_the_matching_launch() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = use_acp_config(false);
+        let native = spec_for_transport(&defaults, &cfg, Transport::ClaudeStream).unwrap();
+        assert_eq!(native.command, Path::new("claude"));
+        let acp = spec_for_transport(&defaults, &cfg, Transport::Acp).unwrap();
+        assert_eq!(acp.transport, Transport::Acp);
+        assert_eq!(acp.command, Path::new("npx"));
+        assert_eq!(acp.args, ["-y", "adapter"]);
+    }
+
+    #[test]
+    fn spec_for_transport_is_none_without_a_matching_launch() {
+        let defaults = defaults_with(NATIVE_LAUNCH, None);
+        let cfg = use_acp_config(true);
+        assert_eq!(spec_for_transport(&defaults, &cfg, Transport::Acp), None);
+        assert_eq!(
+            spec_for_transport(&defaults, &cfg, Transport::CodexAppServer),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_spec_for_matches_the_current_acp_defaults() {
+        let cfg = Config::default();
+        for defaults in &AGENT_DEFAULTS {
+            let kind = defaults.kind;
+            assert_eq!(
+                agent_spec_for(kind, &cfg, defaults.launch.transport),
+                Some(agent_spec(kind, &cfg)),
+                "{kind:?}"
+            );
+            assert_eq!(
+                agent_spec_for(kind, &cfg, Transport::OpencodeServe),
+                None,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

@@ -36,6 +36,9 @@ pub const DEFAULT_MODEL: &str = "Modelo padrão";
 pub const AGENT_DEFAULT_MODEL: &str = "Padrão do agente";
 pub const FULL_ACCESS: &str = "Acesso total";
 pub const FULL_ACCESS_NOTE: &str = "Aprova automaticamente todo pedido de permissão do agente — comandos, edições e rede — sem mostrar o card. O agente lê código de PRs de terceiros: ligue só se aceitar esse risco. Vale a partir da próxima sessão.";
+pub const USE_ACP: &str = "Usar adapter ACP (legado)";
+pub const USE_ACP_NOTE: &str =
+    "Roda este agente pelo adapter ACP em vez do driver nativo. Vale a partir da próxima sessão.";
 pub const ADD_ENV: &str = "Adicionar variável";
 pub const ENV_KEY: &str = "CHAVE";
 pub const ENV_VALUE: &str = "valor";

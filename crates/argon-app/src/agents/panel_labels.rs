@@ -184,6 +184,10 @@ pub fn unknown_transport(transport: &str) -> String {
     format!("transporte desconhecido nesta sessão: {transport}")
 }
 
+pub fn transport_unavailable(transport: &str) -> String {
+    format!("este agente não roda mais pelo transporte `{transport}`")
+}
+
 pub fn resume_failed(error: &str) -> String {
     format!("Não consegui retomar: {error}")
 }
