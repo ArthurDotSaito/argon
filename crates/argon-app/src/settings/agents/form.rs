@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use argon_agents::{
-    AgentSpec, Detection, ModelInfo, Support, agent_spec, list_models, lists_models, support_for,
+    AgentSpec, Detection, ModelInfo, Support, agent_spec, effective_transport, list_models,
+    lists_models, support_for,
 };
 use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
@@ -257,9 +258,12 @@ impl AgentForm {
                 )
             })
             .collect();
+        let command = (!command.is_empty()).then(|| PathBuf::from(command));
+        let args = split_args(&self.args.read(cx).value())?;
         Ok(AgentCfg {
-            command: (!command.is_empty()).then(|| PathBuf::from(command)),
-            args: split_args(&self.args.read(cx).value())?,
+            override_transport: self.override_transport_for(command.as_ref(), &args),
+            command,
+            args,
             env: parse_env(&rows)?,
             default_model: self.model.clone(),
             use_acp: self.use_acp,
@@ -267,6 +271,20 @@ impl AgentForm {
             ..AgentCfg::default()
         }
         .with_permission_mode(self.permission_mode))
+    }
+
+    fn override_transport_for(&self, command: Option<&PathBuf>, args: &[String]) -> Option<String> {
+        if command.is_none() && args.is_empty() {
+            return None;
+        }
+        if command == self.saved.command.as_ref() && args == self.saved.args {
+            return self.saved.override_transport.clone();
+        }
+        Some(
+            effective_transport(self.kind, self.use_acp)
+                .as_str()
+                .to_owned(),
+        )
     }
 
     pub(super) fn is_dirty(&self, cx: &Context<Self>) -> bool {

@@ -63,10 +63,18 @@ pub(super) fn effective_launch(defaults: &AgentDefaults, cfg: &Config) -> Launch
         .agents
         .get(&defaults.kind)
         .is_some_and(|agent| agent.use_acp);
+    launch_for(defaults, use_acp)
+}
+
+fn launch_for(defaults: &AgentDefaults, use_acp: bool) -> Launch {
     match defaults.acp_fallback {
         Some(fallback) if use_acp => fallback,
         _ => defaults.launch,
     }
+}
+
+pub fn effective_transport(kind: AgentKind, use_acp: bool) -> Transport {
+    launch_for(agent_defaults(kind), use_acp).transport
 }
 
 fn spec_for_transport(
@@ -115,8 +123,8 @@ pub(crate) fn login_hint(defaults: &AgentDefaults) -> String {
     )
 }
 
-pub(super) fn is_command_overridden(kind: AgentKind, cfg: &Config) -> bool {
-    command_override(kind, cfg.agents.get(&kind)).is_some()
+pub(super) fn is_command_overridden(kind: AgentKind, launch: Launch, cfg: &Config) -> bool {
+    command_override(kind, launch, cfg.agents.get(&kind)).is_some()
 }
 
 fn requires_login(kind: AgentKind) -> bool {
@@ -130,8 +138,23 @@ fn is_system_cmd(command: &Path) -> bool {
         .is_some_and(|stem| stem.eq_ignore_ascii_case("cmd"))
 }
 
-fn command_override(kind: AgentKind, overrides: Option<&AgentCfg>) -> Option<PathBuf> {
-    let command = overrides.and_then(|agent| agent.command.clone())?;
+fn override_applies(agent: &AgentCfg, transport: Transport) -> bool {
+    match agent.override_transport.as_deref() {
+        Some(marked) => marked == transport.as_str(),
+        None => matches!(transport, Transport::Acp | Transport::Headless),
+    }
+}
+
+fn applicable(overrides: Option<&AgentCfg>, launch: Launch) -> Option<&AgentCfg> {
+    overrides.filter(|agent| override_applies(agent, launch.transport))
+}
+
+fn command_override(
+    kind: AgentKind,
+    launch: Launch,
+    overrides: Option<&AgentCfg>,
+) -> Option<PathBuf> {
+    let command = applicable(overrides, launch).and_then(|agent| agent.command.clone())?;
     if kind == AgentKind::CommandCode && is_system_cmd(&command) {
         tracing::warn!(
             command = %command.display(),
@@ -143,12 +166,14 @@ fn command_override(kind: AgentKind, overrides: Option<&AgentCfg>) -> Option<Pat
 }
 
 fn command_for(kind: AgentKind, launch: Launch, overrides: Option<&AgentCfg>) -> PathBuf {
-    command_override(kind, overrides).unwrap_or_else(|| PathBuf::from(launch.command))
+    command_override(kind, launch, overrides).unwrap_or_else(|| PathBuf::from(launch.command))
 }
 
 fn args_for(kind: AgentKind, launch: Launch, overrides: Option<&AgentCfg>) -> Vec<String> {
-    match overrides {
-        Some(agent) if command_override(kind, overrides).is_some() || !agent.args.is_empty() => {
+    match applicable(overrides, launch) {
+        Some(agent)
+            if command_override(kind, launch, overrides).is_some() || !agent.args.is_empty() =>
+        {
             agent.args.clone()
         }
         _ => launch.args.iter().map(ToString::to_string).collect(),
@@ -253,8 +278,13 @@ mod tests {
         let spec = agent_spec(AgentKind::Codex, &cfg);
         assert_eq!(spec.command, Path::new("codex-acp"));
         assert!(spec.args.is_empty());
-        assert!(is_command_overridden(AgentKind::Codex, &cfg));
-        assert!(!is_command_overridden(AgentKind::Codex, &Config::default()));
+        let launch = agent_defaults(AgentKind::Codex).launch;
+        assert!(is_command_overridden(AgentKind::Codex, launch, &cfg));
+        assert!(!is_command_overridden(
+            AgentKind::Codex,
+            launch,
+            &Config::default()
+        ));
     }
 
     #[test]
@@ -317,7 +347,8 @@ mod tests {
             let spec = agent_spec(AgentKind::CommandCode, &cfg);
             assert_eq!(spec.command, Path::new("command-code"), "{command}");
             assert_eq!(spec.args, ["acp"]);
-            assert!(!is_command_overridden(AgentKind::CommandCode, &cfg));
+            let launch = agent_defaults(AgentKind::CommandCode).launch;
+            assert!(!is_command_overridden(AgentKind::CommandCode, launch, &cfg));
         }
         let cfg = config_with(
             AgentKind::OpenCode,
@@ -361,6 +392,142 @@ mod tests {
                 ..AgentCfg::default()
             },
         )
+    }
+
+    const OPENCODE_LAUNCH: Launch = Launch {
+        transport: Transport::OpencodeServe,
+        command: "opencode",
+        args: &["serve", "--stdio"],
+        warmup_args: None,
+    };
+    const OPENCODE_ACP_LAUNCH: Launch = Launch {
+        transport: Transport::Acp,
+        command: "opencode",
+        args: &["acp"],
+        warmup_args: None,
+    };
+
+    fn override_config(use_acp: bool, override_transport: Option<&str>) -> Config {
+        config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp,
+                command: Some(PathBuf::from("custom")),
+                args: vec!["acp".into()],
+                override_transport: override_transport.map(Into::into),
+                ..AgentCfg::default()
+            },
+        )
+    }
+
+    #[test]
+    fn unmarked_override_does_not_reach_a_native_launch() {
+        let defaults = defaults_with(OPENCODE_LAUNCH, Some(OPENCODE_ACP_LAUNCH));
+        let spec = spec_from_defaults(&defaults, &override_config(false, None));
+        assert_eq!(spec.transport, Transport::OpencodeServe);
+        assert_eq!(spec.command, Path::new("opencode"));
+        assert_eq!(spec.args, ["serve", "--stdio"]);
+    }
+
+    #[test]
+    fn unmarked_override_applies_to_the_acp_fallback() {
+        let defaults = defaults_with(OPENCODE_LAUNCH, Some(OPENCODE_ACP_LAUNCH));
+        let spec = spec_from_defaults(&defaults, &override_config(true, None));
+        assert_eq!(spec.transport, Transport::Acp);
+        assert_eq!(spec.command, Path::new("custom"));
+        assert_eq!(spec.args, ["acp"]);
+    }
+
+    #[test]
+    fn unmarked_override_applies_to_an_acp_default_launch() {
+        let defaults = defaults_with(ACP_LAUNCH, None);
+        let spec = spec_from_defaults(&defaults, &override_config(false, None));
+        assert_eq!(spec.command, Path::new("custom"));
+        assert_eq!(spec.args, ["acp"]);
+    }
+
+    #[test]
+    fn marked_override_applies_only_to_its_transport() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let native = spec_from_defaults(&defaults, &override_config(false, Some("claude-stream")));
+        assert_eq!(native.command, Path::new("custom"));
+        assert_eq!(native.args, ["acp"]);
+        let acp = spec_from_defaults(&defaults, &override_config(true, Some("claude-stream")));
+        assert_eq!(acp.command, Path::new("npx"));
+        assert_eq!(acp.args, ["-y", "adapter"]);
+        let marked_acp = spec_from_defaults(&defaults, &override_config(false, Some("acp")));
+        assert_eq!(marked_acp.command, Path::new("claude"));
+        assert_eq!(marked_acp.args, ["--stream"]);
+    }
+
+    #[test]
+    fn env_and_default_model_apply_to_every_transport() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                args: vec!["acp".into()],
+                env: BTreeMap::from([("KEY".into(), "value".into())]),
+                default_model: Some("opus".into()),
+                ..AgentCfg::default()
+            },
+        );
+        let spec = spec_from_defaults(&defaults, &cfg);
+        assert_eq!(spec.args, ["--stream"]);
+        assert_eq!(spec.env["KEY"], "value");
+        assert_eq!(spec.default_model, "opus");
+    }
+
+    #[test]
+    fn spec_for_transport_applies_the_same_override_rule() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let unmarked = override_config(false, None);
+        let native = spec_for_transport(&defaults, &unmarked, Transport::ClaudeStream).unwrap();
+        assert_eq!(native.command, Path::new("claude"));
+        assert_eq!(native.args, ["--stream"]);
+        let acp = spec_for_transport(&defaults, &unmarked, Transport::Acp).unwrap();
+        assert_eq!(acp.command, Path::new("custom"));
+        let marked = override_config(false, Some("claude-stream"));
+        let native = spec_for_transport(&defaults, &marked, Transport::ClaudeStream).unwrap();
+        assert_eq!(native.command, Path::new("custom"));
+        let acp = spec_for_transport(&defaults, &marked, Transport::Acp).unwrap();
+        assert_eq!(acp.command, Path::new("npx"));
+    }
+
+    #[test]
+    fn agent_spec_for_respects_the_override_transport() {
+        let kind = AgentKind::Codex;
+        let defaults = agent_defaults(kind);
+        let transport = defaults.launch.transport;
+        let cfg = |override_transport: Option<&str>| {
+            config_with(
+                kind,
+                AgentCfg {
+                    command: Some(PathBuf::from("custom")),
+                    override_transport: override_transport.map(Into::into),
+                    ..AgentCfg::default()
+                },
+            )
+        };
+        let marked_here = agent_spec_for(kind, &cfg(Some(transport.as_str())), transport).unwrap();
+        assert_eq!(marked_here.command, Path::new("custom"));
+        let marked_elsewhere =
+            agent_spec_for(kind, &cfg(Some("claude-stream")), transport).unwrap();
+        assert_eq!(marked_elsewhere.command, Path::new(defaults.launch.command));
+    }
+
+    #[test]
+    fn effective_transport_follows_use_acp() {
+        for defaults in &AGENT_DEFAULTS {
+            assert_eq!(
+                effective_transport(defaults.kind, false),
+                defaults.launch.transport
+            );
+            assert_eq!(
+                effective_transport(defaults.kind, true),
+                defaults.acp_fallback.unwrap_or(defaults.launch).transport
+            );
+        }
     }
 
     #[test]

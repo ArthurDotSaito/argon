@@ -16,9 +16,9 @@ const UNKNOWN_VERSION: &str = "unknown";
 
 pub(super) async fn detect_agent(kind: AgentKind, cfg: &Config) -> (AgentSpec, Support, Detection) {
     let mut spec = agent_spec(kind, cfg);
-    let overridden = is_command_overridden(kind, cfg);
-    let launch_command = effective_launch(agent_defaults(kind), cfg).command;
-    let detection = detect(&mut spec, overridden, launch_command).await;
+    let launch = effective_launch(agent_defaults(kind), cfg);
+    let overridden = is_command_overridden(kind, launch, cfg);
+    let detection = detect(&mut spec, overridden, launch.command).await;
     (spec, support_for(kind), detection)
 }
 

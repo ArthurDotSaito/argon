@@ -111,6 +111,8 @@ pub struct OrgsCfg {
 pub struct AgentCfg {
     pub command: Option<PathBuf>,
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_transport: Option<String>,
     pub env: BTreeMap<String, String>,
     pub default_model: Option<String>,
     #[serde(
@@ -305,6 +307,7 @@ mod tests {
             AgentCfg {
                 command: Some(PathBuf::from("claude-agent-acp")),
                 args: vec!["--verbose".into()],
+                override_transport: Some("acp".into()),
                 env: BTreeMap::from([("ANTHROPIC_LOG".into(), "debug".into())]),
                 default_model: Some("opus".into()),
                 permission_mode: Some(PermissionMode::AcceptEdits),
@@ -431,6 +434,20 @@ mod tests {
         let agent = &parsed.agents[&AgentKind::ClaudeCode];
         assert!(agent.full_access);
         assert!(!agent.use_acp);
+    }
+
+    #[test]
+    fn override_transport_is_absent_by_default_and_only_written_when_set() {
+        assert_eq!(agent("").override_transport, None);
+        let marked = agent("override_transport = \"claude-stream\"\n");
+        assert_eq!(marked.override_transport.as_deref(), Some("claude-stream"));
+        let text = toml::to_string_pretty(&AgentCfg::default()).unwrap();
+        assert!(!text.contains("override_transport"), "{text}");
+        let text = toml::to_string_pretty(&marked).unwrap();
+        assert!(
+            text.contains("override_transport = \"claude-stream\""),
+            "{text}"
+        );
     }
 
     #[test]

@@ -75,7 +75,7 @@ fn warmup_from_defaults(defaults: &AgentDefaults, cfg: &Config) -> Option<Warmup
     }
     let extra = launch.warmup_args?;
     let spec = spec_from_defaults(defaults, cfg);
-    if is_command_overridden(kind, cfg) || spec.args != launch.args {
+    if is_command_overridden(kind, launch, cfg) || spec.args != launch.args {
         return None;
     }
     let mut args = spec.args;
@@ -243,6 +243,44 @@ mod tests {
             },
         );
         assert_eq!(warmup_from_defaults(&defaults, &cfg), None);
+    }
+
+    #[test]
+    fn override_written_for_another_transport_does_not_disable_the_acp_warmup() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp: true,
+                command: Some(PathBuf::from("claude")),
+                args: vec!["--stream".into()],
+                override_transport: Some("claude-stream".into()),
+                ..AgentCfg::default()
+            },
+        );
+        let warmup = warmup_from_defaults(&defaults, &cfg).unwrap();
+        assert_eq!(warmup.command, PathBuf::from("npx"));
+        assert_eq!(warmup.args, ["-y", "adapter", "--version"]);
+    }
+
+    #[test]
+    fn unmarked_override_follows_the_launch_in_use_for_the_warmup() {
+        let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
+        let unmarked = |use_acp| {
+            config_with(
+                AgentKind::ClaudeCode,
+                AgentCfg {
+                    use_acp,
+                    command: Some(PathBuf::from("custom")),
+                    ..AgentCfg::default()
+                },
+            )
+        };
+        assert_eq!(
+            warmup_from_defaults(&defaults, &unmarked(false)),
+            warmup_from_defaults(&defaults, &use_acp_config(false))
+        );
+        assert_eq!(warmup_from_defaults(&defaults, &unmarked(true)), None);
     }
 
     #[test]
