@@ -6,6 +6,7 @@ mod models;
 mod preview;
 mod render;
 mod selection;
+mod usage;
 
 use std::sync::Arc;
 
@@ -87,6 +88,7 @@ pub struct StartDialog {
     ci: Option<Load<String>>,
     preview: Option<Preview>,
     render_epoch: u64,
+    usage_revision: u64,
     render_task: Option<Task<()>>,
     preview_scroll: UniformListScrollHandle,
     session_id: Result<String, SharedString>,
@@ -194,6 +196,7 @@ impl StartDialog {
             ci: None,
             preview: None,
             render_epoch: 0,
+            usage_revision: 0,
             render_task: None,
             preview_scroll: UniformListScrollHandle::new(),
             session_id: fresh_session_id(),

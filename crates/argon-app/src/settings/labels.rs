@@ -40,6 +40,10 @@ pub const PERMISSION_MODE: &str = "Modo de permissão";
 pub const USE_ACP: &str = "Usar adapter ACP (legado)";
 pub const USE_ACP_NOTE: &str =
     "Roda este agente pelo adapter ACP em vez do driver nativo. Vale a partir da próxima sessão.";
+pub const PLAN_AND_USAGE: &str = "Plano e uso";
+pub const REFRESH_USAGE: &str = "Atualizar";
+pub const READ_OPENCODE_LOGIN: &str = "Ler meu login do OpenCode para mostrar o uso do OpenCode Go";
+pub const READ_OPENCODE_LOGIN_NOTE: &str = "O Argon lê o token salvo pelo OpenCode neste computador e consulta opencode.ai. O token não é salvo nem exibido.";
 pub const ADD_ENV: &str = "Adicionar variável";
 pub const ENV_KEY: &str = "CHAVE";
 pub const ENV_VALUE: &str = "valor";

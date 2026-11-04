@@ -22,6 +22,7 @@ impl StartDialog {
         if let Some(options) = cached {
             self.set_agents(options, window, cx);
             self.refresh_listed_models(cx);
+            self.refresh_usage(cx);
             return;
         }
         let Some(services) = app_services(cx) else {
@@ -49,6 +50,7 @@ impl StartDialog {
                     }
                     this.set_agents(options, window, cx);
                     this.refresh_listed_models(cx);
+                    this.refresh_usage(cx);
                 }
                 Err(error) => {
                     this.agents = Load::Failed(labels::detection_failed(&error.to_string()).into());

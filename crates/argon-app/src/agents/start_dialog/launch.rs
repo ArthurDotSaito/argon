@@ -136,6 +136,7 @@ impl StartDialog {
 
     pub(super) fn on_sessions_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_listed_models(window, cx);
+        self.sync_usage_revision(cx);
         if !self.is_launching() {
             return;
         }

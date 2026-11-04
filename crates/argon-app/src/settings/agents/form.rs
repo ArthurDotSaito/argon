@@ -51,6 +51,8 @@ pub struct AgentForm {
     pub(super) permission_select: Entity<SelectState<Vec<Choice>>>,
     pub(super) permission_mode: PermissionMode,
     pub(super) use_acp: bool,
+    pub(super) read_plan_usage: bool,
+    usage_revision: u64,
     pub(super) error: Option<SharedString>,
     test_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -111,7 +113,7 @@ impl AgentForm {
             select.set_selected_value(&permission_mode.as_str().to_owned(), window, cx);
             select
         });
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe(&command, |_, _, cx| cx.notify()),
             cx.observe(&args, |_, _, cx| cx.notify()),
             cx.subscribe_in(
@@ -137,6 +139,15 @@ impl AgentForm {
                 },
             ),
         ];
+        if let Some(sessions) = AgentSessions::global(cx) {
+            subscriptions.push(cx.observe(&sessions, |this, sessions, cx| {
+                let revision = sessions.read(cx).usage_revision();
+                if revision != this.usage_revision {
+                    this.usage_revision = revision;
+                    cx.notify();
+                }
+            }));
+        }
         let mut this = Self {
             kind,
             label: defaults.label,
@@ -149,6 +160,8 @@ impl AgentForm {
             permission_select,
             permission_mode,
             use_acp: saved.use_acp,
+            read_plan_usage: saved.read_plan_usage,
+            usage_revision: 0,
             command,
             args,
             env: Vec::new(),
@@ -193,6 +206,41 @@ impl AgentForm {
         }
     }
 
+    pub(super) fn refresh_usage(&mut self, cx: &mut Context<Self>) {
+        let Some(sessions) = AgentSessions::global(cx) else {
+            return;
+        };
+        let config = config_watch::current(cx);
+        let kinds = [self.kind];
+        sessions.update(cx, |sessions, cx| {
+            sessions.refresh_usage(&kinds, &config, Trigger::Manual, cx)
+        });
+    }
+
+    pub(super) fn set_plan_usage_consent(&mut self, granted: bool, cx: &mut Context<Self>) {
+        let kind = self.kind;
+        self.read_plan_usage = granted;
+        self.saved.read_plan_usage = granted;
+        let config = config_watch::update(cx, move |config| {
+            let agent = config.agents.entry(kind).or_default();
+            agent.read_plan_usage = granted;
+            let untouched = normalized(agent.clone()) == normalized(AgentCfg::default());
+            if untouched {
+                config.agents.remove(&kind);
+            }
+        });
+        if let Some(sessions) = AgentSessions::global(cx) {
+            sessions.update(cx, |sessions, cx| {
+                if granted {
+                    sessions.refresh_usage(&[kind], &config, Trigger::Manual, cx);
+                } else {
+                    sessions.forget_usage(kind, cx);
+                }
+            });
+        }
+        cx.notify();
+    }
+
     pub(super) fn is_supported(&self) -> bool {
         self.support == Support::Supported
     }
@@ -215,6 +263,7 @@ impl AgentForm {
             env: parse_env(&rows)?,
             default_model: self.model.clone(),
             use_acp: self.use_acp,
+            read_plan_usage: self.read_plan_usage,
             ..AgentCfg::default()
         }
         .with_permission_mode(self.permission_mode))
@@ -246,8 +295,11 @@ impl AgentForm {
                 if let Some(sessions) = AgentSessions::global(cx) {
                     if found {
                         let specs = vec![spec.clone()];
+                        let config = config_watch::current(cx);
+                        let kinds = [self.kind];
                         sessions.update(cx, |sessions, cx| {
-                            sessions.refresh_models(specs, trigger, cx)
+                            sessions.refresh_models(specs, trigger, cx);
+                            sessions.refresh_usage(&kinds, &config, trigger, cx);
                         });
                     }
                     sessions.read(cx).apply_listed_models(&mut spec);

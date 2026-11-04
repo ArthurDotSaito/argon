@@ -27,6 +27,10 @@ mod start_dialog;
 mod thread_model;
 mod thread_view;
 mod transcript;
+mod usage_cache;
+mod usage_format;
+mod usage_refresh;
+mod usage_view;
 pub mod warmup;
 
 pub(crate) use choice::{Choice, permission_choices};
@@ -39,3 +43,6 @@ pub use panel::AgentPanel;
 pub use panel_labels::status_bar as activity_label;
 pub use sessions::{Activity, AgentSessions, AgentsEvent};
 pub use start_dialog::{ReviewTarget, open as open_start_dialog};
+pub(crate) use usage_cache::{UsageState, needs_consent, plan_usage_consent};
+pub(crate) use usage_format::{Tone, UsageDetail, UsageLine, WindowRow, card_line, detail};
+pub(crate) use usage_view::{open_usage_url, tone_color};

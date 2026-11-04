@@ -48,6 +48,51 @@ pub const NO_CI_LOG: &str = "(log vazio)";
 pub const BUTTON_TOOLTIP: &str = "Revisar este PR com um agente de IA (a)";
 pub const CLOSED_TOOLTIP: &str = "Disponível só para PRs abertos";
 
+pub const LOADING_USAGE: &str = "carregando uso…";
+pub const USAGE_LINK: &str = "ver uso";
+pub const USAGE_CONSENT_HINT: &str = "Autorize a leitura do login em Configurações para ver o uso";
+pub const NO_USAGE_WINDOWS: &str = "sem dados de uso";
+pub const LIMIT_REACHED: &str = "Limite atingido";
+pub const RESETS_SOON: &str = "em instantes";
+
+pub fn in_minutes(minutes: u64) -> String {
+    format!("em {minutes} min")
+}
+
+pub fn in_hours(hours: u64) -> String {
+    format!("em {hours} h")
+}
+
+pub fn in_days(days: u64) -> String {
+    if days == 1 {
+        "em 1 dia".to_owned()
+    } else {
+        format!("em {days} dias")
+    }
+}
+
+pub fn renews(relative: &str) -> String {
+    format!("renova {relative}")
+}
+
+pub fn limit_reached_renews(relative: &str) -> String {
+    format!("{LIMIT_REACHED} — {}", renews(relative))
+}
+
+pub fn usage_summary(plan: &str, percent: u32, window: &str) -> String {
+    let window = window.to_lowercase();
+    let spoken = if window.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("{percent}% em {window}")
+    } else {
+        format!("{percent}% {window}")
+    };
+    if plan.is_empty() {
+        spoken
+    } else {
+        format!("{plan} · {spoken}")
+    }
+}
+
 pub fn permission_mode(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Supervised => "Supervisionado",

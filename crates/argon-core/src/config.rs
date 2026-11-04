@@ -122,6 +122,8 @@ pub struct AgentCfg {
     pub full_access: bool,
     #[serde(default)]
     pub use_acp: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_plan_usage: bool,
 }
 
 impl AgentCfg {
@@ -308,6 +310,7 @@ mod tests {
                 permission_mode: Some(PermissionMode::AcceptEdits),
                 full_access: false,
                 use_acp: true,
+                read_plan_usage: false,
             },
         );
         agents.insert(AgentKind::Antigravity, AgentCfg::default());
@@ -428,6 +431,20 @@ mod tests {
         let agent = &parsed.agents[&AgentKind::ClaudeCode];
         assert!(agent.full_access);
         assert!(!agent.use_acp);
+    }
+
+    #[test]
+    fn plan_usage_consent_is_off_by_default_and_only_written_when_on() {
+        assert!(!agent("").read_plan_usage);
+        assert!(agent("read_plan_usage = true\n").read_plan_usage);
+        let text = toml::to_string_pretty(&AgentCfg::default()).unwrap();
+        assert!(!text.contains("read_plan_usage"), "{text}");
+        let granted = AgentCfg {
+            read_plan_usage: true,
+            ..AgentCfg::default()
+        };
+        let text = toml::to_string_pretty(&granted).unwrap();
+        assert!(text.contains("read_plan_usage = true"), "{text}");
     }
 
     fn agent(text: &str) -> AgentCfg {
