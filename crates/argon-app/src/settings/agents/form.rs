@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use argon_agents::{
-    AgentSpec, Detection, ModelInfo, Support, agent_spec, effective_transport, list_models,
-    lists_models, support_for,
+    AgentSpec, Detection, ModelInfo, Support, Transport, agent_spec, effective_transport,
+    list_models, lists_models, override_applies_to, support_for,
 };
 use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
@@ -72,6 +72,35 @@ fn text_input(
             .masked(masked);
         state.set_value(value, window, cx);
         state
+    })
+}
+
+fn override_transport_for(
+    saved: &AgentCfg,
+    effective: Transport,
+    command: Option<&PathBuf>,
+    args: &[String],
+) -> Option<String> {
+    if command.is_none() && args.is_empty() {
+        return None;
+    }
+    if command == saved.command.as_ref() && args == saved.args {
+        return saved.override_transport.clone();
+    }
+    Some(effective.as_str().to_owned())
+}
+
+fn override_warning_for(
+    has_override: bool,
+    mark: Option<&str>,
+    effective: Transport,
+) -> Option<&'static str> {
+    if !has_override || override_applies_to(mark, effective) {
+        return None;
+    }
+    Some(match mark {
+        None | Some("acp" | "headless") => labels::OVERRIDE_SAVED_FOR_ACP,
+        Some(_) => labels::OVERRIDE_SAVED_FOR_NATIVE,
     })
 }
 
@@ -261,7 +290,12 @@ impl AgentForm {
         let command = (!command.is_empty()).then(|| PathBuf::from(command));
         let args = split_args(&self.args.read(cx).value())?;
         Ok(AgentCfg {
-            override_transport: self.override_transport_for(command.as_ref(), &args),
+            override_transport: override_transport_for(
+                &self.saved,
+                self.effective_transport(),
+                command.as_ref(),
+                &args,
+            ),
             command,
             args,
             env: parse_env(&rows)?,
@@ -273,18 +307,18 @@ impl AgentForm {
         .with_permission_mode(self.permission_mode))
     }
 
-    fn override_transport_for(&self, command: Option<&PathBuf>, args: &[String]) -> Option<String> {
-        if command.is_none() && args.is_empty() {
-            return None;
-        }
-        if command == self.saved.command.as_ref() && args == self.saved.args {
-            return self.saved.override_transport.clone();
-        }
-        Some(
-            effective_transport(self.kind, self.use_acp)
-                .as_str()
-                .to_owned(),
+    pub(super) fn override_warning(&self, cx: &Context<Self>) -> Option<&'static str> {
+        let draft = self.draft(cx).ok()?;
+        let has_override = draft.command.is_some() || !draft.args.is_empty();
+        override_warning_for(
+            has_override,
+            draft.override_transport.as_deref(),
+            self.effective_transport(),
         )
+    }
+
+    fn effective_transport(&self) -> Transport {
+        effective_transport(self.kind, self.use_acp)
     }
 
     pub(super) fn is_dirty(&self, cx: &Context<Self>) -> bool {
@@ -516,5 +550,95 @@ impl AgentForm {
         self.error = None;
         self.refresh_models(window, cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn saved(command: Option<&str>, args: &[&str], mark: Option<&str>) -> AgentCfg {
+        AgentCfg {
+            command: command.map(PathBuf::from),
+            args: args.iter().map(ToString::to_string).collect(),
+            override_transport: mark.map(Into::into),
+            ..AgentCfg::default()
+        }
+    }
+
+    fn mark_for(
+        saved: &AgentCfg,
+        effective: Transport,
+        command: Option<&str>,
+        args: &[&str],
+    ) -> Option<String> {
+        let command = command.map(PathBuf::from);
+        let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+        override_transport_for(saved, effective, command.as_ref(), &args)
+    }
+
+    #[test]
+    fn no_override_has_no_mark() {
+        let stale = saved(Some("old"), &[], Some("acp"));
+        assert_eq!(mark_for(&stale, Transport::Acp, None, &[]), None);
+        assert_eq!(mark_for(&stale, Transport::ClaudeStream, None, &[]), None);
+    }
+
+    #[test]
+    fn unchanged_override_keeps_the_saved_mark() {
+        let marked = saved(Some("claude"), &["--x"], Some("claude-stream"));
+        assert_eq!(
+            mark_for(&marked, Transport::Acp, Some("claude"), &["--x"]).as_deref(),
+            Some("claude-stream")
+        );
+        let legacy = saved(None, &["acp"], None);
+        assert_eq!(
+            mark_for(&legacy, Transport::ClaudeStream, None, &["acp"]),
+            None
+        );
+    }
+
+    #[test]
+    fn changed_override_is_marked_with_the_effective_transport() {
+        let legacy = saved(None, &["acp"], None);
+        assert_eq!(
+            mark_for(&legacy, Transport::Acp, None, &["acp", "--x"]).as_deref(),
+            Some("acp")
+        );
+        assert_eq!(
+            mark_for(&legacy, Transport::ClaudeStream, Some("claude"), &[]).as_deref(),
+            Some("claude-stream")
+        );
+        let fresh = AgentCfg::default();
+        assert_eq!(
+            mark_for(&fresh, Transport::OpencodeServe, None, &["serve"]).as_deref(),
+            Some("opencode-serve")
+        );
+    }
+
+    #[test]
+    fn warning_only_when_an_override_does_not_apply_to_the_effective_transport() {
+        assert_eq!(
+            override_warning_for(true, None, Transport::ClaudeStream),
+            Some(labels::OVERRIDE_SAVED_FOR_ACP)
+        );
+        assert_eq!(
+            override_warning_for(true, Some("acp"), Transport::OpencodeServe),
+            Some(labels::OVERRIDE_SAVED_FOR_ACP)
+        );
+        assert_eq!(
+            override_warning_for(true, Some("claude-stream"), Transport::Acp),
+            Some(labels::OVERRIDE_SAVED_FOR_NATIVE)
+        );
+        assert_eq!(override_warning_for(true, None, Transport::Acp), None);
+        assert_eq!(override_warning_for(true, None, Transport::Headless), None);
+        assert_eq!(
+            override_warning_for(true, Some("claude-stream"), Transport::ClaudeStream),
+            None
+        );
+        assert_eq!(
+            override_warning_for(false, None, Transport::ClaudeStream),
+            None
+        );
     }
 }

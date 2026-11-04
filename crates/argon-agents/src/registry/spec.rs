@@ -138,15 +138,16 @@ fn is_system_cmd(command: &Path) -> bool {
         .is_some_and(|stem| stem.eq_ignore_ascii_case("cmd"))
 }
 
-fn override_applies(agent: &AgentCfg, transport: Transport) -> bool {
-    match agent.override_transport.as_deref() {
+pub fn override_applies_to(mark: Option<&str>, transport: Transport) -> bool {
+    match mark {
         Some(marked) => marked == transport.as_str(),
         None => matches!(transport, Transport::Acp | Transport::Headless),
     }
 }
 
 fn applicable(overrides: Option<&AgentCfg>, launch: Launch) -> Option<&AgentCfg> {
-    overrides.filter(|agent| override_applies(agent, launch.transport))
+    overrides
+        .filter(|agent| override_applies_to(agent.override_transport.as_deref(), launch.transport))
 }
 
 fn command_override(
@@ -444,6 +445,24 @@ mod tests {
         let spec = spec_from_defaults(&defaults, &override_config(false, None));
         assert_eq!(spec.command, Path::new("custom"));
         assert_eq!(spec.args, ["acp"]);
+    }
+
+    #[test]
+    fn override_applies_to_matches_the_mark_or_the_legacy_transports() {
+        assert!(override_applies_to(None, Transport::Acp));
+        assert!(override_applies_to(None, Transport::Headless));
+        assert!(!override_applies_to(None, Transport::ClaudeStream));
+        assert!(!override_applies_to(None, Transport::CodexAppServer));
+        assert!(!override_applies_to(None, Transport::OpencodeServe));
+        assert!(override_applies_to(
+            Some("codex-app-server"),
+            Transport::CodexAppServer
+        ));
+        assert!(!override_applies_to(
+            Some("codex-app-server"),
+            Transport::Acp
+        ));
+        assert!(!override_applies_to(Some("acp"), Transport::ClaudeStream));
     }
 
     #[test]

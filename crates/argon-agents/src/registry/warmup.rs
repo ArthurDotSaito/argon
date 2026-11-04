@@ -264,23 +264,17 @@ mod tests {
     }
 
     #[test]
-    fn unmarked_override_follows_the_launch_in_use_for_the_warmup() {
+    fn unmarked_override_skips_the_acp_fallback_warmup() {
         let defaults = defaults_with(NATIVE_LAUNCH, Some(ACP_LAUNCH));
-        let unmarked = |use_acp| {
-            config_with(
-                AgentKind::ClaudeCode,
-                AgentCfg {
-                    use_acp,
-                    command: Some(PathBuf::from("custom")),
-                    ..AgentCfg::default()
-                },
-            )
-        };
-        assert_eq!(
-            warmup_from_defaults(&defaults, &unmarked(false)),
-            warmup_from_defaults(&defaults, &use_acp_config(false))
+        let cfg = config_with(
+            AgentKind::ClaudeCode,
+            AgentCfg {
+                use_acp: true,
+                command: Some(PathBuf::from("custom")),
+                ..AgentCfg::default()
+            },
         );
-        assert_eq!(warmup_from_defaults(&defaults, &unmarked(true)), None);
+        assert_eq!(warmup_from_defaults(&defaults, &cfg), None);
     }
 
     #[test]

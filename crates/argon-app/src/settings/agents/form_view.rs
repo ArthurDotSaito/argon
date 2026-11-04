@@ -337,6 +337,8 @@ impl Render for AgentForm {
         });
         let model = Select::new(&self.model_select).small();
         let usage = self.usage_block(cx);
+        let override_warning = self.override_warning(cx);
+        let warning_color = cx.theme().warning;
         let use_acp = agent_defaults(self.kind)
             .acp_fallback
             .is_some()
@@ -350,6 +352,7 @@ impl Render for AgentForm {
             ))
             .children(detected.map(indented))
             .child(field(labels::ARGS, Input::new(&self.args).small(), cx))
+            .children(override_warning.map(|text| indented(note(text, warning_color))))
             .child(field(labels::ENV, self.env_rows(cx), cx))
             .child(field(labels::DEFAULT_MODEL, model, cx))
             .child(field(

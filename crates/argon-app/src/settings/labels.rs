@@ -40,6 +40,8 @@ pub const PERMISSION_MODE: &str = "Modo de permissão";
 pub const USE_ACP: &str = "Usar adapter ACP (legado)";
 pub const USE_ACP_NOTE: &str =
     "Roda este agente pelo adapter ACP em vez do driver nativo. Vale a partir da próxima sessão.";
+pub const OVERRIDE_SAVED_FOR_ACP: &str = "Este comando foi salvo para o modo ACP e não vale para o driver nativo. Edite para usar no modo atual.";
+pub const OVERRIDE_SAVED_FOR_NATIVE: &str = "Este comando foi salvo para o driver nativo e não vale para o modo ACP. Edite para usar no modo atual.";
 pub const PLAN_AND_USAGE: &str = "Plano e uso";
 pub const USAGE_NEEDS_AGENT: &str = "Uso disponível depois que o agente estiver instalado e logado";
 pub const REFRESH_USAGE: &str = "Atualizar";
