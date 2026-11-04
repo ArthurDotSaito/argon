@@ -8,6 +8,7 @@ use crate::session::{SessionContext, SessionOptions, SessionWriter, native_optio
 
 const ID: &str = "0f8e4d2c-1b3a-4c5d-9e6f-7a8b9c0d1e2f";
 const SESSION: &str = "s1";
+const FORKED_ID: &str = "11111111-2222-4333-8444-555555555555";
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_owned()).collect()
@@ -315,7 +316,7 @@ if "%1"=="fork" goto fork
 echo {"type":"system","subtype":"init"}
 goto prompt
 :fork
-echo {"type":"system","subtype":"init","session_id":"forked-id"}
+echo {"type":"system","subtype":"init","session_id":"11111111-2222-4333-8444-555555555555"}
 :prompt
 set /p line=
 if "%1"=="crash" goto crash
@@ -337,7 +338,7 @@ const FAKE_UNIX: &str = r#"#!/bin/sh
 echo "$*" >> "$(dirname "$0")/args.txt"
 if [ "$1" = early ]; then echo boom >&2; exit 1; fi
 if [ "$1" = fork ]; then
-  echo '{"type":"system","subtype":"init","session_id":"forked-id"}'
+  echo '{"type":"system","subtype":"init","session_id":"11111111-2222-4333-8444-555555555555"}'
 else
   echo '{"type":"system","subtype":"init"}'
 fi
@@ -570,7 +571,7 @@ async fn reported_session_id_is_followed_on_resume_and_persisted() {
         "{launches:?}"
     );
     assert!(
-        started_with(&launches[1], RESUME_FLAG, "forked-id"),
+        started_with(&launches[1], RESUME_FLAG, FORKED_ID),
         "{launches:?}"
     );
     fake.writer.flush().await;
@@ -579,7 +580,35 @@ async fn reported_session_id_is_followed_on_resume_and_persisted() {
         .session(SESSION)
         .unwrap()
         .unwrap();
-    assert_eq!(row.acp_session_id.as_deref(), Some("forked-id"));
+    assert_eq!(row.acp_session_id.as_deref(), Some(FORKED_ID));
+}
+
+#[tokio::test]
+async fn reported_session_id_that_is_not_a_uuid_is_ignored() {
+    let mut fake = fake("not-uuid").await;
+    let id = fake.session.id.clone();
+
+    fake.session.on_init("forked-id".to_owned(), String::new());
+
+    assert_eq!(fake.session.id, id);
+    assert!(fake.session.transcript);
+}
+
+#[test]
+fn uuid_check_accepts_only_hyphenated_hex() {
+    assert!(is_uuid(ID));
+    assert!(is_uuid(FORKED_ID));
+    assert!(is_uuid(&new_uuid().unwrap()));
+    for invalid in [
+        "",
+        "forked-id",
+        "0f8e4d2c1b3a4c5d9e6f7a8b9c0d1e2f",
+        "0f8e4d2c-1b3a-4c5d-9e6f-7a8b9c0d1e2",
+        "0f8e4d2c-1b3a-4c5d-9e6f-7a8b9c0d1e2g",
+        "0f8e4d2c-1b3a-4c5d-9e6f_7a8b9c0d1e2f",
+    ] {
+        assert!(!is_uuid(invalid), "{invalid}");
+    }
 }
 
 #[tokio::test]

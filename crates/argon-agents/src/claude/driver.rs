@@ -94,6 +94,14 @@ fn format_uuid(mut bytes: [u8; UUID_BYTES]) -> String {
     )
 }
 
+fn is_uuid(text: &str) -> bool {
+    text.len() == 36
+        && text.char_indices().all(|(index, c)| match index {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
 fn new_uuid() -> Result<String> {
     let mut bytes = [0u8; UUID_BYTES];
     getrandom::fill(&mut bytes)?;
@@ -443,18 +451,30 @@ impl Session {
     fn on_init(&mut self, session_id: String, model: String) {
         self.transcript = true;
         if !session_id.is_empty() && session_id != self.id {
-            tracing::info!(
-                previous = %self.id,
-                reported = %session_id,
-                "claude reported a new session id; following it"
-            );
-            self.shared.set_agent_session_id(&session_id);
-            self.id = session_id;
+            self.follow(session_id);
         }
         if !model.is_empty() && model != self.model {
             self.shared.set_model(&model);
             self.model = model;
         }
+    }
+
+    fn follow(&mut self, session_id: String) {
+        if !is_uuid(&session_id) {
+            tracing::warn!(
+                current = %self.id,
+                reported = %session_id,
+                "claude reported a session id that is not a UUID; keeping the current one"
+            );
+            return;
+        }
+        tracing::info!(
+            previous = %self.id,
+            reported = %session_id,
+            "claude reported a new session id; following it"
+        );
+        self.shared.set_agent_session_id(&session_id);
+        self.id = session_id;
     }
 
     fn ask(&mut self, request_id: String, tool_name: String, ask: PermissionAsk, input: Value) {
