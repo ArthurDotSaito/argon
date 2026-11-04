@@ -28,6 +28,7 @@ pub struct Snapshot {
     pub model: String,
     pub models: Vec<ModelInfo>,
     pub pending_permissions: Vec<PendingPermission>,
+    pub permission_mode: PermissionMode,
     pub last_seq: u64,
     pub open_record: Option<(u64, AgentEvent)>,
 }
@@ -218,6 +219,7 @@ impl Shared {
             model: state.model.clone(),
             models: state.models.clone(),
             pending_permissions: state.pending.iter().map(|p| p.permission.clone()).collect(),
+            permission_mode: state.permission_mode,
             last_seq: state.recorder.last_closed(),
             open_record: state.recorder.open_record(),
         };

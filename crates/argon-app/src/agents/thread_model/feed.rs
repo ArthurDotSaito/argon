@@ -183,6 +183,7 @@ impl ThreadModel {
             .map(|permission| permission.request_id.clone())
             .collect();
         transcript.settle(snapshot.status, &pending);
+        transcript.set_permission_mode(snapshot.permission_mode);
         findings.merge_stored(stored);
         self.transcript = transcript;
         self.findings = findings;

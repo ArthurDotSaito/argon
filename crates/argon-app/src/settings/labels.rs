@@ -1,4 +1,4 @@
-use argon_core::PermissionMode;
+pub(super) use crate::agents::permission_mode_hint;
 
 pub const ACCOUNTS: &str = "Contas";
 pub const ORGS: &str = "Orgs rastreadas";
@@ -184,16 +184,4 @@ pub fn discard_message(name: &str) -> String {
 
 pub fn copy_of(name: &str) -> String {
     format!("{name} (cópia)")
-}
-
-pub fn permission_mode_hint(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::Supervised => {
-            "O Argon aprova sozinho só leituras e buscas dentro do worktree do PR; todo o resto pede confirmação."
-        }
-        PermissionMode::AcceptEdits => {
-            "O Argon aprova sozinho leituras, buscas e edições dentro do worktree do PR; comandos, rede e qualquer caminho fora dele pedem confirmação."
-        }
-        PermissionMode::FullAccess => "Aprova todo pedido de permissão do agente sem perguntar.",
-    }
 }

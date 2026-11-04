@@ -367,3 +367,145 @@ async fn known_kind_comes_from_emitted_tool_calls() {
     })));
     assert_eq!(shared.known_kind("t1").as_deref(), Some("read"));
 }
+
+fn drained(receiver: &mut broadcast::Receiver<(u64, AgentEvent)>) -> Vec<AgentEvent> {
+    std::iter::from_fn(|| receiver.try_recv().ok())
+        .map(|(_, event)| event)
+        .collect()
+}
+
+fn resolved(id: &str) -> AgentEvent {
+    AgentEvent::PermissionResolved {
+        request_id: id.into(),
+    }
+}
+
+#[tokio::test]
+async fn responding_emits_permission_resolved() {
+    let (shared, writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (reply, _answers) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), reply);
+    let (_, mut receiver) = shared.subscribe();
+    shared.respond("perm-1", "allow_once").unwrap();
+    assert_eq!(drained(&mut receiver), [resolved("perm-1")]);
+    shared.close();
+    let stored = writer.events_since("s1", 0).await.unwrap();
+    assert_eq!(
+        stored.last().map(|(_, event)| event),
+        Some(&resolved("perm-1"))
+    );
+}
+
+#[tokio::test]
+async fn failed_respond_still_resolves_the_permission() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let reply: PermissionReply = Box::new(|_| Err("gone".into()));
+    shared.on_permission(ask("edit", &[]), reply);
+    let (_, mut receiver) = shared.subscribe();
+    assert!(shared.respond("perm-1", "allow_once").is_err());
+    assert_eq!(drained(&mut receiver), [resolved("perm-1")]);
+}
+
+#[tokio::test]
+async fn rejected_option_keeps_the_permission_pending() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (reply, _answers) = recording_reply();
+    shared.on_permission(ask("edit", &[]), reply);
+    let (_, mut receiver) = shared.subscribe();
+    assert!(shared.respond("perm-1", "nope").is_err());
+    assert!(drained(&mut receiver).is_empty());
+}
+
+#[tokio::test]
+async fn mode_change_emits_mode_and_resolves_auto_decided_permissions() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (edit_reply, _edit) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), edit_reply);
+    let (exec_reply, _exec) = recording_reply();
+    shared.on_permission(ask("execute", &[]), exec_reply);
+    let (_, mut receiver) = shared.subscribe();
+
+    shared.set_permission_mode(PermissionMode::AcceptEdits);
+
+    assert_eq!(
+        drained(&mut receiver),
+        [
+            AgentEvent::PermissionModeChanged(PermissionMode::AcceptEdits),
+            resolved("perm-1"),
+        ]
+    );
+    assert_eq!(
+        shared.subscribe().0.permission_mode,
+        PermissionMode::AcceptEdits
+    );
+}
+
+#[tokio::test]
+async fn repeating_the_current_mode_emits_nothing() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (_, mut receiver) = shared.subscribe();
+    shared.set_permission_mode(PermissionMode::Supervised);
+    assert!(drained(&mut receiver).is_empty());
+}
+
+#[tokio::test]
+async fn snapshot_carries_the_starting_mode() {
+    let (shared, _writer) = shared_with(64).await;
+    assert_eq!(
+        shared.subscribe().0.permission_mode,
+        PermissionMode::Supervised
+    );
+    shared.start_in_mode(PermissionMode::FullAccess);
+    assert_eq!(
+        shared.subscribe().0.permission_mode,
+        PermissionMode::FullAccess
+    );
+}
+
+#[tokio::test]
+async fn ending_turn_resolves_every_pending_permission() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (first, _a) = recording_reply();
+    shared.on_permission(ask("edit", &[]), first);
+    let (second, _b) = recording_reply();
+    shared.on_permission(ask("execute", &[]), second);
+    let (_, mut receiver) = shared.subscribe();
+    shared.end_turn("cancelled").await;
+    let events = drained(&mut receiver);
+    assert_eq!(events[..2], [resolved("perm-1"), resolved("perm-2")]);
+    assert!(matches!(events[2], AgentEvent::TurnEnded { .. }));
+}
+
+#[tokio::test]
+async fn failing_the_session_resolves_pending_permissions() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (reply, _answers) = recording_reply();
+    shared.on_permission(ask("edit", &[]), reply);
+    let (_, mut receiver) = shared.subscribe();
+    shared.fail("caiu".into());
+    assert_eq!(
+        drained(&mut receiver),
+        [resolved("perm-1"), AgentEvent::Error("caiu".into())]
+    );
+}
+
+#[tokio::test]
+async fn cancel_pending_resolves_without_a_turn_end() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (reply, answers) = recording_reply();
+    shared.on_permission(ask("edit", &[]), reply);
+    let (_, mut receiver) = shared.subscribe();
+    shared.cancel_pending();
+    assert_eq!(*answers.lock().unwrap(), [PermissionAnswer::Cancelled]);
+    assert_eq!(drained(&mut receiver), [resolved("perm-1")]);
+}

@@ -37,6 +37,11 @@ pub const REFERENCE: &str = "Referenciar a linha selecionada no diff";
 pub const NO_LINE_SELECTED: &str = "Selecione uma linha no diff do PR para referenciar";
 pub const DRAFTS_ONLY: &str = "só rascunhos";
 pub const BUSY: &str = "Aguarde o turno atual terminar";
+pub const PERMISSION_MODE_TOOLTIP: &str = "Modo de permissão desta sessão";
+pub const PERMISSION_MODE_TURN_HINT: &str =
+    "Mudanças que ampliam permissões podem valer só a partir da próxima pergunta.";
+pub const FULL_ACCESS_TITLE: &str = "Ativar acesso total?";
+pub const FULL_ACCESS_CONFIRM: &str = "Ativar acesso total";
 pub use super::labels::SERVICES_UNAVAILABLE;
 pub const UNKNOWN_PR: &str = "PR fora da inbox";
 pub const YOU: &str = "você";

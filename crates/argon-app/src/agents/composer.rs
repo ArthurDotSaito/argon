@@ -1,3 +1,4 @@
+use argon_core::PermissionMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -10,9 +11,11 @@ use gpui_kit::{
     Subscription, Window, div,
 };
 
-use super::choice::Choice;
+use super::choice::{Choice, permission_choices};
+use super::labels::{FULL_ACCESS_RISK, permission_mode_hint};
 use super::panel_labels as labels;
 use super::thread_model::ThreadModel;
+use crate::review::{Confirm, confirm};
 use crate::workspace::Workspace;
 
 const MIN_ROWS: usize = 2;
@@ -22,8 +25,11 @@ pub struct Composer {
     model: Entity<ThreadModel>,
     input: Entity<TextareaState>,
     model_select: Entity<SelectState<Vec<Choice>>>,
+    mode_select: Entity<SelectState<Vec<Choice>>>,
     shown: (Vec<String>, String),
+    shown_mode: Option<PermissionMode>,
     was_changing: bool,
+    was_changing_mode: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -35,6 +41,7 @@ impl Composer {
                 .auto_grow(MIN_ROWS, MAX_ROWS)
         });
         let model_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
+        let mode_select = cx.new(|cx| SelectState::new(permission_choices(), None, window, cx));
         let subscriptions = vec![
             cx.observe(&input, |_, _, cx| cx.notify()),
             cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
@@ -56,20 +63,71 @@ impl Composer {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &mode_select,
+                window,
+                |this, _, event: &SelectEvent<Vec<Choice>>, window, cx| {
+                    if let SelectEvent::Confirm(Some(id)) = event
+                        && let Some(mode) = PermissionMode::parse(id)
+                    {
+                        this.request_mode(mode, window, cx);
+                    }
+                },
+            ),
             cx.observe_in(&model, window, |this, _, window, cx| {
-                this.sync_models(window, cx)
+                this.sync_models(window, cx);
+                this.sync_mode(false, window, cx);
             }),
         ];
         let mut this = Self {
             model,
             input,
             model_select,
+            mode_select,
             shown: (Vec::new(), String::new()),
+            shown_mode: None,
             was_changing: false,
+            was_changing_mode: false,
             _subscriptions: subscriptions,
         };
         this.sync_models(window, cx);
+        this.sync_mode(true, window, cx);
         this
+    }
+
+    fn sync_mode(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.model.read(cx);
+        let current = model.permission_mode();
+        let changing = model.is_changing_permission_mode();
+        let settled = std::mem::replace(&mut self.was_changing_mode, changing) && !changing;
+        if !force && !settled && self.shown_mode == current {
+            return;
+        }
+        self.shown_mode = current;
+        if let Some(mode) = current {
+            self.mode_select.update(cx, |select, cx| {
+                select.set_selected_value(&mode.as_str().to_owned(), window, cx)
+            });
+        }
+    }
+
+    fn request_mode(&mut self, mode: PermissionMode, window: &mut Window, cx: &mut Context<Self>) {
+        let model = self.model.clone();
+        let widening_to_full =
+            mode == PermissionMode::FullAccess && model.read(cx).permission_mode() != Some(mode);
+        if widening_to_full {
+            let request = Confirm {
+                title: labels::FULL_ACCESS_TITLE,
+                message: FULL_ACCESS_RISK.to_owned(),
+                confirm: labels::FULL_ACCESS_CONFIRM,
+            };
+            confirm(request, window, cx, move |_, cx| {
+                model.update(cx, |model, cx| model.change_permission_mode(mode, cx));
+            });
+        } else {
+            model.update(cx, |model, cx| model.change_permission_mode(mode, cx));
+        }
+        self.sync_mode(true, window, cx);
     }
 
     fn sync_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -145,6 +203,12 @@ impl Render for Composer {
             .xsmall()
             .placeholder(placeholder)
             .disabled(locked);
+        let mode = model.permission_mode();
+        let mode_select = Select::new(&self.mode_select)
+            .xsmall()
+            .placeholder(labels::PERMISSION_MODE_TOOLTIP)
+            .disabled(mode.is_none() || model.is_changing_permission_mode());
+        let mode_hint = mode.map(permission_mode_hint);
         let reference = Button::new("composer-reference")
             .icon(Icon::new(IconName::AtSign))
             .xsmall()
@@ -192,5 +256,26 @@ impl Render for Composer {
                     )
                     .child(primary),
             )
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(div().w_40().flex_none().child(mode_select))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .line_clamp(2)
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .children(mode_hint),
+                    ),
+            )
+            .children(in_turn.then(|| {
+                div()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(labels::PERMISSION_MODE_TURN_HINT)
+            }))
     }
 }

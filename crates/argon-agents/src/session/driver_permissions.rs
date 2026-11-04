@@ -60,17 +60,22 @@ impl Shared {
 
     pub fn set_permission_mode(&self, mode: PermissionMode) {
         let mut state = self.lock();
-        state.permission_mode = mode;
+        let changed = std::mem::replace(&mut state.permission_mode, mode) != mode;
         self.config.writer.push(Op::PermissionMode {
             session: self.config.id.clone(),
             mode,
         });
+        if changed {
+            self.emit_locked(&mut state, AgentEvent::PermissionModeChanged(mode));
+        }
         for pending in std::mem::take(&mut state.pending) {
             match decide(&pending.ask, &self.config.cwd, mode) {
                 PermissionDecision::Allow { option_id } => {
                     if let Err(error) = (pending.reply)(PermissionAnswer::Selected(option_id)) {
                         tracing::warn!(%error, "failed to auto-allow pending permission");
                     }
+                    let event = AgentEvent::permission_resolved(&pending.permission);
+                    self.emit_locked(&mut state, event);
                 }
                 PermissionDecision::Ask(_) => state.pending.push(pending),
             }
@@ -93,13 +98,17 @@ impl Shared {
         let pending = state.pending.remove(index);
         let result = (pending.reply)(PermissionAnswer::Selected(option_id.to_owned()))
             .map_err(SessionError::Agent);
+        let event = AgentEvent::permission_resolved(&pending.permission);
+        self.emit_locked(&mut state, event);
         self.sync_awaiting(&mut state);
         result
     }
 
     pub(super) fn cancel_pending_locked(&self, state: &mut State) {
-        for pending in state.pending.drain(..) {
+        for pending in std::mem::take(&mut state.pending) {
             let _ = (pending.reply)(PermissionAnswer::Cancelled);
+            let event = AgentEvent::permission_resolved(&pending.permission);
+            self.emit_locked(state, event);
         }
         self.sync_awaiting(state);
     }

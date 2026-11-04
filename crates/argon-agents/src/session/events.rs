@@ -1,4 +1,4 @@
-use argon_core::Finding;
+use argon_core::{Finding, PermissionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -73,6 +73,10 @@ pub enum AgentEvent {
         kind: String,
         options: Vec<PermissionOption>,
     },
+    PermissionResolved {
+        request_id: String,
+    },
+    PermissionModeChanged(PermissionMode),
     TurnEnded {
         stop_reason: String,
     },
@@ -94,6 +98,12 @@ impl AgentEvent {
             title: pending.title.clone(),
             kind: pending.kind.clone(),
             options: pending.options.clone(),
+        }
+    }
+
+    pub fn permission_resolved(pending: &PendingPermission) -> AgentEvent {
+        AgentEvent::PermissionResolved {
+            request_id: pending.request_id.clone(),
         }
     }
 }

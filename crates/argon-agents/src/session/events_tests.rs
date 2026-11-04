@@ -172,3 +172,35 @@ fn events_round_trip_through_json() {
         events
     );
 }
+
+#[test]
+fn permission_events_round_trip_through_json() {
+    let events = vec![
+        AgentEvent::PermissionResolved {
+            request_id: "perm-3".into(),
+        },
+        AgentEvent::PermissionModeChanged(PermissionMode::AcceptEdits),
+    ];
+    let json = serde_json::to_string(&events).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Vec<AgentEvent>>(&json).unwrap(),
+        events
+    );
+    assert_eq!(
+        serde_json::to_value(&events[1]).unwrap(),
+        json!({"type": "permission_mode_changed", "data": "accept-edits"})
+    );
+}
+
+#[test]
+fn rows_stored_before_the_permission_events_still_deserialize() {
+    let old_rows = [
+        r#"{"type":"message_chunk","data":"oi"}"#,
+        r#"{"type":"permission_request","data":{"request_id":"perm-1","title":"t","kind":"edit","options":[]}}"#,
+        r#"{"type":"turn_ended","data":{"stop_reason":"end_turn"}}"#,
+        r#"{"type":"models_available","data":[{"id":"a","label":"A"}]}"#,
+    ];
+    for row in old_rows {
+        assert!(serde_json::from_str::<AgentEvent>(row).is_ok(), "{row}");
+    }
+}

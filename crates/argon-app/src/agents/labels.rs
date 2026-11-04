@@ -101,6 +101,18 @@ pub fn permission_mode(mode: PermissionMode) -> &'static str {
     }
 }
 
+pub fn permission_mode_hint(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Supervised => {
+            "O Argon aprova sozinho só leituras e buscas dentro do worktree do PR; todo o resto pede confirmação."
+        }
+        PermissionMode::AcceptEdits => {
+            "O Argon aprova sozinho leituras, buscas e edições dentro do worktree do PR; comandos, rede e qualquer caminho fora dele pedem confirmação."
+        }
+        PermissionMode::FullAccess => "Aprova todo pedido de permissão do agente sem perguntar.",
+    }
+}
+
 pub fn permissions_warning(agent: &str) -> String {
     format!(
         "O {agent} roda com as suas próprias permissões e configuração (ex.: comandos que você \

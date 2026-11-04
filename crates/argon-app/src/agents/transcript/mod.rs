@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use argon_agents::{AgentEvent, PermissionOption, ToolStatus};
+use argon_core::PermissionMode;
 use argon_store::SessionStatus;
 
 const END_TURN: &str = "end_turn";
@@ -92,6 +93,7 @@ pub struct Transcript {
     open_thought: bool,
     plan: Option<usize>,
     turns: usize,
+    permission_mode: Option<PermissionMode>,
 }
 
 impl Transcript {
@@ -198,6 +200,10 @@ impl Transcript {
                 options: options.clone(),
                 state: PermissionState::Pending,
             })),
+            AgentEvent::PermissionResolved { request_id } => {
+                self.expire_pending(request_id);
+            }
+            AgentEvent::PermissionModeChanged(mode) => self.permission_mode = Some(*mode),
             AgentEvent::TurnEnded { stop_reason } => {
                 self.end_turn();
                 if stop_reason != END_TURN {
@@ -257,6 +263,25 @@ impl Transcript {
                 permission.state = state.clone();
             }
         }
+    }
+
+    fn expire_pending(&mut self, request_id: &str) {
+        for item in &mut self.items {
+            if let Item::Permission(permission) = item
+                && permission.request_id == request_id
+                && permission.state == PermissionState::Pending
+            {
+                permission.state = PermissionState::Expired;
+            }
+        }
+    }
+
+    pub fn permission_mode(&self) -> Option<PermissionMode> {
+        self.permission_mode
+    }
+
+    pub fn set_permission_mode(&mut self, mode: PermissionMode) {
+        self.permission_mode = Some(mode);
     }
 
     fn end_turn(&mut self) {
