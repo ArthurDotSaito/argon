@@ -1,10 +1,12 @@
 use std::time::SystemTime;
 
+use argon_core::AgentKind;
 use serde_json::{Value, json};
 use tokio::process::{ChildStdin, ChildStdout};
 
 use super::{
-    AccountUsage, PROBE_BOUND, UsageWindow, epoch_time, severity_for, title_case, with_probe,
+    AccountUsage, PROBE_BOUND, UsageWindow, duration_label, epoch_time, title_case, usage_window,
+    with_probe,
 };
 use crate::codex::protocol::initialize_params;
 use crate::jsonrpc::RpcClient;
@@ -14,10 +16,10 @@ const APP_SERVER_ARGS: [&str; 1] = ["app-server"];
 const LOGIN_REQUIRED: &str = "Faça login no Codex";
 const API_KEY_ACCOUNT: &str = "Conta por API key: sem limites de plano";
 const NO_PLAN_LIMITS: &str = "Conta sem limites de plano";
+const UNKNOWN_WINDOW: &str = "Limite";
+const BLOCKED_STATUS: &str = "blocked";
 const DEFAULT_BUCKET: &str = "codex";
 const PLAN_PREFIX: &str = "ChatGPT";
-const FIVE_HOURS_MINS: i64 = 300;
-const WEEK_MINS: i64 = 10_080;
 
 enum Gate {
     Chatgpt { plan: Option<String> },
@@ -25,7 +27,7 @@ enum Gate {
 }
 
 pub(super) async fn read(spec: &AgentSpec) -> AccountUsage {
-    match with_probe(spec, &APP_SERVER_ARGS, exchange).await {
+    match with_probe(AgentKind::Codex, spec, &APP_SERVER_ARGS, exchange).await {
         Ok(usage) => usage,
         Err(reason) => AccountUsage::Unavailable(reason),
     }
@@ -85,35 +87,31 @@ fn plan_label(plan_type: &str) -> String {
     }
 }
 
-fn duration_label(minutes: Option<i64>) -> String {
-    match minutes {
-        Some(FIVE_HOURS_MINS) => "Janela de 5 horas".to_owned(),
-        Some(WEEK_MINS) => "Semanal".to_owned(),
-        Some(minutes) => format!("{minutes} min"),
-        None => "Limite".to_owned(),
-    }
-}
-
-fn window(raw: &Value, prefix: Option<&str>, now: SystemTime) -> Option<UsageWindow> {
+fn window(
+    raw: &Value,
+    prefix: Option<&str>,
+    reached: bool,
+    now: SystemTime,
+) -> Option<UsageWindow> {
     let used = raw.get("usedPercent").and_then(Value::as_f64)?;
-    let label = duration_label(raw.get("windowDurationMins").and_then(Value::as_i64));
+    let label = raw
+        .get("windowDurationMins")
+        .and_then(Value::as_i64)
+        .map_or_else(|| UNKNOWN_WINDOW.to_owned(), duration_label);
     let resets_at = raw
         .get("resetsAt")
         .and_then(Value::as_i64)
         .and_then(epoch_time);
-    let (percent, resets_at) = match resets_at {
+    let (used, resets_at) = match resets_at {
         Some(at) if at <= now => (0.0, None),
         other => (used, other),
     };
-    Some(UsageWindow {
-        label: match prefix {
-            Some(prefix) => format!("{prefix} · {label}"),
-            None => label,
-        },
-        percent,
-        resets_at,
-        severity: severity_for(percent, None),
-    })
+    let label = match prefix {
+        Some(prefix) => format!("{prefix} · {label}"),
+        None => label,
+    };
+    let status = (reached && used > 0.0).then_some(BLOCKED_STATUS);
+    Some(usage_window(label, used, resets_at, status))
 }
 
 fn snapshots(limits: &Value) -> Vec<&Value> {
@@ -122,7 +120,11 @@ fn snapshots(limits: &Value) -> Vec<&Value> {
         .and_then(Value::as_object)
         .filter(|buckets| !buckets.is_empty());
     match by_id {
-        Some(buckets) => buckets.values().collect(),
+        Some(buckets) => {
+            let mut ordered: Vec<(&String, &Value)> = buckets.iter().collect();
+            ordered.sort_by_key(|(id, _)| id.as_str() != DEFAULT_BUCKET);
+            ordered.into_iter().map(|(_, snapshot)| snapshot).collect()
+        }
         None => limits.get("rateLimits").into_iter().collect(),
     }
 }
@@ -139,8 +141,17 @@ fn bucket_prefix(snapshot: &Value, bucket_count: usize) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn limit_reached(snapshot: &Value, ordinary_usage_blocked: bool) -> bool {
+    ordinary_usage_blocked
+        || snapshot
+            .get("rateLimitReachedType")
+            .is_some_and(|reached| !reached.is_null())
+}
+
 fn parse_limits(limits: &Value, account_plan: Option<&str>, now: SystemTime) -> AccountUsage {
     let snapshots = snapshots(limits);
+    let ordinary_usage_blocked =
+        limits.get("ordinaryUsageAllowed").and_then(Value::as_bool) == Some(false);
     let plan_type = account_plan.or_else(|| {
         snapshots
             .iter()
@@ -150,10 +161,11 @@ fn parse_limits(limits: &Value, account_plan: Option<&str>, now: SystemTime) -> 
         .iter()
         .flat_map(|snapshot| {
             let prefix = bucket_prefix(snapshot, snapshots.len());
+            let reached = limit_reached(snapshot, ordinary_usage_blocked);
             ["primary", "secondary"]
                 .into_iter()
                 .filter_map(|slot| snapshot.get(slot))
-                .filter_map(|raw| window(raw, prefix.as_deref(), now))
+                .filter_map(|raw| window(raw, prefix.as_deref(), reached, now))
                 .collect::<Vec<UsageWindow>>()
         })
         .collect();

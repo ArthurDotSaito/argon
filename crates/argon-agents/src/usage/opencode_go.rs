@@ -10,7 +10,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
-use super::{AccountUsage, UsageWindow, parse_time, severity_for};
+use super::{AccountUsage, UsageWindow, epoch_millis, parse_time, usage_window};
 
 const USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -21,6 +21,8 @@ const DATA_DIR_NAME: &str = "opencode";
 const OAUTH_INTEGRATION: &str = "opencode";
 const GO_INTEGRATION: &str = "opencode-go";
 const MAX_TOKEN_LEN: usize = 4096;
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+const DATABASE_UNREADABLE: &str = "não consegui ler o login do OpenCode (banco em uso?)";
 const PLAN: &str = "OpenCode Go";
 const CONSENT_REQUIRED: &str = "Autorize a leitura do login do OpenCode para ver o uso do Go";
 const LOGIN_REQUIRED: &str = "Faça login no OpenCode Go";
@@ -100,10 +102,13 @@ where
         return AccountUsage::Unavailable(LOGIN_REQUIRED.to_owned());
     };
     let now = now_millis();
-    let tokens = tokio::task::spawn_blocking(move || load_tokens(&dir, now))
+    let loaded = tokio::task::spawn_blocking(move || load_tokens(&dir, now))
         .await
         .unwrap_or_default();
-    first_usage(tokens, fetch).await
+    if loaded.tokens.is_empty() && loaded.database_failed {
+        return AccountUsage::Unavailable(DATABASE_UNREADABLE.to_owned());
+    }
+    first_usage(loaded.tokens, fetch).await
 }
 
 async fn first_usage<F, Fut>(tokens: Vec<Token>, fetch: F) -> AccountUsage
@@ -122,12 +127,31 @@ where
     AccountUsage::Unavailable(LOGIN_REQUIRED.to_owned())
 }
 
-fn load_tokens(data_dir: &Path, now_millis: i64) -> Vec<Token> {
-    let from_database = tokens_from_database(&data_dir.join(DATABASE_FILE), now_millis);
+#[derive(Default)]
+struct Loaded {
+    tokens: Vec<Token>,
+    database_failed: bool,
+}
+
+fn load_tokens(data_dir: &Path, now_millis: i64) -> Loaded {
+    let database = data_dir.join(DATABASE_FILE);
+    let (from_database, database_failed) = match query_credentials(&database, now_millis) {
+        Ok(tokens) => (tokens, false),
+        Err(error) => {
+            tracing::debug!(%error, "OpenCode credential database unavailable");
+            (Vec::new(), database.exists())
+        }
+    };
     if from_database.is_empty() {
-        tokens_from_auth_file(&data_dir.join(AUTH_FILE))
+        Loaded {
+            tokens: tokens_from_auth_file(&data_dir.join(AUTH_FILE)),
+            database_failed,
+        }
     } else {
-        from_database
+        Loaded {
+            tokens: from_database,
+            database_failed: false,
+        }
     }
 }
 
@@ -140,7 +164,7 @@ fn credential_token(integration: &str, value: &Value, now_millis: i64) -> Option
             let expired = value
                 .get("expires")
                 .and_then(Value::as_i64)
-                .is_some_and(|expires| expires <= now_millis);
+                .is_some_and(|expires| epoch_millis(expires) <= now_millis);
             if expired {
                 return None;
             }
@@ -150,16 +174,6 @@ fn credential_token(integration: &str, value: &Value, now_millis: i64) -> Option
         _ => None,
     };
     secret.and_then(Value::as_str).and_then(Token::parse)
-}
-
-fn tokens_from_database(path: &Path, now_millis: i64) -> Vec<Token> {
-    match query_credentials(path, now_millis) {
-        Ok(tokens) => tokens,
-        Err(error) => {
-            tracing::debug!(%error, "OpenCode credential database unavailable");
-            Vec::new()
-        }
-    }
 }
 
 fn query_credentials(path: &Path, now_millis: i64) -> rusqlite::Result<Vec<Token>> {
@@ -230,22 +244,39 @@ async fn fetch_usage(token: Token) -> Fetched {
     match response.status() {
         StatusCode::UNAUTHORIZED => Fetched::Unauthorized,
         StatusCode::FORBIDDEN => Fetched::Forbidden,
-        status if status.is_success() => match response.json::<Value>().await {
-            Ok(usage) => Fetched::Usage(usage),
-            Err(_) => Fetched::Failed(UNEXPECTED_RESPONSE.to_owned()),
+        status if status.is_success() => match read_limited(response).await {
+            Some(usage) => Fetched::Usage(usage),
+            None => Fetched::Failed(UNEXPECTED_RESPONSE.to_owned()),
         },
         status => Fetched::Failed(format!("OpenCode Go respondeu HTTP {}", status.as_u16())),
     }
 }
 
+async fn read_limited(mut response: reqwest::Response) -> Option<Value> {
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len() + chunk.len() > MAX_BODY_BYTES {
+                    return None;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(_) => return None,
+        }
+    }
+    serde_json::from_slice(&body).ok()
+}
+
 fn window(raw: &Value, label: &str) -> Option<UsageWindow> {
     let percent = raw.get("percent").and_then(Value::as_f64)?;
-    Some(UsageWindow {
-        label: label.to_owned(),
+    Some(usage_window(
+        label.to_owned(),
         percent,
-        resets_at: raw.get("resetsAt").and_then(parse_time),
-        severity: severity_for(percent, raw.get("status").and_then(Value::as_str)),
-    })
+        raw.get("resetsAt").and_then(parse_time),
+        raw.get("status").and_then(Value::as_str),
+    ))
 }
 
 fn parse(response: &Value) -> AccountUsage {

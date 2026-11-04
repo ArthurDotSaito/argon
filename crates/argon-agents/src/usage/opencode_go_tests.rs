@@ -7,7 +7,7 @@ use serde_json::json;
 use super::*;
 use crate::usage::UsageSeverity;
 
-const NOW: i64 = 1_000_000;
+const NOW: i64 = 1_790_000_000_000;
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
 struct TempDir(PathBuf);
@@ -88,7 +88,7 @@ fn database_tokens_skip_expired_oauth_and_put_active_first() {
         ),
     ]);
 
-    let tokens = load_tokens(temp.path(), NOW);
+    let tokens = load_tokens(temp.path(), NOW).tokens;
 
     assert_eq!(secrets(&tokens), ["go-active", "oauth-valid", "go-old"]);
 }
@@ -103,7 +103,10 @@ fn oauth_without_expiry_is_accepted() {
         1,
     )]);
 
-    assert_eq!(secrets(&load_tokens(temp.path(), NOW)), ["no-expiry"]);
+    assert_eq!(
+        secrets(&load_tokens(temp.path(), NOW).tokens),
+        ["no-expiry"]
+    );
 }
 
 #[test]
@@ -114,7 +117,7 @@ fn auth_file_is_the_fallback_when_there_is_no_database() {
         r#"{"opencode-go":{"type":"api","key":"file-key"},"anthropic":{"key":"other"}}"#,
     );
 
-    assert_eq!(secrets(&load_tokens(temp.path(), NOW)), ["file-key"]);
+    assert_eq!(secrets(&load_tokens(temp.path(), NOW).tokens), ["file-key"]);
 }
 
 #[test]
@@ -123,7 +126,7 @@ fn auth_file_is_used_when_the_database_has_no_usable_token() {
     temp.database(&[("opencode", oauth("expired", NOW - 1), 1, 1)]);
     temp.write(AUTH_FILE, r#"{"opencode-go":{"key":"file-key"}}"#);
 
-    assert_eq!(secrets(&load_tokens(temp.path(), NOW)), ["file-key"]);
+    assert_eq!(secrets(&load_tokens(temp.path(), NOW).tokens), ["file-key"]);
 }
 
 #[test]
@@ -132,20 +135,20 @@ fn auth_file_is_ignored_when_the_database_has_a_token() {
     temp.database(&[("opencode-go", go_key("db-key"), 1, 1)]);
     temp.write(AUTH_FILE, r#"{"opencode-go":{"key":"file-key"}}"#);
 
-    assert_eq!(secrets(&load_tokens(temp.path(), NOW)), ["db-key"]);
+    assert_eq!(secrets(&load_tokens(temp.path(), NOW).tokens), ["db-key"]);
 }
 
 #[test]
 fn missing_or_broken_sources_yield_no_tokens() {
     let temp = TempDir::new();
-    assert!(load_tokens(temp.path(), NOW).is_empty());
+    assert!(load_tokens(temp.path(), NOW).tokens.is_empty());
 
     temp.write(DATABASE_FILE, "this is not a sqlite database");
     temp.write(AUTH_FILE, "{not json");
-    assert!(load_tokens(temp.path(), NOW).is_empty());
+    assert!(load_tokens(temp.path(), NOW).tokens.is_empty());
 
     temp.write(AUTH_FILE, r#"{"opencode-go":{"key":"bad key"}}"#);
-    assert!(load_tokens(temp.path(), NOW).is_empty());
+    assert!(load_tokens(temp.path(), NOW).tokens.is_empty());
 }
 
 #[test]
@@ -154,7 +157,7 @@ fn reading_the_database_never_modifies_it() {
     temp.database(&[("opencode-go", go_key("db-key"), 1, 1)]);
     let before = std::fs::read(temp.path().join(DATABASE_FILE)).unwrap();
 
-    load_tokens(temp.path(), NOW);
+    let _ = load_tokens(temp.path(), NOW);
 
     assert_eq!(
         std::fs::read(temp.path().join(DATABASE_FILE)).unwrap(),
@@ -386,4 +389,83 @@ async fn a_missing_data_dir_asks_for_login() {
         usage,
         AccountUsage::Unavailable("Faça login no OpenCode Go".to_owned())
     );
+}
+
+#[test]
+fn oauth_expiry_in_seconds_is_normalized_before_comparing() {
+    let temp = TempDir::new();
+    let now_secs = NOW / 1000;
+    temp.database(&[
+        ("opencode", oauth("expired-seconds", now_secs - 1), 1, 3),
+        ("opencode", oauth("valid-seconds", now_secs + 60), 1, 2),
+        ("opencode", oauth("valid-millis", NOW + 60_000), 1, 1),
+    ]);
+
+    assert_eq!(
+        secrets(&load_tokens(temp.path(), NOW).tokens),
+        ["valid-seconds", "valid-millis"]
+    );
+}
+
+#[test]
+fn an_unreadable_database_without_auth_file_is_reported() {
+    let temp = TempDir::new();
+    temp.write(DATABASE_FILE, "this is not a sqlite database");
+
+    let loaded = load_tokens(temp.path(), NOW);
+
+    assert!(loaded.tokens.is_empty());
+    assert!(loaded.database_failed);
+}
+
+#[test]
+fn a_missing_database_is_not_a_failure() {
+    let temp = TempDir::new();
+
+    assert!(!load_tokens(temp.path(), NOW).database_failed);
+}
+
+#[test]
+fn an_unreadable_database_still_falls_back_to_the_auth_file() {
+    let temp = TempDir::new();
+    temp.write(DATABASE_FILE, "this is not a sqlite database");
+    temp.write(AUTH_FILE, r#"{"opencode-go":{"key":"file-key"}}"#);
+
+    assert_eq!(secrets(&load_tokens(temp.path(), NOW).tokens), ["file-key"]);
+}
+
+#[tokio::test]
+async fn an_unreadable_database_without_tokens_does_not_ask_for_login() {
+    let temp = TempDir::new();
+    temp.write(DATABASE_FILE, "this is not a sqlite database");
+    let dir = temp.path().to_path_buf();
+
+    let usage = usage_with(
+        true,
+        move || Some(dir),
+        |_| async { panic!("no token means no request") },
+    )
+    .await;
+
+    assert_eq!(
+        usage,
+        AccountUsage::Unavailable(
+            "não consegui ler o login do OpenCode (banco em uso?)".to_owned()
+        )
+    );
+}
+
+#[test]
+fn percent_is_clamped_into_range() {
+    let response = json!({"usage": {
+        "rolling": {"percent": 250},
+        "weekly": {"percent": -5},
+    }});
+
+    let AccountUsage::Ok { windows, .. } = parse(&response) else {
+        panic!("expected usage");
+    };
+    assert_eq!(windows[0].percent, 100.0);
+    assert_eq!(windows[0].severity, UsageSeverity::Blocked);
+    assert_eq!(windows[1].percent, 0.0);
 }

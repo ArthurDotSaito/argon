@@ -2,11 +2,13 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
-use super::{AccountUsage, UsageWindow, parse_time, severity_for, title_case, with_probe};
+use argon_core::AgentKind;
+
+use super::{AccountUsage, UsageWindow, parse_time, title_case, usage_window, with_probe};
 use crate::registry::AgentSpec;
 use crate::util::read_line_lossy;
 
-const PROBE_ARGS: [&str; 9] = [
+const PROBE_ARGS: [&str; 10] = [
     "-p",
     "--input-format",
     "stream-json",
@@ -16,6 +18,7 @@ const PROBE_ARGS: [&str; 9] = [
     "--no-session-persistence",
     "--setting-sources",
     "user",
+    "--strict-mcp-config",
 ];
 const USAGE_REQUEST_ID: &str = "u1";
 const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
@@ -45,7 +48,7 @@ fn usage_request() -> String {
 }
 
 pub(super) async fn read(spec: &AgentSpec) -> AccountUsage {
-    match with_probe(spec, &PROBE_ARGS, exchange).await {
+    match with_probe(AgentKind::ClaudeCode, spec, &PROBE_ARGS, exchange).await {
         Ok(usage) => usage,
         Err(reason) => AccountUsage::Unavailable(reason),
     }
@@ -107,19 +110,19 @@ fn window_label(limit: &Value, kind: &str) -> String {
                 None => WEEKLY_LABEL.to_owned(),
             }
         }
-        other => other.to_owned(),
+        other => format!("Limite {other}"),
     }
 }
 
 fn window(limit: &Value) -> Option<UsageWindow> {
     let kind = limit.get("kind").and_then(Value::as_str)?;
     let percent = limit.get("percent").and_then(Value::as_f64)?;
-    Some(UsageWindow {
-        label: window_label(limit, kind),
+    Some(usage_window(
+        window_label(limit, kind),
         percent,
-        resets_at: limit.get("resets_at").and_then(parse_time),
-        severity: severity_for(percent, limit.get("severity").and_then(Value::as_str)),
-    })
+        limit.get("resets_at").and_then(parse_time),
+        limit.get("severity").and_then(Value::as_str),
+    ))
 }
 
 fn parse(usage: &Value) -> AccountUsage {

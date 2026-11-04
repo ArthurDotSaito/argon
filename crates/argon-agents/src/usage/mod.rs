@@ -10,17 +10,25 @@ use argon_core::AgentKind;
 use serde_json::Value;
 use tokio::process::{ChildStdin, ChildStdout};
 
+use crate::defaults::agent_defaults;
 use crate::process::KillOnDropChild;
 use crate::registry::AgentSpec;
 use crate::session::start_agent;
+use crate::util::{Resolved, resolve_command};
 
 const COMMAND_CODE_USAGE_URL: &str = "https://commandcode.ai/usage";
 const NOT_SUPPORTED: &str = "Sem suporte";
 const HOME_MISSING: &str = "Não encontrei a pasta do usuário";
 const PROBE_BOUND: Duration = Duration::from_secs(20);
+const KILL_WAIT: Duration = Duration::from_secs(5);
 const WARNING_PERCENT: f64 = 80.0;
 const BLOCKED_PERCENT: f64 = 100.0;
 const MILLIS_THRESHOLD: i64 = 100_000_000_000;
+const MINUTES_PER_HOUR: i64 = 60;
+const FIVE_HOURS_MINS: i64 = 300;
+const DAY_MINS: i64 = 1_440;
+const WEEK_MINS: i64 = 10_080;
+const MONTH_MINS: i64 = 43_200;
 const BLOCKED_STATUSES: [&str; 5] = [
     "blocked",
     "rate_limited",
@@ -81,9 +89,53 @@ pub(crate) fn severity_for(percent: f64, status: Option<&str>) -> UsageSeverity 
     }
 }
 
+pub(crate) fn clamp_percent(percent: f64) -> f64 {
+    if percent.is_nan() {
+        0.0
+    } else {
+        percent.clamp(0.0, BLOCKED_PERCENT)
+    }
+}
+
+pub(crate) fn usage_window(
+    label: String,
+    percent: f64,
+    resets_at: Option<SystemTime>,
+    status: Option<&str>,
+) -> UsageWindow {
+    let percent = clamp_percent(percent);
+    UsageWindow {
+        label,
+        percent,
+        resets_at,
+        severity: severity_for(percent, status),
+    }
+}
+
+pub(crate) fn duration_label(minutes: i64) -> String {
+    match minutes {
+        FIVE_HOURS_MINS => "5 horas".to_owned(),
+        DAY_MINS => "Diário".to_owned(),
+        WEEK_MINS => "Semanal".to_owned(),
+        MONTH_MINS => "Mensal".to_owned(),
+        hours if hours > 0 && hours % MINUTES_PER_HOUR == 0 => {
+            format!("{} h", hours / MINUTES_PER_HOUR)
+        }
+        other => format!("{other} min"),
+    }
+}
+
 pub(crate) fn epoch_time(seconds: i64) -> Option<SystemTime> {
     let seconds = u64::try_from(seconds).ok()?;
     UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+}
+
+pub(crate) fn epoch_millis(raw: i64) -> i64 {
+    if raw >= MILLIS_THRESHOLD {
+        raw
+    } else {
+        raw.saturating_mul(1000)
+    }
 }
 
 pub(crate) fn parse_time(value: &Value) -> Option<SystemTime> {
@@ -91,14 +143,7 @@ pub(crate) fn parse_time(value: &Value) -> Option<SystemTime> {
         Value::String(text) => chrono::DateTime::parse_from_rfc3339(text)
             .ok()
             .map(SystemTime::from),
-        Value::Number(number) => {
-            let raw = number.as_i64()?;
-            if raw >= MILLIS_THRESHOLD {
-                epoch_time(raw / 1000)
-            } else {
-                epoch_time(raw)
-            }
-        }
+        Value::Number(number) => epoch_time(epoch_millis(number.as_i64()?) / 1000),
         _ => None,
     }
 }
@@ -125,24 +170,39 @@ async fn stop(child: &mut KillOnDropChild) {
     if let Err(error) = child.kill_tree() {
         tracing::debug!(%error, "usage probe process already gone");
     }
-    let _ = child.wait().await;
+    let _ = tokio::time::timeout(KILL_WAIT, child.wait()).await;
+}
+
+pub(crate) fn probe_command(kind: AgentKind, spec: &AgentSpec, probe_args: &[&str]) -> AgentSpec {
+    AgentSpec {
+        command: agent_defaults(kind).cli_command.into(),
+        args: probe_args.iter().map(|arg| (*arg).to_owned()).collect(),
+        env: spec.env.clone(),
+        ..spec.clone()
+    }
 }
 
 pub(crate) async fn with_probe<T, Fut>(
+    kind: AgentKind,
     spec: &AgentSpec,
-    extra_args: &[&str],
+    probe_args: &[&str],
     exchange: impl FnOnce(ChildStdin, ChildStdout) -> Fut,
 ) -> Result<T, String>
 where
     Fut: Future<Output = Result<T, String>>,
 {
     let cwd = dirs::home_dir().ok_or_else(|| HOME_MISSING.to_owned())?;
-    let mut args = spec.args.clone();
-    args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
-    let launch = AgentSpec {
-        args,
-        ..spec.clone()
-    };
+    let mut launch = probe_command(kind, spec, probe_args);
+    match resolve_command(&launch.command) {
+        Resolved::Path(path) => launch.command = path,
+        Resolved::Missing => {
+            return Err(format!(
+                "{} não encontrado no PATH",
+                launch.command.display()
+            ));
+        }
+        Resolved::Failed(message) => return Err(message),
+    }
     let (mut child, stdin, stdout) =
         start_agent(&launch, &cwd, Arc::default()).map_err(|error| error.to_string())?;
     let outcome = tokio::time::timeout(PROBE_BOUND, exchange(stdin, stdout)).await;

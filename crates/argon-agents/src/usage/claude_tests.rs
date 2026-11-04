@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -58,7 +59,7 @@ fn parses_the_plan_and_every_window() {
                 severity: UsageSeverity::Normal,
             },
             UsageWindow {
-                label: "overage".to_owned(),
+                label: "Limite overage".to_owned(),
                 percent: 100.0,
                 resets_at: None,
                 severity: UsageSeverity::Blocked,
@@ -143,4 +144,48 @@ fn requests_match_the_control_protocol() {
             "request": {"subtype": "get_usage", "skip_behaviors": true}
         })
     );
+}
+
+#[test]
+fn unknown_kinds_get_a_generic_label() {
+    let usage = json!({
+        "subscription_type": "pro",
+        "rate_limits": {"limits": [{"kind": "daily_extra", "percent": 3}]}
+    });
+
+    let AccountUsage::Ok { windows, .. } = parse(&usage) else {
+        panic!("expected usage");
+    };
+    assert_eq!(windows[0].label, "Limite daily_extra");
+}
+
+#[test]
+fn percent_is_clamped_into_range() {
+    let usage = json!({
+        "subscription_type": "pro",
+        "rate_limits": {"limits": [
+            {"kind": "session", "percent": 140},
+            {"kind": "weekly_all", "percent": -2}
+        ]}
+    });
+
+    let AccountUsage::Ok { windows, .. } = parse(&usage) else {
+        panic!("expected usage");
+    };
+    assert_eq!(windows[0].percent, 100.0);
+    assert_eq!(windows[0].severity, UsageSeverity::Blocked);
+    assert_eq!(windows[1].percent, 0.0);
+}
+
+#[test]
+fn the_probe_launches_the_installed_cli_not_the_acp_adapter() {
+    let acp_spec = crate::agent_spec(AgentKind::ClaudeCode, &argon_core::Config::default());
+    assert_eq!(acp_spec.command, Path::new("npx"));
+
+    let probe = crate::usage::probe_command(AgentKind::ClaudeCode, &acp_spec, &PROBE_ARGS);
+
+    assert_eq!(probe.command, Path::new("claude"));
+    assert_eq!(probe.args, PROBE_ARGS);
+    assert!(probe.args.iter().any(|arg| arg == "--strict-mcp-config"));
+    assert_eq!(probe.env, acp_spec.env);
 }

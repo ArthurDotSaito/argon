@@ -94,15 +94,8 @@ async fn opencode_without_consent_is_unavailable() {
 #[tokio::test]
 #[ignore = "runs the installed claude and codex against the logged-in accounts"]
 async fn smoke_reads_usage_from_the_installed_agents() {
-    for (kind, command) in [
-        (AgentKind::ClaudeCode, "claude"),
-        (AgentKind::Codex, "codex"),
-    ] {
-        let spec = AgentSpec {
-            command: command.into(),
-            args: Vec::new(),
-            ..agent_spec(kind, &Config::default())
-        };
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
+        let spec = agent_spec(kind, &Config::default());
         let started = std::time::Instant::now();
         let usage = account_usage(kind, &spec, false).await;
         println!(
@@ -110,4 +103,56 @@ async fn smoke_reads_usage_from_the_installed_agents() {
             started.elapsed().as_secs_f32()
         );
     }
+}
+
+#[test]
+fn duration_labels_are_unified_in_portuguese() {
+    assert_eq!(duration_label(300), "5 horas");
+    assert_eq!(duration_label(1_440), "Diário");
+    assert_eq!(duration_label(10_080), "Semanal");
+    assert_eq!(duration_label(43_200), "Mensal");
+    assert_eq!(duration_label(60), "1 h");
+    assert_eq!(duration_label(120), "2 h");
+    assert_eq!(duration_label(45), "45 min");
+    assert_eq!(duration_label(90), "90 min");
+    assert_eq!(duration_label(0), "0 min");
+}
+
+#[test]
+fn clamp_percent_keeps_values_in_range() {
+    assert_eq!(clamp_percent(f64::NAN), 0.0);
+    assert_eq!(clamp_percent(-1.0), 0.0);
+    assert_eq!(clamp_percent(55.5), 55.5);
+    assert_eq!(clamp_percent(101.0), 100.0);
+    assert_eq!(clamp_percent(f64::INFINITY), 100.0);
+}
+
+#[test]
+fn usage_window_clamps_before_computing_the_severity() {
+    let window = usage_window("x".to_owned(), 130.0, None, None);
+
+    assert_eq!(window.percent, 100.0);
+    assert_eq!(window.severity, UsageSeverity::Blocked);
+    assert_eq!(
+        usage_window("x".to_owned(), f64::NAN, None, None).percent,
+        0.0
+    );
+}
+
+#[test]
+fn epoch_millis_normalizes_seconds_and_milliseconds() {
+    assert_eq!(epoch_millis(1_790_219_400), 1_790_219_400_000);
+    assert_eq!(epoch_millis(1_790_219_400_000), 1_790_219_400_000);
+}
+
+#[test]
+fn probe_ignores_the_spec_command_and_args_but_keeps_its_env() {
+    let mut acp_spec = agent_spec(AgentKind::Codex, &Config::default());
+    acp_spec.env.insert("KEY".to_owned(), "value".to_owned());
+
+    let probe = probe_command(AgentKind::Codex, &acp_spec, &["app-server"]);
+
+    assert_eq!(probe.command, std::path::Path::new("codex"));
+    assert_eq!(probe.args, ["app-server"]);
+    assert_eq!(probe.env["KEY"], "value");
 }

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -43,7 +44,7 @@ fn reads_the_single_bucket_view() {
         windows,
         vec![
             UsageWindow {
-                label: "Janela de 5 horas".to_owned(),
+                label: "5 horas".to_owned(),
                 percent: 42.0,
                 resets_at: Some(UNIX_EPOCH + Duration::from_secs(1_790_003_600)),
                 severity: UsageSeverity::Normal,
@@ -73,14 +74,7 @@ fn prefers_the_buckets_keyed_by_limit_id() {
     let windows = windows_of(parse_limits(&limits, None, now()));
 
     let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
-    assert_eq!(
-        labels,
-        [
-            "Janela de 5 horas",
-            "Semanal",
-            "GPT-5.3-Codex-Spark · 60 min"
-        ]
-    );
+    assert_eq!(labels, ["5 horas", "Semanal", "GPT-5.3-Codex-Spark · 1 h"]);
     assert_eq!(windows[2].percent, 100.0);
     assert_eq!(windows[2].severity, UsageSeverity::Blocked);
 }
@@ -168,11 +162,102 @@ fn maps_every_plan_type_in_the_schema() {
 }
 
 #[test]
-fn labels_windows_by_duration() {
-    assert_eq!(duration_label(Some(300)), "Janela de 5 horas");
-    assert_eq!(duration_label(Some(10_080)), "Semanal");
-    assert_eq!(duration_label(Some(45)), "45 min");
-    assert_eq!(duration_label(None), "Limite");
+fn windows_are_labeled_by_their_duration() {
+    let limits = json!({"rateLimits": {
+        "primary": {"usedPercent": 1, "windowDurationMins": 43_200},
+        "secondary": {"usedPercent": 2}
+    }});
+
+    let labels: Vec<String> = windows_of(parse_limits(&limits, None, now()))
+        .into_iter()
+        .map(|window| window.label)
+        .collect();
+
+    assert_eq!(labels, ["Mensal", "Limite"]);
+}
+
+#[test]
+fn the_default_bucket_comes_first() {
+    let mut early = snapshot();
+    early["limitId"] = json!("alpha");
+    early["limitName"] = json!("Alpha");
+    let limits = json!({
+        "rateLimits": snapshot(),
+        "rateLimitsByLimitId": {"alpha": early, "codex": snapshot()}
+    });
+
+    let windows = windows_of(parse_limits(&limits, None, now()));
+
+    let labels: Vec<&str> = windows.iter().map(|window| window.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["5 horas", "Semanal", "Alpha · 5 horas", "Alpha · Semanal"]
+    );
+}
+
+#[test]
+fn a_reached_limit_blocks_the_windows_still_in_use() {
+    let mut reached = snapshot();
+    reached["rateLimitReachedType"] = json!("rate_limit_reached");
+    reached["primary"] =
+        json!({"usedPercent": 40, "windowDurationMins": 300, "resetsAt": NOW_SECS - 1});
+
+    let windows = windows_of(parse_limits(&json!({"rateLimits": reached}), None, now()));
+
+    assert_eq!(windows[0].percent, 0.0);
+    assert_eq!(windows[0].severity, UsageSeverity::Normal);
+    assert_eq!(windows[1].percent, 85.0);
+    assert_eq!(windows[1].severity, UsageSeverity::Blocked);
+}
+
+#[test]
+fn ordinary_usage_not_allowed_blocks_every_bucket() {
+    let limits = json!({"rateLimits": snapshot(), "ordinaryUsageAllowed": false});
+
+    let windows = windows_of(parse_limits(&limits, None, now()));
+
+    assert!(
+        windows
+            .iter()
+            .all(|window| window.severity == UsageSeverity::Blocked)
+    );
+}
+
+#[test]
+fn allowed_usage_keeps_the_percent_severity() {
+    let limits = json!({"rateLimits": snapshot(), "ordinaryUsageAllowed": true});
+
+    let severities: Vec<UsageSeverity> = windows_of(parse_limits(&limits, None, now()))
+        .into_iter()
+        .map(|window| window.severity)
+        .collect();
+
+    assert_eq!(severities, [UsageSeverity::Normal, UsageSeverity::Warning]);
+}
+
+#[test]
+fn percent_is_clamped_into_range() {
+    let limits = json!({"rateLimits": {
+        "primary": {"usedPercent": 180},
+        "secondary": {"usedPercent": -3}
+    }});
+
+    let windows = windows_of(parse_limits(&limits, None, now()));
+
+    assert_eq!(windows[0].percent, 100.0);
+    assert_eq!(windows[0].severity, UsageSeverity::Blocked);
+    assert_eq!(windows[1].percent, 0.0);
+}
+
+#[test]
+fn the_probe_launches_the_installed_cli_not_the_acp_adapter() {
+    let acp_spec = crate::agent_spec(AgentKind::Codex, &argon_core::Config::default());
+    assert_eq!(acp_spec.command, Path::new("npx"));
+
+    let probe = crate::usage::probe_command(AgentKind::Codex, &acp_spec, &APP_SERVER_ARGS);
+
+    assert_eq!(probe.command, Path::new("codex"));
+    assert_eq!(probe.args, ["app-server"]);
 }
 
 #[test]
