@@ -485,6 +485,60 @@ async fn live_session(mode: PermissionMode, turns: Turns) -> Session {
         turn_timeout: timeout,
         remaining: timeout,
         running_since: None,
+        restart_after_turn: false,
+    }
+}
+
+fn idle_process(session: &Session) -> Codex {
+    let mut spec = session.spec.clone();
+    if cfg!(windows) {
+        spec.command = PathBuf::from("cmd");
+        spec.args = vec!["/k".to_owned()];
+    } else {
+        spec.command = PathBuf::from("sh");
+        spec.args = vec!["-c".to_owned(), "cat".to_owned()];
+    }
+    let (feed, _) = mpsc::unbounded_channel();
+    Codex::spawn(
+        &spec,
+        &std::env::temp_dir(),
+        Arc::clone(&session.tail),
+        session.generation,
+        &feed,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn closing_a_turn_cut_short_by_leaving_full_access_stops_the_app_server() {
+    let mut session = live_session(PermissionMode::FullAccess, running("u1")).await;
+    session.codex = Some(idle_process(&session));
+
+    assert!(session.change_mode(PermissionMode::Supervised).is_ok());
+    assert!(session.codex.is_some());
+    let close = session.turns.finish("u1", "cancelled", None);
+    session.close_turn(close).await;
+
+    assert!(session.codex.is_none());
+    assert!(!session.restart_after_turn);
+}
+
+#[tokio::test]
+async fn other_turn_endings_keep_the_app_server() {
+    for (current, requested) in [
+        (PermissionMode::FullAccess, PermissionMode::FullAccess),
+        (PermissionMode::AcceptEdits, PermissionMode::Supervised),
+    ] {
+        let mut session = live_session(current, running("u1")).await;
+        session.codex = Some(idle_process(&session));
+
+        assert!(session.change_mode(requested).is_ok());
+        session.cancel();
+        let close = session.turns.finish("u1", "cancelled", None);
+        session.close_turn(close).await;
+
+        assert!(session.codex.is_some(), "{current:?} -> {requested:?}");
+        session.stop_process().await;
     }
 }
 

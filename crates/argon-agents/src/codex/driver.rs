@@ -104,6 +104,7 @@ struct Session {
     turn_timeout: Duration,
     remaining: Duration,
     running_since: Option<Instant>,
+    restart_after_turn: bool,
 }
 
 struct Inbox {
@@ -199,6 +200,7 @@ impl Session {
             ModeChange::ApplyNow(mode) => self.apply_mode(mode),
             ModeChange::InterruptTurn(mode) => {
                 self.apply_mode(mode);
+                self.restart_after_turn = true;
                 if self.interrupt_turn() {
                     self.shared.cancel_pending();
                     self.shared
@@ -452,6 +454,9 @@ impl Session {
         };
         self.running_since = None;
         self.cancel_deadline = None;
+        if std::mem::take(&mut self.restart_after_turn) {
+            self.stop_process().await;
+        }
         match close {
             Close::Completed => self.shared.end_turn(END_TURN).await,
             Close::Cancelled => self.shared.end_turn(CANCELLED_REASON).await,
@@ -581,6 +586,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             turn_timeout: run.options.turn_timeout,
             remaining: run.options.turn_timeout,
             running_since: None,
+            restart_after_turn: false,
         };
         let inbox = Inbox {
             commands: run.commands,

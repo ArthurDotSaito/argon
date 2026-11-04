@@ -47,7 +47,7 @@ Modos de permissão, por agente:
 
 - **Supervisionado**: leituras e buscas dentro da worktree da revisão são aprovadas sem card; o resto que o agente pede ao Argon aparece em um card para aprovar ou negar.
 - **Aceitar edições**: leituras, buscas e edições dentro da worktree da revisão são aprovadas automaticamente; o resto continua pedindo.
-- **Acesso total**: aprova tudo sem mostrar o card. O agente lê código de PR de terceiros, então use só se aceitar o risco. No Codex exige a sandbox do Windows pronta; sem ela a sessão abre em Supervisionado. Sair do Acesso total no meio de um turno do Codex interrompe o turno, e a próxima mensagem já segue o modo mais restrito.
+- **Acesso total**: aprova tudo sem mostrar o card. O agente lê código de PR de terceiros, então use só se aceitar o risco. No Codex exige a sandbox do Windows pronta; sem ela a sessão abre em Supervisionado. Sair do Acesso total no meio de um turno do Codex interrompe o turno e encerra o processo do Codex, com os processos em segundo plano que ele abriu; a próxima mensagem retoma a conversa já no modo mais restrito.
 
 "Permitir nesta sessão" vale só para a sessão aberta, fica em memória (não é gravado em disco) e só vale para leituras, buscas e edições dentro da worktree da revisão. A exceção são os comandos do Codex, descritos acima.
 
