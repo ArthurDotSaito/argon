@@ -611,3 +611,15 @@ fn abort_fails_a_live_turn_and_cancels_a_cancelled_one() {
     assert_eq!(turns.abort("gone".to_owned()), Some(Close::Cancelled));
     assert!(!turns.in_turn());
 }
+
+#[test]
+fn abort_reports_the_api_error_seen_in_the_turn() {
+    let mut turns = Turns::default();
+    turns.start();
+    turns.api_error("session limit".to_owned());
+
+    assert_eq!(
+        turns.abort("gone".to_owned()),
+        Some(Close::Failed("session limit".to_owned()))
+    );
+}

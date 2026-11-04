@@ -67,7 +67,7 @@ impl Turns {
         Some(if turn.cancelled {
             Close::Cancelled
         } else {
-            Close::Failed(error)
+            Close::Failed(turn.api_error.unwrap_or(error))
         })
     }
 
