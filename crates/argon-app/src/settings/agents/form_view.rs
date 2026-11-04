@@ -1,5 +1,5 @@
-use argon_agents::Support;
 use argon_agents::defaults::agent_defaults;
+use argon_agents::{Support, outdated_version};
 use std::time::SystemTime;
 
 use argon_agents::AccountUsage;
@@ -41,7 +41,13 @@ impl AgentForm {
             Status::Detecting => (labels::DETECTING.into(), theme.muted_foreground),
             Status::Failed(error) => (error.clone(), theme.danger),
             Status::Done(state) => match state {
-                CardState::Ready { version } => (labels::found(version).into(), theme.success),
+                CardState::Ready { version } => match outdated_version(self.kind, version) {
+                    Some(tested) => (
+                        labels::found_outdated(version, &tested).into(),
+                        theme.warning,
+                    ),
+                    None => (labels::found(version).into(), theme.success),
+                },
                 CardState::NeedsLogin { hint } => (hint.clone().into(), theme.warning),
                 CardState::Missing => (labels::NOT_FOUND.into(), theme.warning),
                 CardState::Unsupported { reason } => {

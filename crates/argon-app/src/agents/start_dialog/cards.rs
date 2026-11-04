@@ -1,4 +1,5 @@
 use argon_agents::defaults::AGENT_DEFAULTS;
+use argon_agents::outdated_version;
 use argon_core::AgentKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -33,7 +34,13 @@ struct CardView {
 
 fn card_view(option: &AgentOption, usage: Option<UsageLine>) -> CardView {
     let (status, tooltip, warn): (SharedString, Option<SharedString>, bool) = match &option.state {
-        CardState::Ready { version } => (format!("v{version}").into(), None, false),
+        CardState::Ready { version } => match outdated_version(option.spec.kind, version) {
+            Some(tested) => {
+                let text: SharedString = labels::outdated(version, &tested).into();
+                (text.clone(), Some(text), true)
+            }
+            None => (format!("v{version}").into(), None, false),
+        },
         CardState::NeedsLogin { hint } => (hint.clone().into(), Some(hint.clone().into()), true),
         CardState::Missing => (labels::NOT_FOUND.into(), None, false),
         CardState::Unsupported { reason } => (

@@ -144,6 +144,10 @@ pub fn found(version: &str) -> String {
     format!("encontrado · v{version}")
 }
 
+pub fn found_outdated(version: &str, tested: &str) -> String {
+    format!("encontrado · v{version} · versão antiga, atualize para {tested} ou mais nova")
+}
+
 pub fn detection_failed(error: &str) -> String {
     format!("Falha ao detectar: {error}")
 }

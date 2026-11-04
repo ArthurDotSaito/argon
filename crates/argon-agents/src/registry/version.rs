@@ -1,7 +1,25 @@
+use argon_core::AgentKind;
+
+use crate::defaults::agent_defaults;
+
 pub(super) fn parse_version(output: &str) -> Option<String> {
     output
         .lines()
         .find_map(|line| line.split_whitespace().find_map(version_token))
+}
+
+pub fn outdated_version(kind: AgentKind, installed: &str) -> Option<String> {
+    let tested = parse_version(agent_defaults(kind).tested_version)?;
+    (release(installed)? < release(&tested)?).then_some(tested)
+}
+
+fn release(version: &str) -> Option<Vec<u64>> {
+    version
+        .split(['-', '+'])
+        .next()?
+        .split('.')
+        .map(|part| part.parse().ok())
+        .collect()
 }
 
 fn version_token(token: &str) -> Option<String> {
@@ -38,6 +56,32 @@ mod tests {
                 parse_version(output).as_deref(),
                 Some(expected),
                 "{output:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn older_installs_report_the_tested_version() {
+        assert_eq!(
+            outdated_version(AgentKind::CommandCode, "1.79.1").as_deref(),
+            Some("1.88.2")
+        );
+        assert_eq!(
+            outdated_version(AgentKind::ClaudeCode, "2.1.9").as_deref(),
+            Some("2.1.316")
+        );
+        for (kind, installed) in [
+            (AgentKind::CommandCode, "1.88.2"),
+            (AgentKind::CommandCode, "1.100.0"),
+            (AgentKind::ClaudeCode, "2.1.316"),
+            (AgentKind::OpenCode, "2.2.5"),
+            (AgentKind::Codex, "0.157.0"),
+            (AgentKind::CommandCode, "unknown"),
+        ] {
+            assert_eq!(
+                outdated_version(kind, installed),
+                None,
+                "{kind:?} {installed}"
             );
         }
     }
