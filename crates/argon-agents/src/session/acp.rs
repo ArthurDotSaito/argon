@@ -71,7 +71,7 @@ fn drain_stderr(stderr: ChildStderr, tail: Arc<StderrTail>) {
     });
 }
 
-async fn terminate(mut child: KillOnDropChild) {
+pub(crate) async fn terminate(child: &mut KillOnDropChild) {
     let _ = tokio::time::timeout(EXIT_GRACE, child.wait()).await;
     if let Err(error) = child.kill_tree() {
         tracing::debug!(%error, "agent process tree already gone");
@@ -79,7 +79,7 @@ async fn terminate(mut child: KillOnDropChild) {
     let _ = child.wait().await;
 }
 
-fn start(
+pub(crate) fn start(
     spec: &AgentSpec,
     cwd: &Path,
     tail: Arc<StderrTail>,
@@ -95,15 +95,16 @@ fn start(
 
 pub(super) fn run(run: DriverRun) -> DriverFuture {
     Box::pin(async move {
-        let (child, stdin, stdout) = match start(&run.spec, &run.ctx.cwd, Arc::clone(&run.stderr)) {
-            Ok(started) => started,
-            Err(error) => {
-                let _ = run.ready.send(Err(error));
-                return Ok(false);
-            }
-        };
+        let (mut child, stdin, stdout) =
+            match start(&run.spec, &run.ctx.cwd, Arc::clone(&run.stderr)) {
+                Ok(started) => started,
+                Err(error) => {
+                    let _ = run.ready.send(Err(error));
+                    return Ok(false);
+                }
+            };
         let outcome = connect(transport(stdin, stdout), run).await;
-        terminate(child).await;
+        terminate(&mut child).await;
         outcome
     })
 }

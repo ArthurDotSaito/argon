@@ -15,6 +15,7 @@ const SUBJECT_KEYS: [&str; 7] = [
     "query",
 ];
 const COMMAND_KEY: &str = "command";
+const LINE_BREAKS: [char; 2] = ['\r', '\n'];
 const TODO_WRITE: &str = "TodoWrite";
 const MAX_TURNS_SUBTYPE: &str = "error_max_turns";
 const MAX_TURNS_MESSAGE: &str = "limite de turnos atingido";
@@ -28,6 +29,7 @@ pub(crate) enum ClaudeLine {
     },
     Permission {
         request_id: String,
+        tool_name: String,
         ask: PermissionAsk,
         input: Value,
     },
@@ -153,6 +155,9 @@ fn parse_assistant(value: &Value) -> ClaudeLine {
             .filter_map(|block| json_text(block, "text"))
             .collect::<Vec<_>>()
             .join("\n");
+        if text.is_empty() {
+            return ClaudeLine::Ignore;
+        }
         return ClaudeLine::ApiError(text);
     }
     events_or_ignore(blocks.iter().filter_map(assistant_event).collect())
@@ -200,11 +205,12 @@ fn tool_title(name: &str, input: &Value) -> String {
             .filter(|text| !text.is_empty())
             .map(|text| (*key, text))
     });
-    match subject {
+    let title = match subject {
         Some((COMMAND_KEY, text)) => format!("{name}: {}", truncate(&text, SUBJECT_LIMIT)),
         Some((_, text)) => format!("{name} {}", truncate(&text, SUBJECT_LIMIT)),
         None => name.to_owned(),
-    }
+    };
+    title.replace(LINE_BREAKS, " ")
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -230,7 +236,7 @@ fn tool_result_event(block: &Value) -> AgentEvent {
     AgentEvent::ToolCallUpdate {
         id: json_text(block, "tool_use_id").unwrap_or_default(),
         status: Some(status),
-        output: Some(truncate(&result_text(block), OUTPUT_LIMIT)),
+        output: Some(truncate(&result_text(block), OUTPUT_LIMIT)).filter(|text| !text.is_empty()),
         title: None,
     }
 }
@@ -255,10 +261,13 @@ fn parse_control_request(value: &Value) -> ClaudeLine {
     if request.get("subtype").and_then(Value::as_str) != Some("can_use_tool") {
         return ClaudeLine::Ignore;
     }
+    let Some(request_id) = json_text(value, "request_id").filter(|id| !id.is_empty()) else {
+        return ClaudeLine::Ignore;
+    };
     let tool_name = json_text(request, "tool_name").unwrap_or_default();
     let input = request.get("input").cloned().unwrap_or_else(|| json!({}));
     ClaudeLine::Permission {
-        request_id: json_text(value, "request_id").unwrap_or_default(),
+        request_id,
         ask: PermissionAsk {
             tool_call_id: json_text(request, "tool_use_id"),
             kind: kind_for(&tool_name).to_owned(),
@@ -266,6 +275,7 @@ fn parse_control_request(value: &Value) -> ClaudeLine {
             paths: input_paths(&input),
             options: native_options(),
         },
+        tool_name,
         input,
     }
 }

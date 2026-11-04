@@ -181,6 +181,37 @@ fn api_error_joins_text_blocks() {
 }
 
 #[test]
+fn api_error_without_text_is_ignored() {
+    let parsed = line(json!({
+        "type": "assistant",
+        "isApiErrorMessage": true,
+        "message": {"content": [{"type": "image", "source": {}}]},
+    }));
+
+    assert_eq!(parsed, ClaudeLine::Ignore);
+}
+
+#[test]
+fn tool_result_without_text_has_no_output() {
+    let parsed = line(json!({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": ""}
+        ]},
+    }));
+
+    assert_eq!(
+        events(parsed),
+        vec![AgentEvent::ToolCallUpdate {
+            id: "toolu_1".to_owned(),
+            status: Some(ToolStatus::Completed),
+            output: None,
+            title: None,
+        }]
+    );
+}
+
+#[test]
 fn tool_result_with_string_content_completes_the_call() {
     let parsed = line(json!({
         "type": "user",
@@ -282,6 +313,7 @@ fn can_use_tool_becomes_permission_with_ask() {
 
     let ClaudeLine::Permission {
         request_id,
+        tool_name,
         ask,
         input,
     } = parsed
@@ -289,6 +321,7 @@ fn can_use_tool_becomes_permission_with_ask() {
         panic!("expected permission");
     };
     assert_eq!(request_id, "req-1");
+    assert_eq!(tool_name, "Edit");
     assert_eq!(input["new_string"], "b");
     assert_eq!(ask.tool_call_id.as_deref(), Some("toolu_9"));
     assert_eq!(ask.kind, "edit");
@@ -312,6 +345,21 @@ fn can_use_tool_without_tool_use_id_has_no_call_id() {
     assert_eq!(ask.kind, "execute");
     assert_eq!(ask.title, "Bash: ls");
     assert!(ask.paths.is_empty());
+}
+
+#[test]
+fn can_use_tool_without_request_id_is_ignored() {
+    let request =
+        json!({"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls"}});
+
+    assert_eq!(
+        line(json!({"type": "control_request", "request": request.clone()})),
+        ClaudeLine::Ignore
+    );
+    assert_eq!(
+        line(json!({"type": "control_request", "request_id": "", "request": request})),
+        ClaudeLine::Ignore
+    );
 }
 
 #[test]
@@ -476,6 +524,13 @@ fn title_subject_is_truncated() {
     let title = tool_title("Bash", &json!({"command": command}));
 
     assert_eq!(title, format!("Bash: {}", "x".repeat(SUBJECT_LIMIT)));
+}
+
+#[test]
+fn title_replaces_line_breaks_with_spaces() {
+    let title = tool_title("Bash", &json!({"command": "git add .\r\ngit commit\nok"}));
+
+    assert_eq!(title, "Bash: git add .  git commit ok");
 }
 
 #[test]

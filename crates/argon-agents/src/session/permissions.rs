@@ -209,7 +209,6 @@ pub(crate) fn acp_ask(request: &Value, known_kind: Option<&str>) -> PermissionAs
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn native_options() -> Vec<PermissionOption> {
     [
         ("allow_once", "Permitir"),

@@ -55,7 +55,7 @@ pub(super) struct SharedConfig {
     pub stderr: Arc<StderrTail>,
 }
 
-pub(super) struct Shared {
+pub(crate) struct Shared {
     config: SharedConfig,
     events: broadcast::Sender<(u64, AgentEvent)>,
     busy: AtomicBool,
@@ -64,7 +64,7 @@ pub(super) struct Shared {
 }
 
 impl Shared {
-    pub fn new(
+    pub(super) fn new(
         config: SharedConfig,
         permission_mode: PermissionMode,
         events: broadcast::Sender<(u64, AgentEvent)>,

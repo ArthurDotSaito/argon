@@ -6,7 +6,7 @@ use crate::util::lock;
 
 const CAPACITY: usize = 200;
 #[derive(Default)]
-pub(super) struct StderrTail {
+pub(crate) struct StderrTail {
     lines: Mutex<VecDeque<String>>,
 }
 

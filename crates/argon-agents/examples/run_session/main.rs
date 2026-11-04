@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use argon_agents::{
     AgentEvent, AgentSessionHandle, AgentSpec, SessionContext, SessionOptions, SessionWriter,
-    Support, WorktreeManager, agent_spec, new_session_id, start_session_with, support_for,
+    Support, Transport, WorktreeManager, agent_spec, new_session_id, start_session_with,
+    support_for,
 };
 use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey};
 use argon_github::{GithubClient, discover_accounts, token_for};
@@ -30,12 +31,14 @@ struct Args {
     model: Option<String>,
     cancel_after: Option<Duration>,
     startup_timeout: Option<Duration>,
+    transport: Option<Transport>,
     command: Option<Vec<String>>,
 }
 
 fn usage() -> String {
     "usage: run_session <claude|codex|opencode|command-code> <owner/repo#n> [model] \
-     [--cancel-after secs] [--startup-timeout secs] [--command program args...]"
+     [--cancel-after secs] [--startup-timeout secs] \
+     [--transport acp|claude-stream|codex-app-server|opencode-serve] [--command program args...]"
         .to_owned()
 }
 
@@ -43,16 +46,26 @@ fn seconds(value: Option<String>) -> Result<Duration, BoxError> {
     Ok(Duration::from_secs(value.ok_or_else(usage)?.parse()?))
 }
 
+fn parse_transport(value: Option<String>) -> Result<Transport, BoxError> {
+    value
+        .as_deref()
+        .and_then(Transport::parse)
+        .filter(|transport| *transport != Transport::Headless)
+        .ok_or_else(|| usage().into())
+}
+
 fn parse_args() -> Result<Args, BoxError> {
     let mut positional = Vec::new();
     let mut cancel_after = None;
     let mut startup_timeout = None;
+    let mut transport = None;
     let mut command = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cancel-after" => cancel_after = Some(seconds(args.next())?),
             "--startup-timeout" => startup_timeout = Some(seconds(args.next())?),
+            "--transport" => transport = Some(parse_transport(args.next())?),
             "--command" => command = Some(args.by_ref().collect()),
             _ => positional.push(arg),
         }
@@ -73,6 +86,7 @@ fn parse_args() -> Result<Args, BoxError> {
         model: positional.get(2).cloned(),
         cancel_after,
         startup_timeout,
+        transport,
         command,
     })
 }
@@ -205,6 +219,32 @@ fn summarize(paths: &Paths, id: &str, transactions: u64) -> Result<(), BoxError>
     Ok(())
 }
 
+fn native_command(transport: Transport) -> Option<&'static str> {
+    match transport {
+        Transport::ClaudeStream => Some("claude"),
+        Transport::CodexAppServer => Some("codex"),
+        Transport::OpencodeServe => Some("opencode"),
+        Transport::Acp | Transport::Headless => None,
+    }
+}
+
+fn with_transport(mut spec: AgentSpec, args: &Args) -> AgentSpec {
+    let Some(transport) = args
+        .transport
+        .filter(|transport| *transport != spec.transport)
+    else {
+        return spec;
+    };
+    spec.transport = transport;
+    if args.command.is_none()
+        && let Some(program) = native_command(transport)
+    {
+        spec.command = PathBuf::from(program);
+        spec.args = Vec::new();
+    }
+    spec
+}
+
 fn options(args: &Args) -> SessionOptions {
     let mut options = SessionOptions::default();
     if let Some(timeout) = args.startup_timeout {
@@ -253,7 +293,7 @@ async fn run() -> Result<(), BoxError> {
     let paths = Paths::resolve();
     std::fs::create_dir_all(&paths.data_dir)?;
     let config = Config::load(&paths.config_file()).unwrap_or_default();
-    let spec = agent_spec(args.kind, &config);
+    let spec = with_transport(agent_spec(args.kind, &config), &args);
     if let Some(command) = &args.command {
         return startup_probe(&args, spec, &paths, command).await;
     }

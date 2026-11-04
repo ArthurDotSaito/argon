@@ -17,14 +17,14 @@ use crate::registry::{AgentSpec, ModelInfo};
 
 const EVENT_CAPACITY: usize = 4096;
 
-pub(super) struct Ready {
+pub(crate) struct Ready {
     pub agent_session_id: String,
     pub model: String,
     pub models: Vec<ModelInfo>,
     pub warnings: Vec<String>,
 }
 
-pub(super) struct DriverRun {
+pub(crate) struct DriverRun {
     pub shared: Arc<Shared>,
     pub spec: AgentSpec,
     pub ctx: SessionContext,
@@ -35,7 +35,7 @@ pub(super) struct DriverRun {
     pub stderr: Arc<StderrTail>,
 }
 
-pub(super) type DriverFuture = BoxFuture<'static, std::result::Result<bool, String>>;
+pub(crate) type DriverFuture = BoxFuture<'static, std::result::Result<bool, String>>;
 
 struct AbortOnDrop(Option<oneshot::Sender<()>>);
 

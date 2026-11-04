@@ -24,12 +24,16 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use crate::Transport;
 use crate::registry::AgentSpec;
 
+pub(crate) use acp::{start as start_agent, terminate};
+pub(crate) use bootstrap::{DriverFuture, DriverRun, Ready};
+pub(crate) use driver::Shared;
 pub use driver::Snapshot;
 pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, ToolStatus};
+pub(crate) use permissions::{PermissionAnswer, PermissionReply, input_paths, native_options};
 pub use permissions::{
     PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,
 };
-pub(crate) use permissions::{input_paths, native_options};
+pub(crate) use stderr::StderrTail;
 pub use turn::{TurnOutcome, finish_turn};
 pub use writer::SessionWriter;
 
@@ -246,6 +250,9 @@ async fn launch_with(
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
     match transport {
         Transport::Acp => bootstrap::launch(spec, ctx, writer, load, options, acp::run).await,
+        Transport::ClaudeStream => {
+            bootstrap::launch(spec, ctx, writer, load, options, crate::claude::driver::run).await
+        }
         other => Err(SessionError::Unsupported(other)),
     }
 }
