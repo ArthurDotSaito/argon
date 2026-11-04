@@ -9,18 +9,13 @@ use crate::registry::ModelInfo;
 
 pub(super) type ModeRequest = (PermissionMode, oneshot::Sender<Result<()>>);
 
-fn candidates(mode: PermissionMode) -> &'static [&'static str] {
-    match mode {
-        PermissionMode::Supervised | PermissionMode::AcceptEdits => &["default"],
-        PermissionMode::FullAccess => &["bypassPermissions", "bypass"],
-    }
-}
+const AGENT_MODE: &str = "default";
 
-pub(super) fn acp_mode_value(mode: PermissionMode, offered: &[ModelInfo]) -> Option<String> {
-    candidates(mode)
+pub(super) fn acp_mode_value(_mode: PermissionMode, offered: &[ModelInfo]) -> Option<String> {
+    offered
         .iter()
-        .find(|candidate| offered.iter().any(|value| value.id == **candidate))
-        .map(|candidate| (*candidate).to_owned())
+        .any(|value| value.id == AGENT_MODE)
+        .then(|| AGENT_MODE.to_owned())
 }
 
 pub(super) fn mode_failure(value: &str, reason: String) -> SessionError {

@@ -39,39 +39,31 @@ fn request(
 }
 
 #[test]
-fn claude_style_modes_map_to_their_values() {
+fn every_mode_keeps_the_agent_asking_argon() {
     let modes = claude_modes();
-    assert_eq!(
-        acp_mode_value(PermissionMode::Supervised, &modes).as_deref(),
-        Some("default")
-    );
-    assert_eq!(
-        acp_mode_value(PermissionMode::AcceptEdits, &modes).as_deref(),
-        Some("default")
-    );
-    assert_eq!(
-        acp_mode_value(PermissionMode::FullAccess, &modes).as_deref(),
-        Some("bypassPermissions")
-    );
+    for mode in [
+        PermissionMode::Supervised,
+        PermissionMode::AcceptEdits,
+        PermissionMode::FullAccess,
+    ] {
+        assert_eq!(
+            acp_mode_value(mode, &modes).as_deref(),
+            Some("default"),
+            "{mode:?}"
+        );
+    }
 }
 
 #[test]
-fn accept_edits_never_delegates_to_the_agent_accept_mode() {
-    let modes = offered(&["acceptEdits", "auto-accept", "bypass"]);
-    assert_eq!(acp_mode_value(PermissionMode::AcceptEdits, &modes), None);
-    assert_eq!(
-        acp_mode_value(PermissionMode::FullAccess, &modes).as_deref(),
-        Some("bypass")
-    );
-}
-
-#[test]
-fn first_candidate_wins_when_several_are_offered() {
-    let modes = offered(&["bypass", "bypassPermissions"]);
-    assert_eq!(
-        acp_mode_value(PermissionMode::FullAccess, &modes).as_deref(),
-        Some("bypassPermissions")
-    );
+fn agent_bypass_and_accept_modes_are_never_requested() {
+    let modes = offered(&["acceptEdits", "auto-accept", "bypass", "bypassPermissions"]);
+    for mode in [
+        PermissionMode::Supervised,
+        PermissionMode::AcceptEdits,
+        PermissionMode::FullAccess,
+    ] {
+        assert_eq!(acp_mode_value(mode, &modes), None, "{mode:?}");
+    }
 }
 
 #[test]
@@ -103,7 +95,7 @@ async fn confirmed_change_commits_after_the_agent_call() {
     );
     let response = request(&applier, PermissionMode::FullAccess);
     assert!(response.await.unwrap().is_ok());
-    assert_eq!(*sent.lock().unwrap(), ["bypassPermissions"]);
+    assert_eq!(*sent.lock().unwrap(), ["default"]);
     assert_eq!(*committed.lock().unwrap(), [PermissionMode::FullAccess]);
 }
 
@@ -120,7 +112,7 @@ async fn failed_change_returns_error_and_commits_nothing() {
     let error = response.await.unwrap().unwrap_err();
     assert!(
         matches!(&error, SessionError::SetPermissionMode { mode, reason }
-            if mode == "bypassPermissions" && reason == "recusado"),
+            if mode == "default" && reason == "recusado"),
         "{error:?}"
     );
     assert!(committed.lock().unwrap().is_empty());
@@ -161,25 +153,28 @@ async fn unmapped_mode_commits_without_calling_the_agent() {
 async fn changes_are_applied_one_at_a_time_in_request_order() {
     let in_flight = Arc::new(AtomicUsize::new(0));
     let overlaps = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
     let sent = Log::<String>::default();
     let (commit, committed) = committer();
     let applier = {
         let in_flight = Arc::clone(&in_flight);
         let overlaps = Arc::clone(&overlaps);
+        let calls = Arc::clone(&calls);
         let sent = Arc::clone(&sent);
         spawn_mode_applier(
             claude_modes(),
             move |value| {
                 let in_flight = Arc::clone(&in_flight);
                 let overlaps = Arc::clone(&overlaps);
+                let call = calls.fetch_add(1, Ordering::SeqCst);
                 let sent = Arc::clone(&sent);
                 async move {
                     if in_flight.fetch_add(1, Ordering::SeqCst) > 0 {
                         overlaps.fetch_add(1, Ordering::SeqCst);
                     }
-                    let delay = if value == "bypassPermissions" { 30 } else { 1 };
+                    let delay = if call == 0 { 30 } else { 1 };
                     tokio::time::sleep(Duration::from_millis(delay)).await;
-                    sent.lock().unwrap().push(value);
+                    sent.lock().unwrap().push(format!("{call}:{value}"));
                     in_flight.fetch_sub(1, Ordering::SeqCst);
                     Ok(())
                 }
@@ -193,7 +188,7 @@ async fn changes_are_applied_one_at_a_time_in_request_order() {
     assert!(second.await.unwrap().is_ok());
     assert!(first.await.unwrap().is_ok());
     assert_eq!(overlaps.load(Ordering::SeqCst), 0);
-    assert_eq!(*sent.lock().unwrap(), ["bypassPermissions", "default"]);
+    assert_eq!(*sent.lock().unwrap(), ["0:default", "1:default"]);
     assert_eq!(
         *committed.lock().unwrap(),
         [PermissionMode::FullAccess, PermissionMode::Supervised]
