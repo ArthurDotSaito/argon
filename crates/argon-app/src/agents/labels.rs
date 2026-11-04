@@ -37,6 +37,7 @@ pub const STARTING_AGENT: &str = "iniciando o agente…";
 pub const PICK_AGENT: &str = "escolha um agente disponível";
 pub const START: &str = "Iniciar review";
 pub const CANCEL: &str = "Cancelar";
+pub const COPY_ERROR: &str = "Copiar";
 pub const CANCEL_START: &str = "Cancelar início";
 pub const CANCELLING: &str = "cancelando o início…";
 pub const START_CANCELLED: &str = "Início cancelado — o worktree foi removido";

@@ -5,8 +5,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, Context, Div, IntoElement, ParentElement as _, Render, Styled as _, Window,
-    div,
+    App, ClickEvent, ClipboardItem, Context, Div, IntoElement, ParentElement as _, Render,
+    SharedString, Styled as _, Window, div,
 };
 
 use super::launch::Status;
@@ -48,33 +48,57 @@ impl StartDialog {
             )
     }
 
+    fn error_row(text: SharedString, cx: &App) -> Div {
+        let copied = text.clone();
+        h_flex()
+            .w_full()
+            .gap_1p5()
+            .items_start()
+            .text_xs()
+            .text_color(cx.theme().danger)
+            .child(Icon::new(IconName::TriangleAlert).xsmall())
+            .child(div().flex_1().min_w_0().child(text))
+            .child(
+                Button::new("ai-review-copy-error")
+                    .icon(Icon::new(IconName::Copy))
+                    .label(labels::COPY_ERROR)
+                    .xsmall()
+                    .ghost()
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copied.to_string()))
+                    }),
+            )
+    }
+
     fn footer(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let busy = self.is_launching();
-        let status = self.status().map(|status| match status {
-            Status::Busy(text) => h_flex()
-                .gap_1p5()
-                .items_center()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::LoaderCircle).xsmall())
-                .child(text),
-            Status::Notice(text) => h_flex()
-                .gap_1p5()
-                .items_center()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::Info).xsmall())
-                .child(text),
-            Status::Error(text) => h_flex()
-                .gap_1p5()
-                .items_center()
-                .text_xs()
-                .text_color(theme.danger)
-                .child(Icon::new(IconName::TriangleAlert).xsmall())
-                .child(text),
+        let mut error = None;
+        let status = self.status().and_then(|status| match status {
+            Status::Busy(text) => Some(
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::LoaderCircle).xsmall())
+                    .child(div().min_w_0().truncate().child(text)),
+            ),
+            Status::Notice(text) => Some(
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::Info).xsmall())
+                    .child(div().min_w_0().truncate().child(text)),
+            ),
+            Status::Error(text) => {
+                error = Some(text);
+                None
+            }
         });
-        h_flex()
+        let buttons = h_flex()
             .w_full()
             .gap_2()
             .items_center()
@@ -102,7 +126,12 @@ impl StartDialog {
                     .loading(busy)
                     .disabled(!self.can_start())
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start(cx))),
-            )
+            );
+        v_flex()
+            .w_full()
+            .gap_2()
+            .children(error.map(|text| Self::error_row(text, cx)))
+            .child(buttons)
     }
 }
 
