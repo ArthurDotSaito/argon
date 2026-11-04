@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use argon_agents::{
     AgentEvent, AgentSessionHandle, AgentSpec, SessionContext, SessionOptions, SessionWriter,
-    Support, Transport, WorktreeManager, agent_spec, list_models, lists_models, new_session_id,
-    start_session_with, support_for,
+    Support, Transport, WorktreeManager, agent_spec, agent_spec_for, list_models, lists_models,
+    new_session_id, start_session_with, support_for,
 };
 use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey};
 use argon_github::{GithubClient, discover_accounts, token_for};
@@ -32,14 +32,26 @@ struct Args {
     cancel_after: Option<Duration>,
     startup_timeout: Option<Duration>,
     transport: Option<Transport>,
+    prompt: Option<String>,
+    mode: Option<PermissionMode>,
     command: Option<Vec<String>>,
 }
 
 fn usage() -> String {
     "usage: run_session <claude|codex|opencode|command-code> <owner/repo#n> [model] \
      [--cancel-after secs] [--startup-timeout secs] \
-     [--transport acp|claude-stream|codex-app-server|opencode-serve] [--command program args...]"
+     [--transport acp|claude-stream|codex-app-server|opencode-serve] \
+     [--prompt text] [--mode supervised|accept-edits|full-access] [--command program args...]"
         .to_owned()
+}
+
+fn parse_mode(value: Option<String>) -> Result<PermissionMode, BoxError> {
+    match value.as_deref() {
+        Some("supervised") => Ok(PermissionMode::Supervised),
+        Some("accept-edits") => Ok(PermissionMode::AcceptEdits),
+        Some("full-access") => Ok(PermissionMode::FullAccess),
+        _ => Err(usage().into()),
+    }
 }
 
 fn seconds(value: Option<String>) -> Result<Duration, BoxError> {
@@ -59,6 +71,8 @@ fn parse_args() -> Result<Args, BoxError> {
     let mut cancel_after = None;
     let mut startup_timeout = None;
     let mut transport = None;
+    let mut prompt = None;
+    let mut mode = None;
     let mut command = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -66,6 +80,8 @@ fn parse_args() -> Result<Args, BoxError> {
             "--cancel-after" => cancel_after = Some(seconds(args.next())?),
             "--startup-timeout" => startup_timeout = Some(seconds(args.next())?),
             "--transport" => transport = Some(parse_transport(args.next())?),
+            "--prompt" => prompt = Some(args.next().ok_or_else(usage)?),
+            "--mode" => mode = Some(parse_mode(args.next())?),
             "--command" => command = Some(args.by_ref().collect()),
             _ => positional.push(arg),
         }
@@ -87,6 +103,8 @@ fn parse_args() -> Result<Args, BoxError> {
         cancel_after,
         startup_timeout,
         transport,
+        prompt,
+        mode,
         command,
     })
 }
@@ -228,13 +246,16 @@ fn native_command(transport: Transport) -> Option<&'static str> {
     }
 }
 
-fn with_transport(mut spec: AgentSpec, args: &Args) -> AgentSpec {
+fn with_transport(mut spec: AgentSpec, args: &Args, config: &Config) -> AgentSpec {
     let Some(transport) = args
         .transport
         .filter(|transport| *transport != spec.transport)
     else {
         return spec;
     };
+    if let Some(declared) = agent_spec_for(args.kind, config, transport) {
+        return declared;
+    }
     spec.transport = transport;
     if args.command.is_none()
         && let Some(program) = native_command(transport)
@@ -310,7 +331,7 @@ async fn run() -> Result<(), BoxError> {
     let paths = Paths::resolve();
     std::fs::create_dir_all(&paths.data_dir)?;
     let config = Config::load(&paths.config_file()).unwrap_or_default();
-    let spec = with_transport(agent_spec(args.kind, &config), &args);
+    let spec = with_transport(agent_spec(args.kind, &config), &args, &config);
     if let Some(command) = &args.command {
         return startup_probe(&args, spec, &paths, command).await;
     }
@@ -349,18 +370,21 @@ async fn run() -> Result<(), BoxError> {
         allowed_files: files.iter().map(|file| file.path.clone()).collect(),
         cwd: worktree.clone(),
         model,
-        permission_mode: config
-            .agents
-            .get(&args.kind)
-            .map(|agent| agent.permission_mode())
-            .unwrap_or_default(),
+        permission_mode: args.mode.unwrap_or_else(|| {
+            config
+                .agents
+                .get(&args.kind)
+                .map(|agent| agent.permission_mode())
+                .unwrap_or_default()
+        }),
     };
+    let prompt = args.prompt.clone().unwrap_or(rendered.text);
 
     let outcome = match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {
         Ok((session, handle)) => {
             println!("session: {} (acp {})", session.id, session.agent_session_id);
             let before = writer.transactions();
-            let driven = drive(&handle, rendered.text, args.cancel_after).await;
+            let driven = drive(&handle, prompt, args.cancel_after).await;
             writer.flush().await;
             let transactions = writer.transactions() - before;
             handle.shutdown().await;
