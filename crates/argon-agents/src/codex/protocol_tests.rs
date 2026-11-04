@@ -1370,13 +1370,35 @@ fn thread_params_follow_permission_mode() {
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         assert_eq!(
             thread_params(cwd, None, mode),
-            json!({"cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only"})
+            json!({"cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only", "config": {"web_search": "disabled"}})
         );
     }
     assert_eq!(
         thread_params(cwd, Some("gpt-5"), PermissionMode::FullAccess),
         json!({"cwd": "repo", "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "workspace-write", "model": "gpt-5"})
     );
+}
+
+#[test]
+fn restricted_modes_disable_web_search_on_start_and_resume() {
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        for params in [
+            thread_params(Path::new("repo"), None, mode),
+            resume_params("th_1", Path::new("repo"), None, mode),
+        ] {
+            assert_eq!(
+                params["config"]["web_search"],
+                json!("disabled"),
+                "{mode:?}"
+            );
+        }
+    }
+    for params in [
+        thread_params(Path::new("repo"), None, PermissionMode::FullAccess),
+        resume_params("th_1", Path::new("repo"), None, PermissionMode::FullAccess),
+    ] {
+        assert!(params.get("config").is_none());
+    }
 }
 
 #[test]
@@ -1394,7 +1416,7 @@ fn resume_params_add_thread_id_and_skip_turn_history() {
             Some("gpt-5"),
             PermissionMode::Supervised
         ),
-        json!({"threadId": "th_1", "excludeTurns": true, "cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5"})
+        json!({"threadId": "th_1", "excludeTurns": true, "cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5", "config": {"web_search": "disabled"}})
     );
 }
 
@@ -1434,10 +1456,18 @@ fn untrusted_projects_go_into_the_thread_config() {
     );
     assert_eq!(
         params["config"],
-        json!({"projects": {
+        json!({"web_search": "disabled", "projects": {
             "C:\\Work\\Repo": {"trust_level": "untrusted"},
             "c:\\work\\repo": {"trust_level": "untrusted"},
         }})
+    );
+    let full = with_untrusted_projects(
+        thread_params(Path::new("repo"), None, PermissionMode::FullAccess),
+        &["repo".to_owned()],
+    );
+    assert_eq!(
+        full["config"],
+        json!({"projects": {"repo": {"trust_level": "untrusted"}}})
     );
     assert_eq!(params["sandbox"], json!("read-only"));
 }

@@ -36,6 +36,7 @@ const DYNAMIC_TOOL_METHOD: &str = "item/tool/call";
 const STDIN_TITLE: &str = "Escrita no stdin de um processo";
 const COMMAND_KIND: &str = "command";
 const READ_ONLY_ACTIONS: [&str; 4] = ["read", "listFiles", "list_files", "search"];
+const WEB_SEARCH_DISABLED: &str = "disabled";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CodexEvent {
@@ -345,6 +346,7 @@ struct Policy {
     approval: &'static str,
     sandbox: &'static str,
     sandbox_type: &'static str,
+    web_search: Option<&'static str>,
 }
 
 fn policy(mode: PermissionMode) -> Policy {
@@ -353,11 +355,13 @@ fn policy(mode: PermissionMode) -> Policy {
             approval: "untrusted",
             sandbox: "read-only",
             sandbox_type: "readOnly",
+            web_search: Some(WEB_SEARCH_DISABLED),
         },
         PermissionMode::FullAccess => Policy {
             approval: "never",
             sandbox: "workspace-write",
             sandbox_type: "workspaceWrite",
+            web_search: None,
         },
     }
 }
@@ -371,6 +375,9 @@ pub(crate) fn thread_params(cwd: &Path, model: Option<&str>, mode: PermissionMod
         "sandbox": policy.sandbox,
     });
     set_optional(&mut params, "model", model);
+    if let Some(web_search) = policy.web_search {
+        params["config"]["web_search"] = json!(web_search);
+    }
     params
 }
 
@@ -387,7 +394,7 @@ pub(crate) fn with_untrusted_projects(mut params: Value, roots: &[String]) -> Va
         .iter()
         .map(|root| (root.clone(), json!({"trust_level": "untrusted"})))
         .collect();
-    params["config"] = json!({"projects": projects});
+    params["config"]["projects"] = json!(projects);
     params
 }
 
