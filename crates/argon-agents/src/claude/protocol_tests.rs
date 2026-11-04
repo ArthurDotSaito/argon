@@ -327,7 +327,8 @@ fn can_use_tool_becomes_permission_with_ask() {
     assert_eq!(ask.kind, "edit");
     assert_eq!(ask.title, "Edit src/a.rs");
     assert_eq!(ask.paths, vec!["src/a.rs".to_owned()]);
-    assert_eq!(ask.options, native_options());
+    assert_eq!(ask.options, native_options_for("edit"));
+    assert!(ask.options.iter().any(|option| option.id == "allow_always"));
 }
 
 #[test]
@@ -345,6 +346,7 @@ fn can_use_tool_without_tool_use_id_has_no_call_id() {
     assert_eq!(ask.kind, "execute");
     assert_eq!(ask.title, "Bash: ls");
     assert!(ask.paths.is_empty());
+    assert!(ask.options.iter().all(|option| option.id != "allow_always"));
 }
 
 #[test]

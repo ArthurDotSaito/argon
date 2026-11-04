@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use argon_core::PermissionMode;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -13,9 +14,11 @@ use super::protocol::{ClaudeLine, allow, deny, interrupt, parse_line, user_messa
 use crate::process::KillOnDropChild;
 use crate::registry::AgentSpec;
 use crate::session::{
-    AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk, PermissionReply,
-    Ready, Result, SessionError, Shared, StderrTail, start_agent, terminate,
+    AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk,
+    PermissionDecision, PermissionReply, Ready, Result, SessionError, Shared, StderrTail,
+    decide_permission, session_grant_applies, start_agent, terminate, with_stderr,
 };
+use crate::util::{Resolved, resolve_command};
 
 #[path = "driver_turns.rs"]
 mod turns;
@@ -23,7 +26,7 @@ mod turns;
 use turns::{Close, Turns};
 
 const DEFAULT_MODEL: &str = "default";
-const STREAM_ARGS: [&str; 8] = [
+const STREAM_ARGS: [&str; 11] = [
     "-p",
     "--input-format",
     "stream-json",
@@ -32,6 +35,9 @@ const STREAM_ARGS: [&str; 8] = [
     "--verbose",
     "--permission-prompt-tool",
     "stdio",
+    "--setting-sources",
+    "user",
+    "--strict-mcp-config",
 ];
 const SESSION_ID_FLAG: &str = "--session-id";
 const RESUME_FLAG: &str = "--resume";
@@ -44,11 +50,11 @@ const DENIED: &str = "Negado no Argon.";
 const CANCELLED: &str = "Cancelado no Argon.";
 const END_TURN: &str = "end_turn";
 const CANCELLED_REASON: &str = "cancelled";
-const UNEXPECTED_EXIT: &str = "o Claude encerrou inesperadamente";
+const SESSION_CLOSED: &str = "a sessão do Claude foi encerrada";
 const BUSY_TURN: &str = "já existe um turno em andamento";
 
 type Answer = (String, PermissionAnswer);
-type Flow = std::result::Result<(), String>;
+type Tagged = (u64, Output);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Start<'a> {
@@ -90,12 +96,32 @@ fn new_uuid() -> Result<String> {
     Ok(format_uuid(bytes))
 }
 
+fn auto_allowed(
+    ask: &PermissionAsk,
+    tool_name: &str,
+    cwd: &Path,
+    mode: PermissionMode,
+    always: &HashSet<String>,
+) -> bool {
+    match decide_permission(ask, cwd, mode) {
+        PermissionDecision::Allow { .. } => true,
+        PermissionDecision::Ask(_) => always.contains(tool_name) && session_grant_applies(ask, cwd),
+    }
+}
+
+fn exit_message(code: Option<i32>) -> String {
+    match code {
+        Some(code) => format!("processo do Claude saiu (código {code})"),
+        None => "processo do Claude saiu".to_owned(),
+    }
+}
+
 fn reply_to(answers: &mpsc::UnboundedSender<Answer>, request_id: String) -> PermissionReply {
     let answers = answers.clone();
     Box::new(move |answer| {
         answers
             .send((request_id, answer))
-            .map_err(|_| UNEXPECTED_EXIT.to_owned())
+            .map_err(|_| SESSION_CLOSED.to_owned())
     })
 }
 
@@ -106,10 +132,51 @@ async fn sleep_until(deadline: Option<Instant>) {
     }
 }
 
+enum Output {
+    Line(String),
+    Closed,
+    WriteFailed(String),
+}
+
+async fn write_line(stdin: &mut ChildStdin, line: &str) -> std::io::Result<()> {
+    stdin.write_all(line.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    stdin.flush().await
+}
+
+fn spawn_writer(
+    mut stdin: ChildStdin,
+    generation: u64,
+    outputs: mpsc::UnboundedSender<Tagged>,
+) -> mpsc::UnboundedSender<String> {
+    let (outbox, mut pending) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        while let Some(line) = pending.recv().await {
+            if let Err(error) = write_line(&mut stdin, &line).await {
+                let _ = outputs.send((generation, Output::WriteFailed(error.to_string())));
+                return;
+            }
+        }
+    });
+    outbox
+}
+
+fn spawn_reader(stdout: ChildStdout, generation: u64, outputs: mpsc::UnboundedSender<Tagged>) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if outputs.send((generation, Output::Line(line))).is_err() {
+                return;
+            }
+        }
+        let _ = outputs.send((generation, Output::Closed));
+    });
+}
+
 struct Claude {
     child: KillOnDropChild,
-    stdin: Option<ChildStdin>,
-    lines: Lines<BufReader<ChildStdout>>,
+    outbox: mpsc::UnboundedSender<String>,
+    generation: u64,
 }
 
 impl Claude {
@@ -118,37 +185,29 @@ impl Claude {
         cwd: &Path,
         args: Vec<String>,
         tail: Arc<StderrTail>,
+        generation: u64,
+        outputs: &mpsc::UnboundedSender<Tagged>,
     ) -> Result<Claude> {
         let spec = AgentSpec {
             args,
             ..spec.clone()
         };
         let (child, stdin, stdout) = start_agent(&spec, cwd, tail)?;
+        spawn_reader(stdout, generation, outputs.clone());
         Ok(Claude {
             child,
-            stdin: Some(stdin),
-            lines: BufReader::new(stdout).lines(),
+            outbox: spawn_writer(stdin, generation, outputs.clone()),
+            generation,
         })
     }
 
-    async fn send(&mut self, line: &str) -> Flow {
-        let stdin = self
-            .stdin
-            .as_mut()
-            .ok_or_else(|| UNEXPECTED_EXIT.to_owned())?;
-        let written = async {
-            stdin.write_all(line.as_bytes()).await?;
-            stdin.write_all(b"\n").await?;
-            stdin.flush().await
-        };
-        written
-            .await
-            .map_err(|error| format!("{UNEXPECTED_EXIT}: {error}"))
-    }
-
-    async fn shutdown(&mut self) {
-        self.stdin = None;
-        terminate(&mut self.child).await;
+    async fn stop(self) -> Option<i32> {
+        let Claude {
+            mut child, outbox, ..
+        } = self;
+        drop(outbox);
+        terminate(&mut child).await;
+        child.wait().await.ok().and_then(|status| status.code())
     }
 }
 
@@ -159,7 +218,7 @@ struct Ask {
 
 enum Wake {
     Command(Option<Command>),
-    Line(std::io::Result<Option<String>>),
+    Output(Tagged),
     Answer(Answer),
     Awaiting(bool),
     TurnTimeout,
@@ -172,9 +231,13 @@ struct Session {
     cwd: PathBuf,
     tail: Arc<StderrTail>,
     id: String,
-    has_history: bool,
+    transcript: bool,
+    launch_model: String,
     model: String,
-    claude: Claude,
+    mode: PermissionMode,
+    claude: Option<Claude>,
+    generation: u64,
+    outputs: mpsc::UnboundedSender<Tagged>,
     turns: Turns,
     asks: HashMap<String, Ask>,
     always: HashSet<String>,
@@ -186,21 +249,23 @@ struct Session {
     running_since: Option<Instant>,
 }
 
+struct Inbox {
+    commands: mpsc::UnboundedReceiver<Command>,
+    outputs: mpsc::UnboundedReceiver<Tagged>,
+    answers: mpsc::UnboundedReceiver<Answer>,
+}
+
 impl Session {
-    async fn drive(
-        &mut self,
-        mut commands: mpsc::UnboundedReceiver<Command>,
-        mut answered: mpsc::UnboundedReceiver<Answer>,
-    ) -> std::result::Result<bool, String> {
+    async fn drive(&mut self, mut inbox: Inbox) -> std::result::Result<bool, String> {
         let mut awaiting = self.shared.awaiting();
         loop {
             let deadline = self.running_since.map(|since| since + self.remaining);
             let cancel_deadline = self.cancel_deadline;
             let in_turn = self.turns.in_turn();
             let wake = tokio::select! {
-                command = commands.recv() => Wake::Command(command),
-                line = self.claude.lines.next_line() => Wake::Line(line),
-                Some(answer) = answered.recv() => Wake::Answer(answer),
+                command = inbox.commands.recv() => Wake::Command(command),
+                Some(output) = inbox.outputs.recv() => Wake::Output(output),
+                Some(answer) = inbox.answers.recv() => Wake::Answer(answer),
                 changed = awaiting.changed(), if in_turn => Wake::Awaiting(changed.is_ok()),
                 () = sleep_until(deadline) => Wake::TurnTimeout,
                 () = sleep_until(cancel_deadline) => Wake::CancelExpired,
@@ -209,19 +274,23 @@ impl Session {
                 Wake::Command(None | Some(Command::Shutdown)) => return Ok(true),
                 Wake::Command(Some(Command::Prompt(text))) => {
                     let paused = *awaiting.borrow();
-                    self.prompt(text, paused).await?;
+                    self.prompt(text, paused);
                 }
-                Wake::Command(Some(Command::Cancel)) => self.cancel().await?,
+                Wake::Command(Some(Command::Cancel)) => self.cancel(),
                 Wake::Command(Some(Command::SetModel { model, reply })) => {
-                    self.change_model(model, reply).await?;
+                    self.change_model(model, reply).await;
                 }
                 Wake::Command(Some(Command::SetPermissionMode { mode, reply })) => {
+                    self.mode = mode;
+                    self.always.clear();
                     self.shared.set_permission_mode(mode);
                     let _ = reply.send(Ok(()));
                 }
-                Wake::Line(Ok(Some(line))) => self.on_line(&line).await?,
-                Wake::Line(_) => return Err(UNEXPECTED_EXIT.to_owned()),
-                Wake::Answer(answer) => self.on_answer(answer).await?,
+                Wake::Output((generation, output)) if self.is_current(generation) => {
+                    self.on_output(output).await?;
+                }
+                Wake::Output(_) => {}
+                Wake::Answer(answer) => self.on_answer(answer),
                 Wake::Awaiting(true) => self.on_awaiting(*awaiting.borrow_and_update()),
                 Wake::Awaiting(false) => {}
                 Wake::TurnTimeout => {
@@ -231,124 +300,166 @@ impl Session {
                     ));
                     return Ok(true);
                 }
-                Wake::CancelExpired => {
-                    let close = self.turns.expire();
-                    self.close_turn(close).await;
-                }
+                Wake::CancelExpired => self.expire_cancel().await,
             }
         }
     }
 
-    async fn prompt(&mut self, text: String, paused: bool) -> Flow {
-        if self.turns.in_turn() {
-            self.shared.emit(AgentEvent::Error(BUSY_TURN.to_owned()));
+    fn is_current(&self, generation: u64) -> bool {
+        self.claude
+            .as_ref()
+            .is_some_and(|claude| claude.generation == generation)
+    }
+
+    fn send(&self, line: String) {
+        if let Some(claude) = &self.claude {
+            let _ = claude.outbox.send(line);
+        }
+    }
+
+    fn ensure_process(&mut self) -> Result<()> {
+        if self.claude.is_some() {
             return Ok(());
         }
-        self.shared.begin_turn(&text);
-        self.turns.start();
-        self.has_history = true;
-        self.remaining = self.turn_timeout;
-        self.running_since = (!paused).then(Instant::now);
-        self.claude.send(&user_message(&text)).await
-    }
-
-    async fn cancel(&mut self) -> Flow {
-        if self.turns.cancel() {
-            self.cancel_deadline = Some(Instant::now() + CANCEL_GRACE);
-            self.interrupts += 1;
-            let request_id = format!("argon-interrupt-{}", self.interrupts);
-            self.claude.send(&interrupt(&request_id)).await?;
-        }
-        self.shared.cancel_pending();
-        Ok(())
-    }
-
-    async fn change_model(&mut self, model: String, reply: oneshot::Sender<Result<()>>) -> Flow {
-        if self.turns.in_turn() {
-            let _ = reply.send(Err(SessionError::Busy));
-            return Ok(());
-        }
-        self.claude.shutdown().await;
-        match self.respawn(&model) {
-            Ok(()) => {
-                self.shared.set_model(&model);
-                self.model = model;
-                self.shared.release();
-                let _ = reply.send(Ok(()));
-                Ok(())
-            }
-            Err(error) => {
-                self.shared.release();
-                let reason = error.to_string();
-                let message = format!("não consegui reiniciar o Claude com `{model}`: {reason}");
-                let _ = reply.send(Err(SessionError::SetModel { model, reason }));
-                Err(message)
-            }
-        }
-    }
-
-    fn respawn(&mut self, model: &str) -> Result<()> {
-        let start = if self.has_history {
+        let start = if self.transcript {
             Start::Resume(&self.id)
         } else {
             Start::New(&self.id)
         };
-        let args = launch_args(&self.spec.args, start, model);
-        self.claude = Claude::spawn(&self.spec, &self.cwd, args, Arc::clone(&self.tail))?;
-        self.turns = Turns::default();
-        self.asks.clear();
-        self.cancel_deadline = None;
+        let args = launch_args(&self.spec.args, start, &self.launch_model);
+        self.generation += 1;
+        self.claude = Some(Claude::spawn(
+            &self.spec,
+            &self.cwd,
+            args,
+            Arc::clone(&self.tail),
+            self.generation,
+            &self.outputs,
+        )?);
+        self.transcript = true;
         Ok(())
     }
 
-    async fn on_line(&mut self, line: &str) -> Flow {
-        match parse_line(line) {
-            ClaudeLine::Init { model, .. } => {
-                if !model.is_empty() && model != self.model {
-                    self.shared.set_model(&model);
-                    self.model = model;
-                }
+    async fn stop_process(&mut self) -> Option<i32> {
+        self.asks.clear();
+        match self.claude.take() {
+            Some(claude) => claude.stop().await,
+            None => None,
+        }
+    }
+
+    fn prompt(&mut self, text: String, paused: bool) {
+        if self.turns.in_turn() {
+            self.shared.emit(AgentEvent::Error(BUSY_TURN.to_owned()));
+            return;
+        }
+        self.shared.begin_turn(&text);
+        if let Err(error) = self.ensure_process() {
+            let message = format!("não consegui iniciar o Claude: {error}");
+            self.shared.fail(with_stderr(message, &self.shared));
+            return;
+        }
+        self.turns.start();
+        self.remaining = self.turn_timeout;
+        self.running_since = (!paused).then(Instant::now);
+        self.send(user_message(&text));
+    }
+
+    fn cancel(&mut self) {
+        if self.turns.cancel() {
+            self.cancel_deadline = Some(Instant::now() + CANCEL_GRACE);
+            self.interrupts += 1;
+            self.send(interrupt(&format!("argon-interrupt-{}", self.interrupts)));
+        }
+        self.shared.cancel_pending();
+    }
+
+    async fn expire_cancel(&mut self) {
+        self.cancel_deadline = None;
+        let close = self.turns.expire();
+        if close.is_some() {
+            self.stop_process().await;
+        }
+        self.close_turn(close).await;
+    }
+
+    async fn change_model(&mut self, model: String, reply: oneshot::Sender<Result<()>>) {
+        if self.turns.in_turn() {
+            let _ = reply.send(Err(SessionError::Busy));
+            return;
+        }
+        self.stop_process().await;
+        self.launch_model = model.clone();
+        self.shared.set_model(&model);
+        self.model = model;
+        self.shared.release();
+        let _ = reply.send(Ok(()));
+    }
+
+    async fn on_output(&mut self, output: Output) -> std::result::Result<(), String> {
+        match output {
+            Output::Line(line) => {
+                self.on_line(&line).await;
+                Ok(())
             }
+            Output::Closed => Err(exit_message(self.stop_process().await)),
+            Output::WriteFailed(error) => {
+                let message = exit_message(self.stop_process().await);
+                Err(format!("{message}; falha ao escrever no stdin: {error}"))
+            }
+        }
+    }
+
+    async fn on_line(&mut self, line: &str) {
+        match parse_line(line) {
+            ClaudeLine::Init { session_id, model } => self.on_init(session_id, model),
             ClaudeLine::TurnEnd { stop_reason, error } => {
                 let close = self.turns.finish(&stop_reason, error);
                 self.close_turn(close).await;
             }
-            ClaudeLine::Permission { request_id, .. } if self.turns.is_stale() => {
-                return self.claude.send(&deny(&request_id, CANCELLED)).await;
+            ClaudeLine::Permission { request_id, .. } if self.turns.is_cancelled() => {
+                self.send(deny(&request_id, CANCELLED));
             }
             ClaudeLine::Permission {
                 request_id,
                 tool_name,
                 ask,
                 input,
-            } => return self.ask(request_id, tool_name, ask, input).await,
-            ClaudeLine::Events(events) if !self.turns.is_stale() => self.shared.emit_all(events),
+            } => self.ask(request_id, tool_name, ask, input),
+            ClaudeLine::Events(events) => self.shared.emit_all(events),
             ClaudeLine::ApiError(text) => self.turns.api_error(text),
-            ClaudeLine::Events(_) | ClaudeLine::Ignore => {}
+            ClaudeLine::Ignore => {}
         }
-        Ok(())
     }
 
-    async fn ask(
-        &mut self,
-        request_id: String,
-        tool_name: String,
-        ask: PermissionAsk,
-        input: Value,
-    ) -> Flow {
-        if self.always.contains(&tool_name) {
-            return self.claude.send(&allow(&request_id, &input)).await;
+    fn on_init(&mut self, session_id: String, model: String) {
+        if !session_id.is_empty() && session_id != self.id {
+            tracing::warn!(
+                expected = %self.id,
+                reported = %session_id,
+                "claude reported an unexpected session id"
+            );
+        }
+        if !model.is_empty() && model != self.model {
+            self.shared.set_model(&model);
+            self.model = model;
+        }
+    }
+
+    fn ask(&mut self, request_id: String, tool_name: String, ask: PermissionAsk, input: Value) {
+        if auto_allowed(&ask, &tool_name, &self.cwd, self.mode, &self.always) {
+            self.send(allow(&request_id, &input));
+            return;
         }
         self.asks
             .insert(request_id.clone(), Ask { tool_name, input });
         self.shared
             .on_permission(ask, reply_to(&self.answers, request_id));
-        Ok(())
     }
 
-    async fn on_answer(&mut self, (request_id, answer): Answer) -> Flow {
+    fn on_answer(&mut self, (request_id, answer): Answer) {
         let Some(ask) = self.asks.remove(&request_id) else {
-            return Ok(());
+            return;
         };
         let line = match answer {
             PermissionAnswer::Selected(option) if option == ALLOW_ALWAYS => {
@@ -362,7 +473,7 @@ impl Session {
             PermissionAnswer::Selected(_) => deny(&request_id, DENIED),
             PermissionAnswer::Cancelled => deny(&request_id, CANCELLED),
         };
-        self.claude.send(&line).await
+        self.send(line);
     }
 
     fn on_awaiting(&mut self, awaiting: bool) {
@@ -389,18 +500,26 @@ impl Session {
     }
 }
 
-fn open(run: &DriverRun, answers: mpsc::UnboundedSender<Answer>) -> Result<Session> {
+fn check_command(spec: &AgentSpec) -> Result<()> {
+    match resolve_command(&spec.command) {
+        Resolved::Path(_) => Ok(()),
+        Resolved::Missing => Err(SessionError::CommandNotFound(
+            spec.command.display().to_string(),
+        )),
+        Resolved::Failed(message) => Err(SessionError::Acp(message)),
+    }
+}
+
+fn open(
+    run: &DriverRun,
+    answers: mpsc::UnboundedSender<Answer>,
+    outputs: mpsc::UnboundedSender<Tagged>,
+) -> Result<Session> {
+    check_command(&run.spec)?;
     let id = match &run.load {
         Some(id) => id.clone(),
         None => new_uuid()?,
     };
-    let start = if run.load.is_some() {
-        Start::Resume(&id)
-    } else {
-        Start::New(&id)
-    };
-    let args = launch_args(&run.spec.args, start, &run.ctx.model);
-    let claude = Claude::spawn(&run.spec, &run.ctx.cwd, args, Arc::clone(&run.stderr))?;
     let model = if run.ctx.model.is_empty() {
         DEFAULT_MODEL.to_owned()
     } else {
@@ -411,10 +530,14 @@ fn open(run: &DriverRun, answers: mpsc::UnboundedSender<Answer>) -> Result<Sessi
         spec: run.spec.clone(),
         cwd: run.ctx.cwd.clone(),
         tail: Arc::clone(&run.stderr),
-        has_history: run.load.is_some(),
         id,
+        transcript: run.load.is_some(),
+        launch_model: model.clone(),
         model,
-        claude,
+        mode: run.ctx.permission_mode,
+        claude: None,
+        generation: 0,
+        outputs,
         turns: Turns::default(),
         asks: HashMap::new(),
         always: HashSet::new(),
@@ -430,7 +553,8 @@ fn open(run: &DriverRun, answers: mpsc::UnboundedSender<Answer>) -> Result<Sessi
 pub(crate) fn run(run: DriverRun) -> DriverFuture {
     Box::pin(async move {
         let (answers, answered) = mpsc::unbounded_channel();
-        let mut session = match open(&run, answers) {
+        let (outputs, output) = mpsc::unbounded_channel();
+        let mut session = match open(&run, answers, outputs) {
             Ok(session) => session,
             Err(error) => {
                 let _ = run.ready.send(Err(error));
@@ -444,11 +568,15 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             warnings: Vec::new(),
         };
         if run.ready.send(Ok(ready)).is_err() {
-            session.claude.shutdown().await;
             return Ok(false);
         }
-        let outcome = session.drive(run.commands, answered).await;
-        session.claude.shutdown().await;
+        let inbox = Inbox {
+            commands: run.commands,
+            outputs: output,
+            answers: answered,
+        };
+        let outcome = session.drive(inbox).await;
+        session.stop_process().await;
         outcome
     })
 }

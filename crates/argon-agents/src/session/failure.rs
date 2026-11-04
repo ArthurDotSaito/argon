@@ -41,7 +41,7 @@ pub(super) fn append_stderr(message: String, tail: &[String]) -> String {
     }
 }
 
-pub(super) fn with_stderr(message: String, shared: &Shared) -> String {
+pub(crate) fn with_stderr(message: String, shared: &Shared) -> String {
     append_stderr(message, &shared.stderr_tail(STDERR_LINES))
 }
 

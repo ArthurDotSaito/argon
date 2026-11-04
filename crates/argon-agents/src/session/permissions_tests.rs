@@ -409,18 +409,94 @@ fn acp_ask_falls_back_to_known_kind_then_other() {
     assert_eq!((ask.title.as_str(), ask.kind.as_str()), ("other", "other"));
 }
 
+fn option_triples(options: &[PermissionOption]) -> Vec<(&str, &str, &str)> {
+    options
+        .iter()
+        .map(|o| (o.id.as_str(), o.kind.as_str(), o.label.as_str()))
+        .collect()
+}
+
+fn native_ask(kind: &str, paths: &[String]) -> PermissionAsk {
+    PermissionAsk {
+        tool_call_id: None,
+        kind: kind.to_owned(),
+        title: "Tool".to_owned(),
+        paths: paths.to_vec(),
+        options: native_options_for(kind),
+    }
+}
+
 #[test]
-fn native_options_are_allow_once_allow_always_reject_once() {
-    let options = native_options();
-    assert_eq!(
-        options
-            .iter()
-            .map(|o| (o.id.as_str(), o.kind.as_str(), o.label.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            ("allow_once", "allow_once", "Permitir"),
-            ("allow_always", "allow_always", "Permitir nesta sessão"),
-            ("reject_once", "reject_once", "Negar")
-        ]
-    );
+fn native_options_offer_session_grant_for_local_kinds() {
+    for kind in ["read", "search", "edit"] {
+        assert_eq!(
+            option_triples(&native_options_for(kind)),
+            [
+                ("allow_once", "allow_once", "Permitir"),
+                ("allow_always", "allow_always", "Permitir nesta sessão"),
+                ("reject_once", "reject_once", "Negar")
+            ],
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn native_options_never_offer_session_grant_for_risky_kinds() {
+    for kind in ["execute", "fetch", "other"] {
+        assert_eq!(
+            option_triples(&native_options_for(kind)),
+            [
+                ("allow_once", "allow_once", "Permitir"),
+                ("reject_once", "reject_once", "Negar")
+            ],
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn paths_contained_needs_every_path_inside_the_worktree() {
+    let cwd = cwd();
+    assert!(paths_contained(
+        &native_ask("edit", &[inside("src/a.rs")]),
+        &cwd
+    ));
+    assert!(paths_contained(
+        &native_ask("edit", &["src/a.rs".to_owned(), inside("b.rs")]),
+        &cwd
+    ));
+    assert!(!paths_contained(&native_ask("edit", &[]), &cwd));
+    assert!(!paths_contained(
+        &native_ask("edit", &[inside("a.rs"), outside().to_owned()]),
+        &cwd
+    ));
+    for unresolvable in ["~/x", "$HOME/x", "%USERPROFILE%/x", "src/../../x"] {
+        assert!(
+            !paths_contained(&native_ask("edit", &[unresolvable.to_owned()]), &cwd),
+            "{unresolvable}"
+        );
+    }
+}
+
+#[test]
+fn session_grant_applies_only_to_contained_local_kinds() {
+    let cwd = cwd();
+    let local = [inside("src/a.rs")];
+    for kind in ["read", "search", "edit"] {
+        assert!(
+            session_grant_applies(&native_ask(kind, &local), &cwd),
+            "{kind}"
+        );
+    }
+    for kind in ["execute", "fetch", "other"] {
+        assert!(
+            !session_grant_applies(&native_ask(kind, &local), &cwd),
+            "{kind}"
+        );
+    }
+    assert!(!session_grant_applies(
+        &native_ask("edit", &[outside().to_owned()]),
+        &cwd
+    ));
 }

@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::session::{AgentEvent, PermissionAsk, ToolStatus, input_paths, native_options};
+use crate::session::{AgentEvent, PermissionAsk, ToolStatus, input_paths, native_options_for};
 use crate::util::json_text;
 
 const OUTPUT_LIMIT: usize = 8000;
@@ -273,7 +273,7 @@ fn parse_control_request(value: &Value) -> ClaudeLine {
             kind: kind_for(&tool_name).to_owned(),
             title: tool_title(&tool_name, &input),
             paths: input_paths(&input),
-            options: native_options(),
+            options: native_options_for(kind_for(&tool_name)),
         },
         tool_name,
         input,

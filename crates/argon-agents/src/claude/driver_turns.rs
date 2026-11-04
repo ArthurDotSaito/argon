@@ -16,7 +16,6 @@ struct Turn {
 #[derive(Debug, Default)]
 pub(super) struct Turns {
     current: Option<Turn>,
-    stale: usize,
 }
 
 impl Turns {
@@ -24,8 +23,8 @@ impl Turns {
         self.current.is_some()
     }
 
-    pub fn is_stale(&self) -> bool {
-        self.stale > 0
+    pub fn is_cancelled(&self) -> bool {
+        self.current.as_ref().is_some_and(|turn| turn.cancelled)
     }
 
     pub fn start(&mut self) {
@@ -43,19 +42,12 @@ impl Turns {
     }
 
     pub fn api_error(&mut self, text: String) {
-        if self.is_stale() {
-            return;
-        }
         if let Some(turn) = &mut self.current {
             turn.api_error = Some(text);
         }
     }
 
     pub fn finish(&mut self, stop_reason: &str, error: Option<String>) -> Option<Close> {
-        if self.is_stale() {
-            self.stale -= 1;
-            return None;
-        }
         let turn = self.current.take()?;
         Some(if turn.cancelled {
             Close::Cancelled
@@ -71,11 +63,10 @@ impl Turns {
     }
 
     pub fn expire(&mut self) -> Option<Close> {
-        if !self.current.as_ref().is_some_and(|turn| turn.cancelled) {
+        if !self.is_cancelled() {
             return None;
         }
         self.current = None;
-        self.stale += 1;
         Some(Close::Cancelled)
     }
 }

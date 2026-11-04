@@ -9,6 +9,8 @@ use crate::util::json_text;
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
 const ALLOW_ONCE: &str = "allow_once";
+const ALLOW_ALWAYS: &str = "allow_always";
+const REJECT_ONCE: &str = "reject_once";
 const PATH_KEYS: [&str; 6] = [
     "path",
     "file_path",
@@ -209,13 +211,18 @@ pub(crate) fn acp_ask(request: &Value, known_kind: Option<&str>) -> PermissionAs
     }
 }
 
-pub(crate) fn native_options() -> Vec<PermissionOption> {
+fn grantable_for_session(kind: &str) -> bool {
+    LOCAL_EDIT_KINDS.contains(&kind)
+}
+
+pub(crate) fn native_options_for(kind: &str) -> Vec<PermissionOption> {
     [
-        ("allow_once", "Permitir"),
-        ("allow_always", "Permitir nesta sessão"),
-        ("reject_once", "Negar"),
+        (ALLOW_ONCE, "Permitir"),
+        (ALLOW_ALWAYS, "Permitir nesta sessão"),
+        (REJECT_ONCE, "Negar"),
     ]
     .into_iter()
+    .filter(|(id, _)| *id != ALLOW_ALWAYS || grantable_for_session(kind))
     .map(|(id, label)| PermissionOption {
         id: id.to_owned(),
         label: label.to_owned(),
@@ -224,10 +231,16 @@ pub(crate) fn native_options() -> Vec<PermissionOption> {
     .collect()
 }
 
+pub(crate) fn paths_contained(ask: &PermissionAsk, cwd: &Path) -> bool {
+    !ask.paths.is_empty() && ask.paths.iter().all(|path| is_inside(cwd, path))
+}
+
+pub(crate) fn session_grant_applies(ask: &PermissionAsk, cwd: &Path) -> bool {
+    grantable_for_session(&ask.kind) && paths_contained(ask, cwd)
+}
+
 fn is_local(ask: &PermissionAsk, cwd: &Path, kinds: &[&str]) -> bool {
-    kinds.contains(&ask.kind.as_str())
-        && !ask.paths.is_empty()
-        && ask.paths.iter().all(|path| is_inside(cwd, path))
+    kinds.contains(&ask.kind.as_str()) && paths_contained(ask, cwd)
 }
 
 fn auto_allowed(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> bool {
