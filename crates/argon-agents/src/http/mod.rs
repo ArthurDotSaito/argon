@@ -6,6 +6,8 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures::{Stream, StreamExt, stream};
+use reqwest::header::HeaderValue;
+use reqwest::redirect::Policy;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde_json::Value;
 
@@ -23,8 +25,9 @@ pub(crate) fn basic_auth(password: &str) -> String {
 
 pub(crate) struct LocalApi {
     base: String,
-    auth: String,
+    auth: HeaderValue,
     directory: String,
+    directory_header: Option<HeaderValue>,
     client: Client,
 }
 
@@ -40,17 +43,26 @@ impl fmt::Debug for LocalApi {
 }
 
 impl LocalApi {
-    pub fn new(base: String, password: &str, directory: String) -> LocalApi {
+    pub fn new(base: String, password: &str, directory: String) -> Result<LocalApi, String> {
         let client = Client::builder()
             .no_proxy()
+            .redirect(Policy::none())
             .build()
-            .unwrap_or_else(|_| Client::new());
-        LocalApi {
+            .map_err(|error| format!("failed to build the local HTTP client: {error}"))?;
+        let mut auth = HeaderValue::from_str(&basic_auth(password))
+            .map_err(|_| "invalid local server password".to_owned())?;
+        auth.set_sensitive(true);
+        let directory_header = directory
+            .is_ascii()
+            .then(|| HeaderValue::from_str(&directory).ok())
+            .flatten();
+        Ok(LocalApi {
             base: base.trim_end_matches('/').to_owned(),
-            auth: basic_auth(password),
+            auth,
             directory,
+            directory_header,
             client,
-        }
+        })
     }
 
     pub async fn get(&self, path: &str) -> Result<Value, String> {
@@ -85,10 +97,14 @@ impl LocalApi {
 
     fn request(&self, method: Method, path: &str) -> RequestBuilder {
         let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
-        self.client
+        let request = self
+            .client
             .request(method, url)
-            .header(reqwest::header::AUTHORIZATION, &self.auth)
-            .header(DIRECTORY_HEADER, &self.directory)
+            .header(reqwest::header::AUTHORIZATION, self.auth.clone());
+        match &self.directory_header {
+            Some(directory) => request.header(DIRECTORY_HEADER, directory.clone()),
+            None => request,
+        }
     }
 }
 
@@ -113,4 +129,39 @@ async fn read_json(request: RequestBuilder) -> Result<Value, String> {
         return Ok(Value::Null);
     }
     serde_json::from_str(&body).map_err(|error| format!("invalid JSON response: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn api(directory: &str) -> LocalApi {
+        LocalApi::new(
+            "http://127.0.0.1:1/".to_owned(),
+            "secret",
+            directory.to_owned(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ascii_directories_are_sent_as_a_header() {
+        let api = api(r"C:\proj\wt");
+        assert_eq!(api.base, "http://127.0.0.1:1");
+        assert_eq!(api.directory_header.unwrap(), r"C:\proj\wt");
+    }
+
+    #[test]
+    fn non_ascii_directories_skip_the_header() {
+        assert!(api(r"C:\Usuários\wt").directory_header.is_none());
+    }
+
+    #[test]
+    fn debug_output_never_contains_the_credentials() {
+        let api = api(r"C:\proj\wt");
+        assert!(api.auth.is_sensitive());
+        let printed = format!("{api:?}");
+        assert!(!printed.contains(&basic_auth("secret")));
+        assert!(!printed.contains("secret"));
+    }
 }
