@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::session::events::{PermissionOption, map_update};
-use crate::session::permissions::{PermissionAnswer, PermissionAsk, PermissionReply};
+use crate::session::permissions::{PermissionAnswer, PermissionAsk, PermissionReply, acp_ask};
 use crate::session::{SessionError, event_stream};
 
 const NONCE: &str = "00112233445566778899aabbccddeeff";
@@ -280,6 +280,26 @@ async fn asked_permission_waits_and_replies_on_respond() {
         [PermissionAnswer::Selected("reject_once".into())]
     );
     assert_eq!(shared.subscribe().0.status, SessionStatus::Running);
+}
+
+#[tokio::test]
+async fn acp_ask_titles_are_flattened_and_bounded_before_the_card() {
+    let (shared, _writer) = shared_with(64).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let title = format!("rm\u{202E} -rf\u{200B}\n{}", "a".repeat(2100));
+    let request = json!({
+        "sessionId": "sess_fixture",
+        "toolCall": {"toolCallId": "call_1", "kind": "execute", "title": title},
+        "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+    });
+    let (reply, _answers) = recording_reply();
+    shared.on_permission(acp_ask(&request, None), reply);
+    let (snapshot, _) = shared.subscribe();
+    let shown = &snapshot.pending_permissions[0].title;
+    assert!(shown.starts_with("rm -rf aaa"), "{shown}");
+    assert!(shown.ends_with(" …"));
+    assert_eq!(shown.chars().count(), 2000 + " …".chars().count());
 }
 
 #[tokio::test]

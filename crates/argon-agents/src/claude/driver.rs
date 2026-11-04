@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use argon_core::PermissionMode;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -18,7 +18,7 @@ use crate::session::{
     PermissionDecision, PermissionReply, Ready, Result, SessionError, Shared, StderrTail,
     decide_permission, session_grant_applies, start_agent, terminate, with_stderr,
 };
-use crate::util::{Resolved, resolve_command};
+use crate::util::{Resolved, read_line_lossy, resolve_command};
 
 #[path = "driver_turns.rs"]
 mod turns;
@@ -26,7 +26,7 @@ mod turns;
 use turns::{Close, Turns};
 
 const DEFAULT_MODEL: &str = "default";
-const STREAM_ARGS: [&str; 11] = [
+const STREAM_ARGS: [&str; 13] = [
     "-p",
     "--input-format",
     "stream-json",
@@ -35,6 +35,8 @@ const STREAM_ARGS: [&str; 11] = [
     "--verbose",
     "--permission-prompt-tool",
     "stdio",
+    "--permission-mode",
+    "default",
     "--setting-sources",
     "user",
     "--strict-mcp-config",
@@ -43,6 +45,7 @@ const SESSION_ID_FLAG: &str = "--session-id";
 const RESUME_FLAG: &str = "--resume";
 const MODEL_FLAG: &str = "--model";
 const UUID_BYTES: usize = 16;
+const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const ALLOW_ONCE: &str = "allow_once";
 const ALLOW_ALWAYS: &str = "allow_always";
@@ -163,8 +166,8 @@ fn spawn_writer(
 
 fn spawn_reader(stdout: ChildStdout, generation: u64, outputs: mpsc::UnboundedSender<Tagged>) {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        let mut reader = BufReader::new(stdout);
+        while let Ok(Some(line)) = read_line_lossy(&mut reader, MAX_LINE_BYTES).await {
             if outputs.send((generation, Output::Line(line))).is_err() {
                 return;
             }

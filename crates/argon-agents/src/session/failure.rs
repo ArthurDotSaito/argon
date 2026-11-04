@@ -1,5 +1,6 @@
 use super::SessionError;
 use super::driver::Shared;
+use crate::Transport;
 use crate::defaults::agent_defaults;
 use crate::registry::{AgentSpec, login_hint};
 
@@ -23,13 +24,20 @@ pub(super) fn hint_for(spec: &AgentSpec) -> String {
         .unwrap_or_else(|| login_hint(agent_defaults(spec.kind)))
 }
 
+pub(super) fn transport_error(spec: &AgentSpec, text: String) -> SessionError {
+    match spec.transport {
+        Transport::Acp => SessionError::Acp(text),
+        _ => SessionError::Agent(text),
+    }
+}
+
 pub(super) fn classify(spec: &AgentSpec, text: String) -> SessionError {
     if needs_login(&text) {
         SessionError::NeedsLogin {
             hint: hint_for(spec),
         }
     } else {
-        SessionError::Acp(text)
+        transport_error(spec, text)
     }
 }
 
@@ -85,6 +93,31 @@ mod tests {
         assert!(matches!(
             classify(&opencode, "boom".into()),
             SessionError::Acp(text) if text == "boom"
+        ));
+    }
+
+    #[test]
+    fn native_transports_never_report_acp_errors() {
+        let mut spec = agent_spec(AgentKind::OpenCode, &Config::default());
+        for transport in [
+            Transport::ClaudeStream,
+            Transport::CodexAppServer,
+            Transport::OpencodeServe,
+        ] {
+            spec.transport = transport;
+            assert!(matches!(
+                classify(&spec, "boom".into()),
+                SessionError::Agent(text) if text == "boom"
+            ));
+            assert!(matches!(
+                classify(&spec, "401".into()),
+                SessionError::NeedsLogin { .. }
+            ));
+        }
+        spec.transport = Transport::Acp;
+        assert!(matches!(
+            transport_error(&spec, "boom".into()),
+            SessionError::Acp(_)
         ));
     }
 

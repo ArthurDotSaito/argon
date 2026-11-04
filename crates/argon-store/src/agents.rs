@@ -9,7 +9,8 @@ use crate::Store;
 use crate::error::Result;
 
 const SESSION_COLUMNS: &str = "id, host, pr_id, agent, model, template, status, worktree_path, \
-     acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason,      transport, permission_mode";
+     acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason, \
+     transport, permission_mode";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionStatus {

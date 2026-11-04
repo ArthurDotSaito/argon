@@ -30,6 +30,8 @@ pub(crate) use driver::Shared;
 pub use driver::Snapshot;
 pub use events::{AgentEvent, PendingPermission, PermissionOption, SavedFinding, ToolStatus};
 pub(crate) use failure::with_stderr;
+#[cfg(test)]
+pub(crate) use permissions::prompt_title;
 pub(crate) use permissions::{
     ALLOW_ALWAYS, ALLOW_ONCE, PermissionAnswer, PermissionReply, REJECT_ONCE, input_paths,
     native_options_for, session_grant_applies,

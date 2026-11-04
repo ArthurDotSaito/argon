@@ -32,13 +32,19 @@ O Argon abre uma sessão de revisão por agente de código instalado na máquina
 
 A configuração de agente que vem dentro do PR revisado não é confiável. Cada driver nativo a ignora:
 
-- **Claude Code**: `--setting-sources user --strict-mcp-config`, sem settings nem MCP do projeto.
-- **OpenCode**: `OPENCODE_CONFIG_DIR` apontando para uma pasta do Argon e `OPENCODE_DISABLE_PROJECT_CONFIG` ligado.
-- **Codex**: o diretório da revisão entra em cada thread com `trust_level = "untrusted"` e `approvalsReviewer: "user"`, então as aprovações sempre chegam ao Argon.
+- **Claude Code**: `--setting-sources user --strict-mcp-config --permission-mode default`, sem settings nem MCP do projeto.
+- **OpenCode**: `OPENCODE_CONFIG_DIR` apontando para uma pasta do Argon e `OPENCODE_DISABLE_PROJECT_CONFIG` ligado. O Argon mantém nessa pasta um `opencode.json` com `"permission": {"*": "ask"}`, então toda ferramenta pede permissão ao Argon.
+- **Codex**: o diretório da revisão entra em cada thread com `trust_level = "untrusted"` e `approvalsReviewer: "user"`, então as aprovações que o Codex pede chegam ao Argon.
+
+O que cada driver nativo pede ao Argon:
+
+- **Claude Code e OpenCode**: comandos, edições e buscas na web viram pedido de permissão para o Argon. No Claude Code, as regras `permissions.allow` do próprio usuário em `~/.claude/settings.json` continuam valendo nas revisões do Argon: o que elas liberam roda sem card.
+- **Codex**: em Supervisionado, o Codex roda comandos dentro da própria sandbox somente leitura, sem card. Ele só pede ao Argon as escaladas: sair da sandbox, usar a rede ou gravar arquivos. Leituras fora da worktree podem não gerar card.
+- Os títulos dos cards passam por um único filtro: caracteres de controle, bidi e de largura zero viram espaço, e o texto é cortado em 2000 caracteres (comandos, rede e outros) ou 300 (leituras, buscas e edições), sempre com " …" visível quando há corte.
 
 Modos de permissão, por agente:
 
-- **Supervisionado**: todo pedido de permissão aparece em um card para aprovar ou negar.
+- **Supervisionado**: leituras e buscas dentro da worktree da revisão são aprovadas sem card; o resto que o agente pede ao Argon aparece em um card para aprovar ou negar.
 - **Aceitar edições**: leituras, buscas e edições dentro da worktree da revisão são aprovadas automaticamente; o resto continua pedindo.
 - **Acesso total**: aprova tudo sem mostrar o card. O agente lê código de PR de terceiros, então use só se aceitar o risco. No Codex exige a sandbox do Windows pronta; sem ela a sessão abre em Supervisionado.
 

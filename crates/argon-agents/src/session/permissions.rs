@@ -24,6 +24,10 @@ const REGEX_KEY: &str = "pattern";
 const GLOB_CHARS: [char; 4] = ['*', '?', '[', '{'];
 const HOME_PREFIX: char = '~';
 const EXPANSION_CHARS: [char; 2] = ['$', '%'];
+const NARROW_TITLE_KINDS: &[&str] = &["read", "search", "edit"];
+const NARROW_TITLE_LIMIT: usize = 300;
+const WIDE_TITLE_LIMIT: usize = 2000;
+const TITLE_CUT_MARKER: &str = " …";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionPrompt {
@@ -249,6 +253,46 @@ fn auto_allowed(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> bool {
         PermissionMode::AcceptEdits => is_local(ask, cwd, LOCAL_EDIT_KINDS),
         PermissionMode::FullAccess => true,
     }
+}
+
+fn is_hidden_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{FEFF}'
+    )
+}
+
+fn title_limit(kind: &str) -> usize {
+    if NARROW_TITLE_KINDS.contains(&kind) {
+        NARROW_TITLE_LIMIT
+    } else {
+        WIDE_TITLE_LIMIT
+    }
+}
+
+pub(crate) fn prompt_title(title: &str, kind: &str) -> String {
+    let visible: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || is_hidden_format(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let flat = visible.split_whitespace().collect::<Vec<_>>().join(" ");
+    let limit = title_limit(kind);
+    if flat.chars().count() <= limit {
+        return flat;
+    }
+    let cut: String = flat.chars().take(limit).collect();
+    format!("{}{TITLE_CUT_MARKER}", cut.trim_end())
 }
 
 pub fn decide(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> PermissionDecision {

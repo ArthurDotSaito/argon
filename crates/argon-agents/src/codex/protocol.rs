@@ -368,6 +368,7 @@ pub(crate) fn resume_params(
 ) -> Value {
     let mut params = thread_params(cwd, model, mode);
     params["threadId"] = json!(thread_id);
+    params["excludeTurns"] = json!(true);
     params
 }
 

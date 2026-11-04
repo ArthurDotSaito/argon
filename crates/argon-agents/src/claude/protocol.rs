@@ -200,14 +200,22 @@ fn todo_items(input: &Value) -> Vec<String> {
 }
 
 fn tool_title(name: &str, input: &Value) -> String {
+    titled(name, input, SUBJECT_LIMIT)
+}
+
+fn ask_title(name: &str, input: &Value) -> String {
+    titled(name, input, usize::MAX)
+}
+
+fn titled(name: &str, input: &Value, limit: usize) -> String {
     let subject = SUBJECT_KEYS.iter().find_map(|key| {
         json_text(input, key)
             .filter(|text| !text.is_empty())
             .map(|text| (*key, text))
     });
     let title = match subject {
-        Some((COMMAND_KEY, text)) => format!("{name}: {}", truncate(&text, SUBJECT_LIMIT)),
-        Some((_, text)) => format!("{name} {}", truncate(&text, SUBJECT_LIMIT)),
+        Some((COMMAND_KEY, text)) => format!("{name}: {}", truncate(&text, limit)),
+        Some((_, text)) => format!("{name} {}", truncate(&text, limit)),
         None => name.to_owned(),
     };
     title.replace(LINE_BREAKS, " ")
@@ -271,7 +279,7 @@ fn parse_control_request(value: &Value) -> ClaudeLine {
         ask: PermissionAsk {
             tool_call_id: json_text(request, "tool_use_id"),
             kind: kind_for(&tool_name).to_owned(),
-            title: tool_title(&tool_name, &input),
+            title: ask_title(&tool_name, &input),
             paths: input_paths(&input),
             options: native_options_for(kind_for(&tool_name)),
         },

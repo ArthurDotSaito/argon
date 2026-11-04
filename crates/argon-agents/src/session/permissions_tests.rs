@@ -500,3 +500,58 @@ fn session_grant_applies_only_to_contained_local_kinds() {
         &cwd
     ));
 }
+
+#[test]
+fn prompt_title_replaces_hidden_and_control_chars_and_collapses_spaces() {
+    let title =
+        "Bash:  a\u{202E}b\u{200B}c\u{2028}d\u{FEFF}e\u{2066}f\u{2029}g\u{200F}h\t\r\ni\u{1b}[31mj";
+    assert_eq!(
+        prompt_title(title, "execute"),
+        "Bash: a b c d e f g h i [31mj"
+    );
+    assert_eq!(
+        prompt_title("  edit   src/lib.rs  ", "edit"),
+        "edit src/lib.rs"
+    );
+}
+
+#[test]
+fn prompt_title_keeps_short_titles_whole() {
+    let command = format!("Bash: {}", "x".repeat(1994));
+    assert_eq!(prompt_title(&command, "execute"), command);
+    let path = format!("Read {}", "p".repeat(295));
+    assert_eq!(prompt_title(&path, "read"), path);
+}
+
+#[test]
+fn prompt_title_cuts_wide_kinds_at_2000_with_a_marker() {
+    for kind in ["execute", "fetch", "other", "unknown"] {
+        let title = "y".repeat(2001);
+        assert_eq!(
+            prompt_title(&title, kind),
+            format!("{} …", "y".repeat(2000)),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn prompt_title_cuts_narrow_kinds_at_300_with_a_marker() {
+    for kind in ["read", "search", "edit"] {
+        let title = "z".repeat(301);
+        assert_eq!(
+            prompt_title(&title, kind),
+            format!("{} …", "z".repeat(300)),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn prompt_title_never_leaves_a_space_before_the_marker() {
+    let title = format!("{} tail", "w".repeat(299));
+    assert_eq!(
+        prompt_title(&title, "read"),
+        format!("{} …", "w".repeat(299))
+    );
+}

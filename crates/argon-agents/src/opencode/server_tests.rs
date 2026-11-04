@@ -101,6 +101,98 @@ fn config_dir_lives_under_the_argon_data_dir() {
     assert!(dir.starts_with(Paths::resolve().data_dir));
 }
 
+fn parsed(text: &str) -> Value {
+    serde_json::from_str(text).unwrap()
+}
+
+#[test]
+fn missing_config_becomes_an_ask_everything_file() {
+    let written = permission_config(None).unwrap().unwrap();
+    assert_eq!(
+        parsed(&written),
+        json!({"$schema": "https://opencode.ai/config.json", "permission": {"*": "ask"}})
+    );
+}
+
+#[test]
+fn config_that_already_asks_is_left_alone() {
+    let existing = r#"{"model":"x/y","permission":{"*":"ask"}}"#;
+    assert_eq!(permission_config(Some(existing)).unwrap(), None);
+}
+
+#[test]
+fn existing_keys_survive_and_only_permission_is_replaced() {
+    let existing = r#"{"model":"x/y","permission":{"bash":"allow","*":"allow"}}"#;
+    let written = permission_config(Some(existing)).unwrap().unwrap();
+    assert_eq!(
+        parsed(&written),
+        json!({"model": "x/y", "permission": {"*": "ask"}})
+    );
+}
+
+#[test]
+fn unreadable_config_is_reported_instead_of_overwritten() {
+    assert!(permission_config(Some("{not json")).is_err());
+    assert!(permission_config(Some("[1]")).is_err());
+}
+
+struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    fn new(name: &str) -> ScratchDir {
+        let serial = CONFIG_WRITE_SERIAL.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "argon-opencode-{name}-{}-{serial}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        ScratchDir(path)
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[tokio::test]
+async fn permission_config_is_written_once_without_leftovers() {
+    let dir = ScratchDir::new("config");
+    ensure_permission_config(&dir.0).await.unwrap();
+    let path = dir.0.join(CONFIG_FILE);
+    let first = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(parsed(&first)["permission"], json!({"*": "ask"}));
+    ensure_permission_config(&dir.0).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+    let entries: Vec<_> = std::fs::read_dir(&dir.0).unwrap().collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[tokio::test]
+async fn permission_config_merges_into_an_existing_file() {
+    let dir = ScratchDir::new("merge");
+    let path = dir.0.join(CONFIG_FILE);
+    std::fs::write(&path, r#"{"theme":"dark","permission":"allow"}"#).unwrap();
+    ensure_permission_config(&dir.0).await.unwrap();
+    assert_eq!(
+        parsed(&std::fs::read_to_string(&path).unwrap()),
+        json!({"theme": "dark", "permission": {"*": "ask"}})
+    );
+}
+
+#[tokio::test]
+async fn broken_permission_config_stops_the_start() {
+    let dir = ScratchDir::new("broken");
+    std::fs::write(dir.0.join(CONFIG_FILE), "{oops").unwrap();
+    let error = ensure_permission_config(&dir.0).await.unwrap_err();
+    assert!(
+        error.starts_with("falha ao preparar a configuração do OpenCode"),
+        "{error}"
+    );
+}
+
 #[test]
 fn env_keys_are_matched_case_insensitively() {
     let user = env(&[
@@ -214,4 +306,58 @@ async fn smoke_private_server_ignores_the_project_config() {
     assert!(sources.contains("Argon"));
     assert!(!sources.contains("definitely-not-a-real-plugin-xyz"));
     assert!(!sources.contains("dotenv-injected-plugin-xyz"));
+}
+
+#[tokio::test]
+#[ignore = "starts a real local opencode server"]
+async fn smoke_private_server_asks_before_every_tool() {
+    let dir = ScratchDir::new("smoke-permission");
+    let mut spec = crate::agent_spec(
+        argon_core::AgentKind::OpenCode,
+        &argon_core::Config::default(),
+    );
+    spec.args.clear();
+    let started = start(&spec, &dir.0, Arc::new(StderrTail::default())).await;
+    let outcome = match &started {
+        Ok(server) => match server.api.get("/api/config").await {
+            Ok(config) => server
+                .api
+                .get("/api/agent")
+                .await
+                .map(|agents| (config, agents)),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error.clone()),
+    };
+    if let Ok(server) = started {
+        server.stop().await;
+    }
+    let (config, agents) = outcome.unwrap();
+    let ours = config
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|source| {
+            source["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with(CONFIG_FILE))
+        })
+        .unwrap();
+    assert_eq!(
+        ours["info"]["permissions"],
+        json!([{"action": "*", "resource": "*", "effect": "ask"}])
+    );
+    let build = agents["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["id"] == "build")
+        .unwrap();
+    let last_wildcard = build["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|rule| rule["action"] == "*" && rule["resource"] == "*")
+        .unwrap();
+    assert_eq!(last_wildcard["effect"], "ask");
 }

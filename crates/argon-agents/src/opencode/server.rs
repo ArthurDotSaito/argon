@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use argon_core::Paths;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 use tokio::io::BufReader;
 use tokio::process::{ChildStderr, ChildStdout};
 
@@ -30,6 +31,12 @@ const PASSWORD_ENV: &str = "OPENCODE_PASSWORD";
 const CONFIG_DIR_ENV: &str = "OPENCODE_CONFIG_DIR";
 const DISABLE_PROJECT_CONFIG_ENV: &str = "OPENCODE_DISABLE_PROJECT_CONFIG";
 const DISABLE_AUTOUPDATE_ENV: &str = "OPENCODE_DISABLE_AUTOUPDATE";
+const CONFIG_FILE: &str = "opencode.json";
+const SCHEMA_KEY: &str = "$schema";
+const SCHEMA_URL: &str = "https://opencode.ai/config.json";
+const PERMISSION_KEY: &str = "permission";
+
+static CONFIG_WRITE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct OpencodeServer {
     pub api: LocalApi,
@@ -69,6 +76,7 @@ pub(crate) async fn start(
                 config_dir.display()
             )
         })?;
+    ensure_permission_config(&config_dir).await?;
     let password = new_password()?;
     let mut command = tokio::process::Command::new(program);
     command
@@ -224,6 +232,55 @@ fn drain_stderr(stderr: ChildStderr, tail: Arc<StderrTail>) {
             tail.push(line);
         }
     });
+}
+
+fn ask_everything() -> Value {
+    json!({"*": "ask"})
+}
+
+fn permission_config(existing: Option<&str>) -> Result<Option<String>, String> {
+    let mut config = match existing.map(serde_json::from_str::<Value>) {
+        None => Map::from_iter([(SCHEMA_KEY.to_owned(), json!(SCHEMA_URL))]),
+        Some(Ok(Value::Object(config))) => config,
+        Some(Ok(_)) => return Err("não é um objeto JSON".to_owned()),
+        Some(Err(error)) => return Err(error.to_string()),
+    };
+    if config.get(PERMISSION_KEY) == Some(&ask_everything()) {
+        return Ok(None);
+    }
+    config.insert(PERMISSION_KEY.to_owned(), ask_everything());
+    serde_json::to_string_pretty(&Value::Object(config))
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+async fn ensure_permission_config(dir: &Path) -> Result<(), String> {
+    let path = dir.join(CONFIG_FILE);
+    let failed = |error: String| {
+        format!(
+            "falha ao preparar a configuração do OpenCode ({}): {error}",
+            path.display()
+        )
+    };
+    let existing = match tokio::fs::read_to_string(&path).await {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(failed(error.to_string())),
+    };
+    let Some(text) = permission_config(existing.as_deref()).map_err(&failed)? else {
+        return Ok(());
+    };
+    let serial = CONFIG_WRITE_SERIAL.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("json.{}.{serial}.tmp", std::process::id()));
+    let written = match tokio::fs::write(&temp, text).await {
+        Ok(()) => tokio::fs::rename(&temp, &path).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = written {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(failed(error.to_string()));
+    }
+    Ok(())
 }
 
 fn new_password() -> Result<String, String> {

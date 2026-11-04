@@ -17,6 +17,8 @@ fn stream_args() -> Vec<String> {
         "--verbose",
         "--permission-prompt-tool",
         "stdio",
+        "--permission-mode",
+        "default",
         "--setting-sources",
         "user",
         "--strict-mcp-config",
@@ -83,6 +85,14 @@ fn args_ignore_worktree_settings_and_mcp_config() {
     let sources = args.iter().position(|arg| arg == "--setting-sources");
     assert_eq!(sources.map(|index| args[index + 1].as_str()), Some("user"));
     assert!(args.contains(&"--strict-mcp-config".to_owned()));
+}
+
+#[test]
+fn args_pin_the_default_permission_mode() {
+    let args = launch_args(&[], Start::Resume(ID), "");
+
+    let mode = args.iter().position(|arg| arg == "--permission-mode");
+    assert_eq!(mode.map(|index| args[index + 1].as_str()), Some("default"));
 }
 
 #[test]

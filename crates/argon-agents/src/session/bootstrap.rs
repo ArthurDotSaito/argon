@@ -6,7 +6,7 @@ use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::driver::{Shared, SharedConfig};
-use super::failure::{STDERR_LINES, classify, with_stderr};
+use super::failure::{STDERR_LINES, classify, transport_error, with_stderr};
 use super::stderr::StderrTail;
 use super::writer::{Op, SessionWriter};
 use super::{
@@ -72,7 +72,7 @@ fn forward_writer_errors(writer: &SessionWriter, shared: &Arc<Shared>) {
 fn startup_error(tail: &StderrTail, spec: &AgentSpec) -> SessionError {
     let stderr = tail.last(STDERR_LINES).join("\n");
     if stderr.is_empty() {
-        SessionError::Acp("o agente encerrou antes de abrir a sessão".to_owned())
+        transport_error(spec, "o agente encerrou antes de abrir a sessão".to_owned())
     } else {
         classify(spec, stderr)
     }
@@ -219,4 +219,31 @@ pub(super) async fn launch(
             done,
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use argon_core::{AgentKind, Config};
+
+    use super::*;
+    use crate::Transport;
+    use crate::registry::agent_spec;
+
+    #[test]
+    fn startup_error_names_acp_only_for_the_acp_transport() {
+        let tail = StderrTail::default();
+        let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
+        spec.transport = Transport::Acp;
+        assert!(matches!(startup_error(&tail, &spec), SessionError::Acp(_)));
+        spec.transport = Transport::ClaudeStream;
+        assert!(matches!(
+            startup_error(&tail, &spec),
+            SessionError::Agent(text) if text == "o agente encerrou antes de abrir a sessão"
+        ));
+        tail.push("boom".to_owned());
+        assert!(matches!(
+            startup_error(&tail, &spec),
+            SessionError::Agent(text) if text == "boom"
+        ));
+    }
 }

@@ -1190,7 +1190,7 @@ fn thread_params_skip_empty_model() {
 }
 
 #[test]
-fn resume_params_add_thread_id() {
+fn resume_params_add_thread_id_and_skip_turn_history() {
     assert_eq!(
         resume_params(
             "th_1",
@@ -1198,7 +1198,7 @@ fn resume_params_add_thread_id() {
             Some("gpt-5"),
             PermissionMode::Supervised
         ),
-        json!({"threadId": "th_1", "cwd": "repo", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5"})
+        json!({"threadId": "th_1", "excludeTurns": true, "cwd": "repo", "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5"})
     );
 }
 

@@ -3,7 +3,7 @@ use argon_core::PermissionMode;
 use super::{Shared, State};
 use crate::session::events::{AgentEvent, PendingPermission};
 use crate::session::permissions::{
-    PermissionAnswer, PermissionAsk, PermissionDecision, PermissionReply, decide,
+    PermissionAnswer, PermissionAsk, PermissionDecision, PermissionReply, decide, prompt_title,
 };
 use crate::session::writer::Op;
 use crate::session::{Result, SessionError};
@@ -42,7 +42,7 @@ impl Shared {
                 state.next_permission += 1;
                 let permission = PendingPermission {
                     request_id: format!("perm-{}", state.next_permission),
-                    title: prompt.title,
+                    title: prompt_title(&prompt.title, &prompt.kind),
                     kind: prompt.kind,
                     options: prompt.options,
                 };
