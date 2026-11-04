@@ -4,6 +4,7 @@ mod models;
 mod probe;
 mod spec;
 mod version;
+mod warmup;
 
 use argon_core::Config;
 use futures::future::join_all;
@@ -12,6 +13,7 @@ use crate::defaults::AGENT_DEFAULTS;
 
 pub(crate) use spec::login_hint;
 pub use spec::{AgentSpec, ModelInfo, Support, agent_spec, support_for};
+pub use warmup::warm_up_agents;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detection {

@@ -26,6 +26,7 @@ mod start_dialog;
 mod thread_model;
 mod thread_view;
 mod transcript;
+pub mod warmup;
 
 pub(crate) use choice::Choice;
 pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};

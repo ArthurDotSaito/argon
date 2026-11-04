@@ -79,6 +79,7 @@ fn main() {
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));
             config_watch::init(cx);
+            agents::warmup::on_app_start(cx);
             update::init(cx);
             theme::init(cx);
             cx.set_global(InboxHandle(inbox.clone()));

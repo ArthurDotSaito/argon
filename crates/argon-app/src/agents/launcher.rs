@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use argon_agents::{AgentSessionHandle, AgentSpec, SessionContext, WorktreeManager, start_session};
 use argon_core::{PrKey, RenderedPrompt};
@@ -78,6 +79,7 @@ pub async fn launch(
         )
         .map_err(|error| LaunchError::Failed(error.to_string()))?;
     _ = progress.unbounded_send(LaunchStage::PreparingWorktree);
+    let prepare_started = Instant::now();
     let prepare = worktrees.prepare(
         &request.pr.host,
         &request.repo,
@@ -95,6 +97,10 @@ pub async fn launch(
         }
         Some(Ok(path)) => path,
     };
+    tracing::info!(
+        elapsed_ms = prepare_started.elapsed().as_millis(),
+        "launch stage finished: worktree"
+    );
     let head = match worktrees.head_oid(&worktree).await {
         Ok(head) => Some(head),
         Err(error) => {
@@ -103,7 +109,14 @@ pub async fn launch(
         }
     };
     _ = progress.unbounded_send(LaunchStage::StartingAgent);
+    let start_started = Instant::now();
     let started = unless_cancelled(&mut cancel, start(&request, worktree.clone())).await;
+    tracing::info!(
+        agent = request.spec.label,
+        elapsed_ms = start_started.elapsed().as_millis(),
+        ok = matches!(started, Some(Ok(_))),
+        "launch stage finished: agent session"
+    );
     let outcome = match started {
         None => Err(LaunchError::Cancelled),
         Some(Err(error)) => Err(LaunchError::Failed(error)),

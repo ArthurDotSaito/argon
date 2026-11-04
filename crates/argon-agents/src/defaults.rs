@@ -49,6 +49,7 @@ pub struct AgentDefaults {
     pub headless: Option<HeadlessFlags>,
     pub tested_version: &'static str,
     pub turn_verified: bool,
+    pub warmup_args: Option<&'static [&'static str]>,
 }
 
 const MODEL_OPTION: ModelSelection = ModelSelection::AcpConfigOption { config_id: "model" };
@@ -236,6 +237,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "claude-agent-acp 0.100.0 / claude 2.1.316",
         turn_verified: true,
+        warmup_args: Some(&["--cli", "--version"]),
     },
     AgentDefaults {
         kind: AgentKind::Codex,
@@ -258,6 +260,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "codex-acp 2.5.0 / codex 0.160.0",
         turn_verified: false,
+        warmup_args: Some(&["--version"]),
     },
     AgentDefaults {
         kind: AgentKind::OpenCode,
@@ -280,6 +283,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "opencode 2.2.5",
         turn_verified: true,
+        warmup_args: None,
     },
     AgentDefaults {
         kind: AgentKind::CommandCode,
@@ -302,6 +306,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         headless: None,
         tested_version: "command-code 1.88.2",
         turn_verified: false,
+        warmup_args: None,
     },
     AgentDefaults {
         kind: AgentKind::Antigravity,
@@ -330,6 +335,7 @@ pub const AGENT_DEFAULTS: [AgentDefaults; 5] = [
         }),
         tested_version: "agy 1.4.7",
         turn_verified: false,
+        warmup_args: None,
     },
 ];
 
