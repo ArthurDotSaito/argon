@@ -12,7 +12,7 @@ mod worktree;
 pub use defaults::{ModelSelection, Transport};
 pub use registry::{
     AgentSpec, Detection, ModelInfo, ModelsCache, Support, agent_spec, agent_spec_for, detect_all,
-    list_models, listing_spec, lists_models, support_for, warm_up_agents,
+    list_models, listing_spec, lists_models, spec_fingerprint, support_for, warm_up_agents,
 };
 pub use session::{
     AgentEvent, AgentSessionHandle, PendingPermission, PermissionOption, SavedFinding,

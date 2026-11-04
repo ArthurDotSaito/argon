@@ -1,23 +1,42 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use argon_agents::defaults::AGENT_DEFAULTS;
-use argon_agents::{AgentSpec, ModelInfo, ModelsCache, list_models, listing_spec, lists_models};
+use argon_agents::{
+    AgentSpec, ModelInfo, ModelsCache, list_models, listing_spec, lists_models, spec_fingerprint,
+};
 use argon_core::{AgentKind, Config, Paths};
 use gpui_kit::Context;
 
-use super::detection::DetectionCache;
 use super::sessions::AgentSessions;
 use crate::services::{AppServices, Services};
 
 const NO_MODELS: &str = "the agent returned no models";
 const NOT_LISTED: &str = "the agent does not list models";
+const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(60);
+
+type Key = (AgentKind, String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    Automatic,
+    Manual,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Adoption {
+    Unchanged,
+    Cached(Vec<ModelInfo>),
+    Reset,
+}
 
 pub struct ModelListings {
     cache: ModelsCache,
     path: PathBuf,
-    in_flight: HashSet<AgentKind>,
+    in_flight: HashSet<Key>,
+    failed: HashMap<Key, SystemTime>,
+    current: HashMap<AgentKind, String>,
 }
 
 impl ModelListings {
@@ -30,40 +49,73 @@ impl ModelListings {
             cache: ModelsCache::load(&path),
             path,
             in_flight: HashSet::new(),
+            failed: HashMap::new(),
+            current: HashMap::new(),
         }
     }
 
-    pub fn seed(&self, detection: &mut DetectionCache) {
-        for defaults in AGENT_DEFAULTS
-            .iter()
-            .filter(|defaults| lists_models(defaults.kind))
-        {
-            if let Some((_, models)) = self.cache.get(defaults.kind) {
-                detection.report_models(defaults.kind, &models);
-            }
+    fn adopt(&mut self, kind: AgentKind, fingerprint: &str) -> Adoption {
+        let previous = self.current.insert(kind, fingerprint.to_owned());
+        match self.cache.get(kind, fingerprint) {
+            Some((_, models)) => Adoption::Cached(models),
+            None if previous.is_some_and(|previous| previous != fingerprint) => Adoption::Reset,
+            None => Adoption::Unchanged,
         }
     }
 
-    fn begin(&mut self, kind: AgentKind, now: SystemTime) -> bool {
-        lists_models(kind) && !self.cache.is_fresh(kind, now) && self.in_flight.insert(kind)
+    fn begin(
+        &mut self,
+        kind: AgentKind,
+        fingerprint: &str,
+        now: SystemTime,
+        trigger: Trigger,
+    ) -> bool {
+        let key = (kind, fingerprint.to_owned());
+        lists_models(kind)
+            && !self.cache.is_fresh(kind, fingerprint, now)
+            && (trigger == Trigger::Manual || !self.backing_off(&key, now))
+            && self.in_flight.insert(key)
+    }
+
+    fn backing_off(&self, key: &Key, now: SystemTime) -> bool {
+        self.failed
+            .get(key)
+            .and_then(|at| now.duration_since(*at).ok())
+            .is_some_and(|age| age < RETRY_AFTER_FAILURE)
     }
 
     fn finish(
         &mut self,
         kind: AgentKind,
+        fingerprint: &str,
         outcome: Result<Vec<ModelInfo>, String>,
         now: SystemTime,
-    ) -> Result<Vec<ModelInfo>, String> {
-        self.in_flight.remove(&kind);
-        let models = outcome?;
-        if models.is_empty() {
-            return Err(NO_MODELS.to_owned());
+    ) -> Result<Option<Vec<ModelInfo>>, String> {
+        let key = (kind, fingerprint.to_owned());
+        self.in_flight.remove(&key);
+        let outcome = outcome.and_then(|models| {
+            if models.is_empty() {
+                Err(NO_MODELS.to_owned())
+            } else {
+                Ok(models)
+            }
+        });
+        let models = match outcome {
+            Ok(models) => models,
+            Err(error) => {
+                self.failed.insert(key, now);
+                return Err(error);
+            }
+        };
+        self.failed.remove(&key);
+        if self.current.get(&kind).map(String::as_str) != Some(fingerprint) {
+            return Ok(None);
         }
-        self.cache.put(kind, now, models.clone());
+        self.cache.put(kind, fingerprint, now, models.clone());
         if let Err(error) = self.cache.save(&self.path) {
             tracing::warn!(path = %self.path.display(), %error, "failed to save the models cache");
         }
-        Ok(models)
+        Ok(Some(models))
     }
 }
 
@@ -80,18 +132,38 @@ impl AgentSessions {
             .flatten()
     }
 
-    pub fn refresh_models(&mut self, specs: Vec<AgentSpec>, cx: &mut Context<Self>) {
-        let Some(services) = cx
+    pub fn refresh_models(
+        &mut self,
+        specs: Vec<AgentSpec>,
+        trigger: Trigger,
+        cx: &mut Context<Self>,
+    ) {
+        let services = cx
             .try_global::<AppServices>()
-            .map(|global| global.0.clone())
-        else {
-            return;
-        };
+            .map(|global| global.0.clone());
         let now = SystemTime::now();
-        for spec in specs {
-            if self.listings_mut().begin(spec.kind, now) {
-                Self::spawn_listing(spec, &services, cx);
+        let mut changed = false;
+        for spec in specs.into_iter().filter(|spec| lists_models(spec.kind)) {
+            let kind = spec.kind;
+            let fingerprint = spec_fingerprint(&spec);
+            match self.listings_mut().adopt(kind, &fingerprint) {
+                Adoption::Cached(models) => {
+                    self.detection_mut().report_models(kind, &models);
+                    changed = true;
+                }
+                Adoption::Reset => {
+                    self.detection_mut().reset_models(kind);
+                    changed = true;
+                }
+                Adoption::Unchanged => {}
             }
+            let started = self.listings_mut().begin(kind, &fingerprint, now, trigger);
+            if let (true, Some(services)) = (started, &services) {
+                Self::spawn_listing(spec, fingerprint, services, cx);
+            }
+        }
+        if changed {
+            cx.notify();
         }
     }
 
@@ -100,10 +172,15 @@ impl AgentSessions {
             .iter()
             .filter_map(|defaults| listing_spec(defaults.kind, config))
             .collect();
-        self.refresh_models(specs, cx);
+        self.refresh_models(specs, Trigger::Automatic, cx);
     }
 
-    fn spawn_listing(spec: AgentSpec, services: &Services, cx: &mut Context<Self>) {
+    fn spawn_listing(
+        spec: AgentSpec,
+        fingerprint: String,
+        services: &Services,
+        cx: &mut Context<Self>,
+    ) {
         let (kind, label) = (spec.kind, spec.label);
         let job = services.spawn_runtime(async move { list_models(&spec).await });
         cx.spawn(async move |this, cx| {
@@ -112,7 +189,9 @@ impl AgentSessions {
                 Ok(None) => Err(NOT_LISTED.to_owned()),
                 Err(error) => Err(error.to_string()),
             };
-            _ = this.update(cx, |this, cx| this.finish_listing(kind, label, outcome, cx));
+            _ = this.update(cx, |this, cx| {
+                this.finish_listing(kind, label, &fingerprint, outcome, cx)
+            });
         })
         .detach();
     }
@@ -121,13 +200,23 @@ impl AgentSessions {
         &mut self,
         kind: AgentKind,
         label: &'static str,
+        fingerprint: &str,
         outcome: Result<Vec<ModelInfo>, String>,
         cx: &mut Context<Self>,
     ) {
-        match self.listings_mut().finish(kind, outcome, SystemTime::now()) {
-            Ok(models) => {
+        match self
+            .listings_mut()
+            .finish(kind, fingerprint, outcome, SystemTime::now())
+        {
+            Ok(Some(models)) => {
                 self.detection_mut().report_models(kind, &models);
                 cx.notify();
+            }
+            Ok(None) => {
+                tracing::debug!(
+                    agent = label,
+                    "discarded models listed for a superseded spec"
+                );
             }
             Err(error) => tracing::warn!(agent = label, %error, "failed to list agent models"),
         }
@@ -136,9 +225,11 @@ impl AgentSessions {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
+
+    const FP_A: &str = "fp-a";
+    const FP_B: &str = "fp-b";
+    const OPENCODE: AgentKind = AgentKind::OpenCode;
 
     struct Fixture {
         listings: ModelListings,
@@ -168,28 +259,45 @@ mod tests {
         }
     }
 
+    fn secs(seconds: u64) -> Duration {
+        Duration::from_secs(seconds)
+    }
+
     #[test]
-    fn a_listing_is_never_started_twice_for_the_same_agent() {
+    fn a_listing_is_never_started_twice_for_the_same_agent_and_spec() {
         let mut fixture = Fixture::new("guard");
         let listings = &mut fixture.listings;
         let now = SystemTime::now();
-        assert!(listings.begin(AgentKind::OpenCode, now));
-        assert!(!listings.begin(AgentKind::OpenCode, now));
-        assert!(listings.begin(AgentKind::CommandCode, now));
+        assert!(listings.begin(OPENCODE, FP_A, now, Trigger::Automatic));
+        assert!(!listings.begin(OPENCODE, FP_A, now, Trigger::Automatic));
+        assert!(!listings.begin(OPENCODE, FP_A, now, Trigger::Manual));
+        assert!(listings.begin(AgentKind::CommandCode, FP_A, now, Trigger::Automatic));
+    }
+
+    #[test]
+    fn a_new_spec_is_not_blocked_by_a_running_listing_of_the_old_one() {
+        let mut fixture = Fixture::new("keyed");
+        let listings = &mut fixture.listings;
+        let now = SystemTime::now();
+        assert!(listings.begin(OPENCODE, FP_A, now, Trigger::Automatic));
+        assert!(listings.begin(OPENCODE, FP_B, now, Trigger::Automatic));
         listings
-            .finish(AgentKind::OpenCode, Err("boom".into()), now)
+            .finish(OPENCODE, FP_A, Err("boom".into()), now)
             .unwrap_err();
-        assert!(listings.begin(AgentKind::OpenCode, now));
+        assert!(!listings.begin(OPENCODE, FP_B, now, Trigger::Automatic));
     }
 
     #[test]
     fn agents_without_listing_are_skipped() {
         let mut fixture = Fixture::new("skipped");
-        assert!(
-            !fixture
-                .listings
-                .begin(AgentKind::ClaudeCode, SystemTime::now())
+        let listings = &mut fixture.listings;
+        let began = listings.begin(
+            AgentKind::ClaudeCode,
+            FP_A,
+            SystemTime::now(),
+            Trigger::Manual,
         );
+        assert!(!began);
     }
 
     #[test]
@@ -197,50 +305,115 @@ mod tests {
         let mut fixture = Fixture::new("fresh");
         let listings = &mut fixture.listings;
         let now = SystemTime::now();
-        assert!(listings.begin(AgentKind::OpenCode, now));
+        listings.adopt(OPENCODE, FP_A);
+        assert!(listings.begin(OPENCODE, FP_A, now, Trigger::Automatic));
         let models = vec![model("opencode-go/glm")];
         assert_eq!(
-            listings.finish(AgentKind::OpenCode, Ok(models.clone()), now),
-            Ok(models.clone())
+            listings.finish(OPENCODE, FP_A, Ok(models.clone()), now),
+            Ok(Some(models.clone()))
         );
-        assert!(!listings.begin(AgentKind::OpenCode, now + Duration::from_secs(599)));
-        assert!(listings.begin(AgentKind::OpenCode, now + Duration::from_secs(601)));
+        let soon = now + secs(599);
+        assert!(!listings.begin(OPENCODE, FP_A, soon, Trigger::Manual));
+        let later = now + secs(601);
+        assert!(listings.begin(OPENCODE, FP_A, later, Trigger::Automatic));
         let reloaded = ModelsCache::load(&listings.path);
         assert_eq!(
-            reloaded.get(AgentKind::OpenCode).map(|(_, models)| models),
+            reloaded.get(OPENCODE, FP_A).map(|(_, models)| models),
             Some(models)
         );
     }
 
     #[test]
-    fn empty_listings_are_rejected_and_not_cached() {
+    fn a_failed_listing_is_not_retried_automatically_for_a_minute() {
+        let mut fixture = Fixture::new("backoff");
+        let listings = &mut fixture.listings;
+        let now = SystemTime::now();
+        listings.adopt(OPENCODE, FP_A);
+        assert!(listings.begin(OPENCODE, FP_A, now, Trigger::Automatic));
+        listings
+            .finish(OPENCODE, FP_A, Err("boom".into()), now)
+            .unwrap_err();
+        assert!(!listings.begin(OPENCODE, FP_A, now + secs(59), Trigger::Automatic));
+        assert!(listings.begin(OPENCODE, FP_A, now + secs(59), Trigger::Manual));
+        listings
+            .finish(OPENCODE, FP_A, Err("boom".into()), now + secs(59))
+            .unwrap_err();
+        assert!(!listings.begin(OPENCODE, FP_A, now + secs(100), Trigger::Automatic));
+        assert!(listings.begin(OPENCODE, FP_A, now + secs(120), Trigger::Automatic));
+        assert!(listings.begin(OPENCODE, FP_B, now, Trigger::Automatic));
+    }
+
+    #[test]
+    fn empty_listings_are_failures_and_not_cached() {
         let mut fixture = Fixture::new("empty");
         let listings = &mut fixture.listings;
         let now = SystemTime::now();
-        listings.begin(AgentKind::OpenCode, now);
+        listings.adopt(OPENCODE, FP_A);
+        listings.begin(OPENCODE, FP_A, now, Trigger::Automatic);
         assert_eq!(
-            listings.finish(AgentKind::OpenCode, Ok(Vec::new()), now),
+            listings.finish(OPENCODE, FP_A, Ok(Vec::new()), now),
             Err(NO_MODELS.to_owned())
         );
-        assert!(listings.cache.get(AgentKind::OpenCode).is_none());
+        assert!(listings.cache.get(OPENCODE, FP_A).is_none());
+        assert!(!listings.path.exists());
+        assert!(!listings.begin(OPENCODE, FP_A, now, Trigger::Automatic));
+    }
+
+    #[test]
+    fn results_for_a_superseded_spec_are_neither_shown_nor_persisted() {
+        let mut fixture = Fixture::new("superseded");
+        let listings = &mut fixture.listings;
+        let now = SystemTime::now();
+        listings.adopt(OPENCODE, FP_A);
+        listings.begin(OPENCODE, FP_A, now, Trigger::Automatic);
+        listings.adopt(OPENCODE, FP_B);
+        assert_eq!(
+            listings.finish(OPENCODE, FP_A, Ok(vec![model("old/model")]), now),
+            Ok(None)
+        );
+        assert!(listings.cache.get(OPENCODE, FP_A).is_none());
         assert!(!listings.path.exists());
     }
 
     #[test]
-    fn cached_models_seed_the_detection_cache() {
-        let mut fixture = Fixture::new("seed");
+    fn adopting_a_spec_reuses_its_cached_models_and_resets_on_change() {
+        let mut fixture = Fixture::new("adopt");
         let listings = &mut fixture.listings;
         let now = SystemTime::now();
-        listings.begin(AgentKind::CommandCode, now);
+        assert_eq!(listings.adopt(OPENCODE, FP_A), Adoption::Unchanged);
+        listings.begin(OPENCODE, FP_A, now, Trigger::Automatic);
         listings
-            .finish(AgentKind::CommandCode, Ok(vec![model("deepseek/v4")]), now)
+            .finish(OPENCODE, FP_A, Ok(vec![model("a/b")]), now)
             .unwrap();
-        let mut detection = DetectionCache::default();
-        listings.seed(&mut detection);
         assert_eq!(
-            detection.reported(AgentKind::CommandCode),
-            Some(&[model("deepseek/v4")][..])
+            listings.adopt(OPENCODE, FP_A),
+            Adoption::Cached(vec![model("a/b")])
         );
-        assert_eq!(detection.reported(AgentKind::OpenCode), None);
+        assert_eq!(listings.adopt(OPENCODE, FP_B), Adoption::Reset);
+        assert_eq!(listings.adopt(OPENCODE, FP_B), Adoption::Unchanged);
+        assert_eq!(
+            listings.adopt(AgentKind::CommandCode, FP_A),
+            Adoption::Unchanged
+        );
+    }
+
+    #[test]
+    fn the_persisted_cache_is_loaded_for_a_matching_spec_only() {
+        let mut fixture = Fixture::new("reload");
+        let now = SystemTime::now();
+        {
+            let listings = &mut fixture.listings;
+            listings.adopt(OPENCODE, FP_A);
+            listings.begin(OPENCODE, FP_A, now, Trigger::Automatic);
+            listings
+                .finish(OPENCODE, FP_A, Ok(vec![model("a/b")]), now)
+                .unwrap();
+        }
+        let mut reloaded = ModelListings::new(fixture.listings.path.clone());
+        assert_eq!(reloaded.adopt(OPENCODE, FP_B), Adoption::Unchanged);
+        assert_eq!(
+            reloaded.adopt(OPENCODE, FP_A),
+            Adoption::Cached(vec![model("a/b")])
+        );
     }
 }

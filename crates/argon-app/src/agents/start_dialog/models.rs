@@ -2,6 +2,7 @@ use argon_agents::AgentSpec;
 use gpui_kit::{App, Context, Window};
 
 use super::{Load, StartDialog};
+use crate::agents::Trigger;
 use crate::agents::detection::AgentOption;
 
 impl StartDialog {
@@ -27,7 +28,9 @@ impl StartDialog {
             .filter(|option| option.state.is_selectable())
             .map(|option| option.spec.clone())
             .collect();
-        sessions.update(cx, |sessions, cx| sessions.refresh_models(specs, cx));
+        sessions.update(cx, |sessions, cx| {
+            sessions.refresh_models(specs, Trigger::Automatic, cx)
+        });
     }
 
     pub(super) fn apply_listed_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {

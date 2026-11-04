@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use argon_agents::{AgentSpec, Detection, ModelInfo, Support};
-use argon_core::{AgentKind, PromptTemplate};
+use argon_agents::{AgentSpec, Detection, ModelInfo, Support, agent_spec};
+use argon_core::{AgentKind, Config, PromptTemplate};
 
 pub const DETECTION_TTL: Duration = Duration::from_secs(60);
 
@@ -113,6 +113,16 @@ impl DetectionCache {
 
     pub fn reported(&self, kind: AgentKind) -> Option<&[ModelInfo]> {
         self.reported.get(&kind).map(Vec::as_slice)
+    }
+
+    pub fn reset_models(&mut self, kind: AgentKind) {
+        let defaults = agent_spec(kind, &Config::default()).models;
+        if let Some((_, options)) = self.entry.as_mut() {
+            for option in options.iter_mut().filter(|option| option.spec.kind == kind) {
+                option.spec.models.clone_from(&defaults);
+            }
+        }
+        self.reported.insert(kind, defaults);
     }
 
     pub fn report_models(&mut self, kind: AgentKind, models: &[ModelInfo]) {
@@ -300,5 +310,21 @@ mod tests {
             Some(1)
         );
         assert!(cache.fresh(at + DETECTION_TTL).is_none());
+    }
+
+    #[test]
+    fn reset_models_drops_listed_models_of_a_previous_spec() {
+        let mut cache = DetectionCache::default();
+        let at = Instant::now();
+        let listed = [ModelInfo {
+            id: "opencode-go/glm".into(),
+            label: "GLM".into(),
+        }];
+        cache.store(at, vec![option(AgentKind::OpenCode, ready())]);
+        cache.report_models(AgentKind::OpenCode, &listed);
+        assert_eq!(cache.fresh(at).unwrap()[0].spec.models, listed);
+        cache.reset_models(AgentKind::OpenCode);
+        assert!(cache.fresh(at).unwrap()[0].spec.models.is_empty());
+        assert_eq!(cache.reported(AgentKind::OpenCode), Some(&[][..]));
     }
 }

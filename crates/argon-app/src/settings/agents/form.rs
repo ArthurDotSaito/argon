@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use argon_agents::{AgentSpec, Detection, Support, agent_spec, support_for};
+use argon_agents::{
+    AgentSpec, Detection, ModelInfo, Support, agent_spec, list_models, lists_models, support_for,
+};
 use argon_core::{AgentCfg, AgentKind, Config, PermissionMode};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::{SelectEvent, SelectState};
@@ -9,14 +11,21 @@ use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Tas
 
 use super::fields::{FieldError, join_args, parse_env, split_args};
 use super::{DetectionResult, run_detection, store_cache};
-use crate::agents::{AgentSessions, CardState, Choice, card_state, permission_choices};
+use crate::agents::{AgentSessions, CardState, Choice, Trigger, card_state, permission_choices};
 use crate::config_watch;
 use crate::settings::labels;
+use crate::settings::ui::services;
 
 pub(super) struct EnvRow {
     pub key: Entity<InputState>,
     pub value: Entity<InputState>,
     _subscriptions: [Subscription; 2],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Source {
+    Saved(Trigger),
+    Draft,
 }
 
 pub(super) enum Status {
@@ -31,6 +40,8 @@ pub struct AgentForm {
     pub(super) support: Support,
     pub(super) status: Status,
     pub(super) detected: Option<AgentSpec>,
+    draft_models: bool,
+    draft_task: Option<Task<()>>,
     pub(super) saved: AgentCfg,
     pub(super) command: Entity<InputState>,
     pub(super) args: Entity<InputState>,
@@ -132,6 +143,8 @@ impl AgentForm {
             support: support_for(kind),
             status: Status::Detecting,
             detected: None,
+            draft_models: false,
+            draft_task: None,
             model: saved.default_model.clone(),
             permission_select,
             permission_mode,
@@ -214,6 +227,7 @@ impl AgentForm {
     pub(super) fn apply(
         &mut self,
         results: &[DetectionResult],
+        source: Source,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -224,19 +238,76 @@ impl AgentForm {
         };
         self.status = Status::Done(card_state(support, detection));
         let mut spec = spec.clone();
-        if let Some(sessions) = AgentSessions::global(cx) {
-            sessions.read(cx).apply_listed_models(&mut spec);
-            if matches!(detection, Detection::Found { .. }) {
-                let specs = vec![spec.clone()];
-                sessions.update(cx, |sessions, cx| sessions.refresh_models(specs, cx));
+        let found = matches!(detection, Detection::Found { .. });
+        self.draft_models = source == Source::Draft;
+        self.draft_task = None;
+        match source {
+            Source::Saved(trigger) => {
+                if let Some(sessions) = AgentSessions::global(cx) {
+                    if found {
+                        let specs = vec![spec.clone()];
+                        sessions.update(cx, |sessions, cx| {
+                            sessions.refresh_models(specs, trigger, cx)
+                        });
+                    }
+                    sessions.read(cx).apply_listed_models(&mut spec);
+                }
             }
+            Source::Draft if found => self.list_draft_models(spec.clone(), window, cx),
+            Source::Draft => {}
         }
         self.detected = Some(spec);
         self.refresh_models(window, cx);
         cx.notify();
     }
 
+    fn list_draft_models(&mut self, spec: AgentSpec, window: &mut Window, cx: &mut Context<Self>) {
+        if !lists_models(spec.kind) {
+            return;
+        }
+        let Some(services) = services(cx) else {
+            return;
+        };
+        let label = spec.label;
+        let job = services.spawn_runtime(async move { list_models(&spec).await });
+        self.draft_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = job.await;
+            _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(Some(Ok(models))) if !models.is_empty() => this.set_draft_models(models, window, cx),
+                Ok(Some(Ok(_))) => {
+                    tracing::warn!(agent = label, "the draft configuration listed no models");
+                }
+                Ok(Some(Err(error))) => {
+                    tracing::warn!(agent = label, %error, "failed to list models for the draft configuration");
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(agent = label, %error, "failed to list models for the draft configuration");
+                }
+            });
+        }));
+    }
+
+    fn set_draft_models(
+        &mut self,
+        models: Vec<ModelInfo>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.draft_models {
+            return;
+        }
+        if let Some(spec) = self.detected.as_mut() {
+            spec.models = models;
+            self.refresh_models(window, cx);
+            cx.notify();
+        }
+    }
+
     pub(super) fn apply_listed_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft_models {
+            return;
+        }
         let Some(sessions) = AgentSessions::global(cx) else {
             return;
         };
@@ -310,7 +381,12 @@ impl AgentForm {
                     if matches_saved {
                         store_cache(&results, Instant::now(), cx);
                     }
-                    this.apply(&results, window, cx);
+                    let source = if matches_saved {
+                        Source::Saved(Trigger::Manual)
+                    } else {
+                        Source::Draft
+                    };
+                    this.apply(&results, source, window, cx);
                 }
                 Err(error) => {
                     this.status = Status::Failed(labels::detection_failed(&error).into());

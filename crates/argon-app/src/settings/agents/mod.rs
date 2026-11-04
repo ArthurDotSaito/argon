@@ -13,10 +13,10 @@ use gpui_kit::{
     Subscription, Task, Window,
 };
 
-use self::form::AgentForm;
+use self::form::{AgentForm, Source};
 use super::labels;
 use super::ui::{section, services};
-use crate::agents::{AgentOption, AgentSessions};
+use crate::agents::{AgentOption, AgentSessions, Trigger};
 use crate::config_watch;
 
 pub(super) type DetectionResult = (AgentSpec, Support, Detection);
@@ -91,7 +91,9 @@ impl AgentsSection {
                 };
                 store_cache(&results, Instant::now(), cx);
                 for form in &this.forms {
-                    form.update(cx, |form, cx| form.apply(&results, window, cx));
+                    form.update(cx, |form, cx| {
+                        form.apply(&results, Source::Saved(Trigger::Automatic), window, cx)
+                    });
                 }
             });
         }));

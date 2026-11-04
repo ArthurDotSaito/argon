@@ -98,24 +98,19 @@ impl AgentSessions {
         if let Some(existing) = Self::global(cx) {
             return existing;
         }
-        let sessions = cx.new(|_| {
-            let listings = ModelListings::load(&paths);
-            let mut detection = DetectionCache::default();
-            listings.seed(&mut detection);
-            Self {
-                sessions: Vec::new(),
-                last_agent: None,
-                detection,
-                listings,
-                store: SessionStore::new(paths.db_file()),
-                worktrees: WorktreeManager::new(&paths),
-                launches: HashMap::new(),
-                threads: HashMap::new(),
-                thread_subscriptions: HashMap::new(),
-                resumes: HashMap::new(),
-                closing: Closing::Open,
-                paths,
-            }
+        let sessions = cx.new(|_| Self {
+            sessions: Vec::new(),
+            last_agent: None,
+            detection: DetectionCache::default(),
+            listings: ModelListings::load(&paths),
+            store: SessionStore::new(paths.db_file()),
+            worktrees: WorktreeManager::new(&paths),
+            launches: HashMap::new(),
+            threads: HashMap::new(),
+            thread_subscriptions: HashMap::new(),
+            resumes: HashMap::new(),
+            closing: Closing::Open,
+            paths,
         });
         cx.set_global(AgentSessionsHandle(sessions.clone()));
         sessions

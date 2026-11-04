@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use argon_agents::{
     AgentEvent, AgentSessionHandle, AgentSpec, SessionContext, SessionOptions, SessionWriter,
-    Support, Transport, WorktreeManager, agent_spec, new_session_id, start_session_with,
-    support_for,
+    Support, Transport, WorktreeManager, agent_spec, list_models, lists_models, new_session_id,
+    start_session_with, support_for,
 };
 use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey};
 use argon_github::{GithubClient, discover_accounts, token_for};
@@ -285,6 +285,23 @@ async fn startup_probe(
     Ok(())
 }
 
+async fn first_listed_model(spec: &AgentSpec) -> Option<String> {
+    if !lists_models(spec.kind) {
+        return None;
+    }
+    match list_models(spec).await? {
+        Ok(models) => {
+            let first = models.into_iter().next()?;
+            println!("model: {} (first listed)", first.id);
+            Some(first.id)
+        }
+        Err(error) => {
+            println!("model listing failed: {error}");
+            None
+        }
+    }
+}
+
 async fn run() -> Result<(), BoxError> {
     let args = parse_args()?;
     if let Support::NotYet { reason } = support_for(args.kind) {
@@ -313,6 +330,12 @@ async fn run() -> Result<(), BoxError> {
         println!("prompt warning: {warning}");
     }
 
+    let model = match args.model.clone() {
+        Some(model) => model,
+        None => first_listed_model(&spec)
+            .await
+            .unwrap_or_else(|| spec.default_model.clone()),
+    };
     let id = new_session_id()?;
     let manager = WorktreeManager::new(&paths);
     let worktree: PathBuf = manager.prepare(HOST, &args.repo, args.number, &id).await?;
@@ -325,10 +348,7 @@ async fn run() -> Result<(), BoxError> {
         nonce: rendered.nonce.clone(),
         allowed_files: files.iter().map(|file| file.path.clone()).collect(),
         cwd: worktree.clone(),
-        model: args
-            .model
-            .clone()
-            .unwrap_or_else(|| spec.default_model.clone()),
+        model,
         permission_mode: config
             .agents
             .get(&args.kind)

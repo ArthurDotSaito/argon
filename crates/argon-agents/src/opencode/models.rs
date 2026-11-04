@@ -6,7 +6,7 @@ use super::server::{config_dir, start};
 use crate::registry::{AgentSpec, ModelInfo};
 use crate::session::StderrTail;
 
-const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
+const LISTING_TIMEOUT: Duration = Duration::from_secs(100);
 
 pub(crate) async fn list_models(spec: &AgentSpec) -> Result<Vec<ModelInfo>, String> {
     let mut spec = spec.clone();
