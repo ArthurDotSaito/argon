@@ -63,9 +63,11 @@ pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
 
 pub fn filter_label(filter: SessionFilter) -> &'static str {
     match filter {
-        SessionFilter::All => "Todas",
-        SessionFilter::Active => "Ativas",
+        SessionFilter::All => "Todas as sessões",
+        SessionFilter::Awaiting => "Aguardando você",
+        SessionFilter::Running => "Rodando",
         SessionFilter::Completed => "Concluídas",
+        SessionFilter::Archived => "Arquivadas",
     }
 }
 
@@ -156,6 +158,14 @@ pub fn findings_heading(count: usize) -> String {
     match count {
         1 => "1 achado".into(),
         _ => format!("{count} achados"),
+    }
+}
+
+#[allow(dead_code)]
+pub fn archived_more(count: usize) -> String {
+    match count {
+        1 => "+1 sessão arquivada".into(),
+        _ => format!("+{count} sessões arquivadas"),
     }
 }
 

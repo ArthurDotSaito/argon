@@ -23,12 +23,6 @@ use super::transcript::{Item, PermissionState};
 use crate::bottom::duration_label;
 use crate::inbox::InboxModel;
 
-const FILTERS: [SessionFilter; 3] = [
-    SessionFilter::All,
-    SessionFilter::Active,
-    SessionFilter::Completed,
-];
-
 pub struct SessionCard {
     pub id: String,
     pub title: SharedString,
@@ -195,7 +189,7 @@ fn card(card: SessionCard, cx: &mut Context<AgentPanel>) -> Stateful<Div> {
 }
 
 fn filter_bar(filter: SessionFilter, cards: &[SessionCard], cx: &mut Context<AgentPanel>) -> Div {
-    let counts = FILTERS.map(|option| {
+    let counts = SessionFilter::ALL.map(|option| {
         (
             option,
             cards

@@ -7,6 +7,7 @@ mod detection;
 mod diff_lines;
 mod finding_card;
 mod finding_set;
+mod grouping;
 mod labels;
 mod launcher;
 mod launches;
