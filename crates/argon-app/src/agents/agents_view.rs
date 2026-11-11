@@ -137,15 +137,7 @@ impl AgentsView {
     fn session_row(&self, card: SessionCard, cx: &App) -> Stateful<Div> {
         let theme = cx.theme();
         let id = card.id.clone();
-        let actions = controls(&card.controls, "agents-row", cx).map(|actions| {
-            div()
-                .id(SharedString::from(format!(
-                    "agents-row-actions-{}",
-                    card.id
-                )))
-                .on_click(|_, _, cx| cx.stop_propagation())
-                .child(actions)
-        });
+        let actions = controls(&card.controls, "agents-row", cx);
         let detail = (card.counts.total() > 0 || card.note.is_some()).then(|| {
             h_flex()
                 .gap_2()
@@ -322,8 +314,12 @@ impl Render for AgentsView {
             None => (Vec::new(), SessionFilter::All, false),
         };
         let total = cards.len();
+        let visible = cards
+            .iter()
+            .filter(|card| card.status.matches(filter))
+            .count();
         let groups = group_by_pr(cards, filter);
-        let header = self.header(total, filter, cx);
+        let header = self.header(visible, filter, cx);
         let empty = groups.is_empty().then(|| {
             let text = match (loaded, total) {
                 (false, 0) => labels::LOADING_SESSIONS,

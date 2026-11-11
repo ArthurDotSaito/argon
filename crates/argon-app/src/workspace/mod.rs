@@ -132,6 +132,10 @@ impl Workspace {
     }
 
     fn on_start_review(&mut self, _: &StartReview, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pr) = self.active_session_pr(window, cx) {
+            self.start_review_of(pr, window, cx);
+            return;
+        }
         let Some(panel) = self.active_center_panel(window, cx) else {
             return;
         };

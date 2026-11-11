@@ -35,6 +35,10 @@ pub struct Composer {
 }
 
 impl Composer {
+    pub fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.focus_handle(cx)
+    }
+
     pub fn new(model: Entity<ThreadModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -189,12 +193,6 @@ impl Composer {
             input.insert(labels::reference(&path, line), window, cx);
             input.focus(window, cx);
         });
-    }
-}
-
-impl Composer {
-    pub fn input_focus_handle(&self, cx: &App) -> FocusHandle {
-        self.input.focus_handle(cx)
     }
 }
 

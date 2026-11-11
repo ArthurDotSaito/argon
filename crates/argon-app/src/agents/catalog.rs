@@ -128,12 +128,31 @@ impl SessionCatalog {
             _ = this.update(cx, |this, cx| {
                 this.loaded = true;
                 match loaded {
-                    Ok(rows) => this.history = rows,
+                    Ok(rows) => {
+                        let previous = std::mem::replace(&mut this.history, rows);
+                        this.drop_stale_historical(&previous);
+                    }
                     Err(error) => tracing::warn!(%error, "failed to load agent sessions"),
                 }
                 cx.notify();
             });
         }));
+    }
+
+    fn drop_stale_historical(&mut self, previous: &[HistoryRow]) {
+        let current = &self.history;
+        self.historical.retain(|id, _| {
+            let before = previous.iter().find(|history| history.row.id == *id);
+            let after = current.iter().find(|history| history.row.id == *id);
+            match (before, after) {
+                (Some(before), Some(after)) => {
+                    before.row.status == after.row.status
+                        && before.worktree_present == after.worktree_present
+                        && before.row.failure_reason == after.row.failure_reason
+                }
+                _ => false,
+            }
+        });
     }
 
     pub fn cards(&self, now: DateTime<Utc>, cx: &App) -> Vec<SessionCard> {

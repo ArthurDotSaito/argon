@@ -214,6 +214,28 @@ impl Workspace {
     ) {
         if let Some(view) = self.active_pr_view(window, cx) {
             view.update(cx, |view, cx| view.open_ai_review(window, cx));
+        } else if let Some(pr) = self.active_session_pr(window, cx) {
+            self.review_pr_with_ai(pr, window, cx);
+        }
+    }
+
+    pub(super) fn active_session_pr(&self, window: &Window, cx: &App) -> Option<PrKey> {
+        let panel = self.active_center_panel(window, cx)?;
+        let CenterItem::AgentSession(id) = panel.read(cx).item() else {
+            return None;
+        };
+        SessionCatalog::global(cx)?.read(cx).pr_of(id, cx)
+    }
+
+    pub(super) fn start_review_of(
+        &mut self,
+        pr: PrKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
+        if let Some(view) = self.pr_view(&pr, cx) {
+            view.update(cx, |view, cx| view.start_review(window, cx));
         }
     }
 

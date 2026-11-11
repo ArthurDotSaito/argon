@@ -147,15 +147,15 @@ mod tests {
     }
 
     #[test]
-    fn filters_split_active_from_finished() {
-        let expected = [
+    fn filters_match_their_statuses() {
+        let table = [
             (CardStatus::Awaiting, [true, true, false, false, false]),
             (CardStatus::Running, [true, false, true, false, false]),
             (CardStatus::Completed, [true, false, false, true, false]),
             (CardStatus::Failed, [true, false, false, true, false]),
             (CardStatus::Archived, [true, false, false, false, true]),
         ];
-        for (status, matches) in expected {
+        for (status, matches) in table {
             for (filter, expected) in SessionFilter::ALL.into_iter().zip(matches) {
                 assert_eq!(status.matches(filter), expected, "{status:?} {filter:?}");
             }
