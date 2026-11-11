@@ -10,17 +10,17 @@ use crate::inbox;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockSlot {
     Views,
-    Agents,
+    Aside,
     Log,
 }
 
 impl DockSlot {
-    pub const ALL: [Self; 3] = [Self::Views, Self::Agents, Self::Log];
+    pub const ALL: [Self; 3] = [Self::Views, Self::Aside, Self::Log];
 
     pub fn panel_name(self) -> &'static str {
         match self {
             Self::Views => inbox::VIEWS_PANEL,
-            Self::Agents => "argon.agents",
+            Self::Aside => "argon.aside",
             Self::Log => "argon.log",
         }
     }
@@ -28,7 +28,7 @@ impl DockSlot {
     fn title(self) -> &'static str {
         match self {
             Self::Views => "Visões",
-            Self::Agents => "Agentes",
+            Self::Aside => "Painel",
             Self::Log => "Log",
         }
     }
@@ -36,7 +36,7 @@ impl DockSlot {
     fn hint(self) -> &'static str {
         match self {
             Self::Views => "Inbox, Needs you, Your PRs…",
-            Self::Agents => "Nenhuma sessão de agente.",
+            Self::Aside => "Arraste uma aba para cá.",
             Self::Log => "Nada por aqui ainda.",
         }
     }

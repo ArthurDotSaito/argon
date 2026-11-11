@@ -8,14 +8,12 @@ use super::catalog::SessionCatalog;
 use super::panel_labels as labels;
 use super::thread_model::ThreadModel;
 use super::thread_view::ThreadView;
-use crate::center::CenterItem;
-use crate::workspace::Workspace;
+use crate::workspace::{SessionPlacement, Workspace};
 
 pub fn open_session_tab(session_id: &str, window: &mut Window, cx: &mut App) {
     if let Some(workspace) = Workspace::global(cx) {
-        let item = CenterItem::AgentSession(session_id.to_owned());
         _ = workspace.update(cx, |workspace, cx| {
-            workspace.open_item(item, false, window, cx)
+            workspace.open_session(session_id.to_owned(), SessionPlacement::Center, window, cx)
         });
     }
 }

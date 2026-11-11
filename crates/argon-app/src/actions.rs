@@ -17,6 +17,7 @@ gpui_kit::actions!(
         OpenPalette,
         SyncNow,
         OpenSettings,
+        GoToAgents,
         CheckForUpdates,
         ToggleDiffMode,
         CancelComment,

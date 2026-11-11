@@ -142,7 +142,7 @@ impl SessionCatalog {
         for thread in self.sessions.read(cx).threads() {
             let thread = thread.read(cx);
             live.insert(thread.info().session_id.clone());
-            cards.push(SessionCard::from_thread(thread, now, cx));
+            cards.push(SessionCard::from_thread(thread, now));
         }
         for history in &self.history {
             if !live.contains(&history.row.id) {
@@ -222,7 +222,6 @@ impl SessionCatalog {
         Some(thread)
     }
 
-    #[allow(dead_code)]
     pub fn pr_of(&self, session_id: &str, cx: &App) -> Option<PrKey> {
         if let Some(live) = self.sessions.read(cx).thread(session_id) {
             return Some(live.read(cx).info().pr.clone());
@@ -233,7 +232,6 @@ impl SessionCatalog {
             .map(|history| history.row.pr.clone())
     }
 
-    #[allow(dead_code)]
     pub fn latest_for(&self, pr: &PrKey, cx: &App) -> Option<String> {
         let live = self
             .sessions

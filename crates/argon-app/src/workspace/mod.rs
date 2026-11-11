@@ -13,10 +13,11 @@ use gpui_kit::{
     ParentElement as _, Render, Styled as _, Subscription, Window, div,
 };
 
+pub use self::agents::SessionPlacement;
 pub use self::docks::DockPosition;
 use self::palette_slot::PaletteSlot;
-use crate::actions::{CheckForUpdates, GoToView, OpenSettings, StartReview, SyncNow};
-use crate::agents::AgentSessions;
+use crate::actions::{CheckForUpdates, GoToAgents, GoToView, OpenSettings, StartReview, SyncNow};
+use crate::agents::{AgentSessions, SessionFilter};
 use crate::bottom;
 use crate::center::{CenterContentFactory, CenterItem};
 use crate::inbox::{InboxEvent, InboxModel, InboxView};
@@ -122,6 +123,10 @@ impl Workspace {
         self.show_view(action.0, cx);
     }
 
+    fn on_go_to_agents(&mut self, _: &GoToAgents, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_agents(SessionFilter::All, window, cx);
+    }
+
     fn on_sync_now(&mut self, _: &SyncNow, _: &mut Window, cx: &mut Context<Self>) {
         title_bar::request_sync(cx);
     }
@@ -220,6 +225,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_close_active_item))
             .on_action(cx.listener(Self::on_open_palette))
             .on_action(cx.listener(Self::on_go_to_view))
+            .on_action(cx.listener(Self::on_go_to_agents))
             .on_action(cx.listener(Self::on_sync_now))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_check_for_updates))

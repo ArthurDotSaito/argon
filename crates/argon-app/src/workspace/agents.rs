@@ -1,16 +1,23 @@
 use argon_core::{PrKey, Side};
-use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::notification::Notification;
-use gpui_kit::{App, Context, Entity, Global, WeakEntity, Window};
+use gpui_kit::component::Placement;
+use gpui_kit::component::dock::{InsertTarget, PanelId};
+use gpui_kit::{App, Context, Entity, Focusable as _, Global, WeakEntity, Window, px};
 
-use super::{DockPosition, Workspace};
+use super::Workspace;
 use crate::actions::ReviewWithAi;
-use crate::agents::{AgentSessions, AgentsEvent};
+use crate::agents::{AgentSessions, AgentsEvent, SessionCatalog, SessionFilter};
 use crate::center::CenterItem;
+use crate::dock_items;
 use crate::pr::PrView;
 use crate::services::AppServices;
 
-const OPEN_A_PR: &str = "Abra a aba de um PR para revisar com IA";
+const SESSION_SPLIT_WIDTH: f32 = 420.;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionPlacement {
+    Center,
+    BesidePr,
+}
 
 struct WorkspaceHandle(WeakEntity<Workspace>);
 
@@ -60,13 +67,6 @@ impl Workspace {
         self.pr_view(pr, cx)?.read(cx).selected_line(cx)
     }
 
-    pub fn review_active_pr_with_ai(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.active_pr_view(window, cx) {
-            Some(view) => view.update(cx, |view, cx| view.open_ai_review(window, cx)),
-            None => window.push_notification(Notification::info(OPEN_A_PR), cx),
-        }
-    }
-
     pub fn review_pr_with_ai(&mut self, pr: PrKey, window: &mut Window, cx: &mut Context<Self>) {
         self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
         if let Some(view) = self.pr_view(&pr, cx) {
@@ -103,8 +103,90 @@ impl Workspace {
         }
     }
 
-    pub fn reveal_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reveal_dock(DockPosition::Right, window, cx);
+    pub fn show_agents(
+        &mut self,
+        filter: SessionFilter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(catalog) = SessionCatalog::global(cx) {
+            catalog.update(cx, |catalog, cx| {
+                catalog.set_filter(filter, cx);
+                catalog.set_agents_active(true, cx);
+            });
+        }
+        self.open_item(CenterItem::Agents, false, window, cx);
+    }
+
+    pub fn open_session(
+        &mut self,
+        session_id: String,
+        placement: SessionPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pr = match placement {
+            SessionPlacement::Center => None,
+            SessionPlacement::BesidePr => SessionCatalog::global(cx)
+                .and_then(|catalog| catalog.read(cx).pr_of(&session_id, cx)),
+        };
+        self.open_session_for(session_id, pr, window, cx);
+    }
+
+    fn open_session_for(
+        &mut self,
+        session_id: String,
+        pr: Option<PrKey>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let item = CenterItem::AgentSession(session_id);
+        let already_open = self
+            .center_panels(cx)
+            .iter()
+            .any(|panel| panel.read(cx).item() == &item);
+        let Some(pr) = pr.filter(|_| !already_open) else {
+            self.open_item(item, false, window, cx);
+            return;
+        };
+        self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
+        let area = self.dock_area.read(cx);
+        let pr_node = self
+            .center_panels(cx)
+            .iter()
+            .find(|panel| panel.read(cx).item() == &CenterItem::Pr(pr.clone()))
+            .and_then(|panel| dock_items::locate(area, PanelId::from(panel.entity_id())))
+            .map(|(_, node)| node);
+        let sibling_group = self
+            .center_panels(cx)
+            .iter()
+            .filter(|panel| matches!(panel.read(cx).item(), CenterItem::AgentSession(_)))
+            .filter_map(|panel| dock_items::locate(area, PanelId::from(panel.entity_id())))
+            .map(|(_, node)| node)
+            .find(|node| Some(*node) != pr_node);
+        let panel = self.add_center_panel(item, false, window, cx);
+        let id = PanelId::from(panel.entity_id());
+        let target = match (sibling_group, pr_node) {
+            (Some(node), _) => Some(InsertTarget::Tabs {
+                node,
+                ix: None,
+                activate: true,
+            }),
+            (None, Some(node)) => Some(InsertTarget::Split {
+                node,
+                placement: Placement::Right,
+                size: Some(px(SESSION_SPLIT_WIDTH)),
+            }),
+            (None, None) => None,
+        };
+        if let Some(target) = target {
+            self.dock_area
+                .update(cx, |area, cx| area.move_panel(id, target, window, cx));
+        }
+        self.reveal_center_panel(&panel, window, cx);
+        panel.read(cx).focus_handle(cx).focus(window, cx);
+        self.schedule_save(cx);
+        window.refresh();
     }
 
     pub(super) fn on_review_with_ai(
@@ -125,8 +207,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let AgentsEvent::SessionStarted { .. } = event {
-            self.reveal_agents(window, cx);
+        if let AgentsEvent::SessionStarted { session_id, pr } = event {
+            self.open_session_for(session_id.clone(), Some(pr.clone()), window, cx);
         }
     }
 }

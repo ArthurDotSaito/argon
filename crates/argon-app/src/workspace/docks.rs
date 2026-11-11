@@ -7,7 +7,6 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Window, px};
 
 use super::Workspace;
 use crate::actions::{ToggleBottomDock, ToggleLeftDock, ToggleRightDock};
-use crate::agents::AgentPanel;
 use crate::bottom::{self, JobLogEvent, JobLogModel, LogPanel};
 use crate::center::{CENTER_PANEL, CenterContentFactory, CenterItem, CenterPanel};
 use crate::inbox::{InboxModel, ViewsPanel};
@@ -36,7 +35,7 @@ impl DockPosition {
         match self {
             Self::Left => DockSlot::Views,
             Self::Bottom => DockSlot::Log,
-            Self::Right => DockSlot::Agents,
+            Self::Right => DockSlot::Aside,
         }
     }
 
@@ -55,18 +54,6 @@ impl Workspace {
             area.toggle_dock(dock.placement(), window, cx)
         });
         cx.notify();
-    }
-
-    pub(super) fn reveal_dock(
-        &mut self,
-        dock: DockPosition,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let open = self.dock_area.read(cx).is_dock_open(dock.placement());
-        if !open {
-            self.toggle_dock(dock, window, cx);
-        }
     }
 
     pub(super) fn on_job_log_event(
@@ -119,6 +106,12 @@ impl Workspace {
                     cx,
                 );
                 area.set_dock_size(dock.placement(), px(dock.default_size()), window, cx);
+            }
+        });
+        let right = DockPosition::Right.placement();
+        self.dock_area.update(cx, |area, cx| {
+            if area.is_dock_open(right) {
+                area.toggle_dock(right, window, cx);
             }
         });
         self.open_item(CenterItem::Inbox, false, window, cx);
@@ -199,7 +192,6 @@ pub(super) fn dock_panel(
 ) -> Arc<dyn BasePanelView> {
     match (slot, JobLogModel::global(cx)) {
         (DockSlot::Views, _) => panel_handle(cx.new(|cx| ViewsPanel::new(inbox.clone(), cx))),
-        (DockSlot::Agents, _) => panel_handle(cx.new(|cx| AgentPanel::new(window, cx))),
         (DockSlot::Log, Some(model)) => panel_handle(cx.new(|cx| LogPanel::new(model, window, cx))),
         (slot, _) => panel_handle(cx.new(|cx| DockPlaceholder::new(slot, cx))),
     }

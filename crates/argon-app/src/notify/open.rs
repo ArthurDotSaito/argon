@@ -1,9 +1,10 @@
 use gpui_kit::App;
 
 use super::toast::ToastTarget;
+use crate::agents::SessionCatalog;
 use crate::center::CenterItem;
 use crate::inbox::InboxView;
-use crate::workspace::Workspace;
+use crate::workspace::{SessionPlacement, Workspace};
 
 pub(super) fn is_window_focused(cx: &mut App) -> bool {
     cx.windows()
@@ -31,8 +32,12 @@ pub(super) fn open_target(target: ToastTarget, cx: &mut App) {
                 }
                 ToastTarget::AppUpdate => workspace.show_about(window, cx),
                 ToastTarget::AgentReview(key) => {
-                    workspace.open_item(CenterItem::Pr(key), false, window, cx);
-                    workspace.reveal_agents(window, cx);
+                    workspace.open_item(CenterItem::Pr(key.clone()), false, window, cx);
+                    let latest = SessionCatalog::global(cx)
+                        .and_then(|catalog| catalog.read(cx).latest_for(&key, cx));
+                    if let Some(id) = latest {
+                        workspace.open_session(id, SessionPlacement::BesidePr, window, cx);
+                    }
                 }
             }
         })

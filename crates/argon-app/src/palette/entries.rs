@@ -4,8 +4,8 @@ use gpui_kit::{Action, SharedString};
 
 use super::ranking::Candidate;
 use crate::actions::{
-    CheckForUpdates, CloseActiveItem, GoToView, OpenSettings, ReviewWithAi, StartReview, SyncNow,
-    ToggleBottomDock, ToggleLeftDock, ToggleRightDock, ToggleTheme,
+    CheckForUpdates, CloseActiveItem, GoToAgents, GoToView, OpenSettings, ReviewWithAi,
+    StartReview, SyncNow, ToggleBottomDock, ToggleLeftDock, ToggleRightDock, ToggleTheme,
 };
 use crate::inbox::InboxView;
 
@@ -91,6 +91,7 @@ pub fn command_specs() -> Vec<CommandSpec> {
         .into_iter()
         .map(go_to)
         .chain([
+            CommandSpec::new("Ir para Agentes", IconName::Bot, GoToAgents),
             CommandSpec::new("Sincronizar agora", IconName::RefreshCw, SyncNow),
             CommandSpec::new(
                 "Alternar painel esquerdo",
