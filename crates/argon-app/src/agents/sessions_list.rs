@@ -14,6 +14,7 @@ use gpui_kit::{
 use super::badges::{severity_counts, status_chip};
 use super::card_status::{CardStatus, SessionFilter, card_status, resume_action};
 use super::finding_set::SeverityCounts;
+use super::grouping::Groupable;
 use super::lifecycle::APP_CLOSED_REASON;
 use super::panel::AgentPanel;
 use super::panel_labels as labels;
@@ -25,6 +26,7 @@ use crate::inbox::InboxModel;
 
 pub struct SessionCard {
     pub id: String,
+    pub pr: PrKey,
     pub title: SharedString,
     pub reference: SharedString,
     pub agent_line: SharedString,
@@ -50,6 +52,20 @@ pub fn pr_labels(pr: &PrKey, number: Option<u64>, cx: &App) -> (SharedString, Sh
     }
 }
 
+impl Groupable for SessionCard {
+    fn pr(&self) -> &PrKey {
+        &self.pr
+    }
+
+    fn status(&self) -> CardStatus {
+        self.status
+    }
+
+    fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+}
+
 impl SessionCard {
     pub fn from_thread(thread: &ThreadModel, now: DateTime<Utc>, cx: &App) -> Self {
         let info = thread.info();
@@ -66,6 +82,7 @@ impl SessionCard {
             });
         Self {
             id: info.session_id.clone(),
+            pr: info.pr.clone(),
             title,
             reference,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
@@ -89,7 +106,7 @@ impl SessionCard {
         worktree_present: bool,
         cx: &App,
     ) -> Self {
-        let info = super::panel::session_info(row, worktree_present, cx);
+        let info = super::catalog::session_info(row, worktree_present, cx);
         let status = card_status(row.status, false, 0);
         let app_closed = row.failure_reason.as_deref() == Some(APP_CLOSED_REASON);
         let resume = resume_action(
@@ -100,6 +117,7 @@ impl SessionCard {
         let (title, reference) = pr_labels(&row.pr, info.number, cx);
         Self {
             id: row.id.clone(),
+            pr: row.pr.clone(),
             title,
             reference,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),

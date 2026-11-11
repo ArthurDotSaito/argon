@@ -1,5 +1,6 @@
 mod badges;
 mod card_status;
+mod catalog;
 mod choice;
 mod composer;
 mod context;
@@ -34,6 +35,7 @@ mod usage_refresh;
 mod usage_view;
 pub mod warmup;
 
+pub use catalog::SessionCatalog;
 pub(crate) use choice::{Choice, permission_choices};
 pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};
 pub(crate) use detection::{AgentOption, CardState, card_state};

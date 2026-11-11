@@ -1,6 +1,3 @@
-mod history;
-
-use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -13,13 +10,11 @@ use gpui_kit::{
     Task, Window,
 };
 
-use self::history::HistoryRow;
-pub(super) use self::history::session_info;
 use super::card_status::SessionFilter;
+use super::catalog::SessionCatalog;
 use super::panel_labels as labels;
 use super::sessions::{AgentSessions, AgentsEvent};
-use super::sessions_list::{SessionCard, render_list};
-use super::thread_model::ThreadModel;
+use super::sessions_list::render_list;
 use super::thread_view::{ThreadView, ThreadViewEvent};
 use crate::workspace::Workspace;
 
@@ -30,10 +25,7 @@ pub struct AgentPanel {
     focus_handle: FocusHandle,
     sessions: Option<Entity<AgentSessions>>,
     filter: SessionFilter,
-    history: Vec<HistoryRow>,
-    history_loaded: bool,
-    history_task: Option<Task<()>>,
-    historical: HashMap<String, Entity<ThreadModel>>,
+    catalog: Option<Entity<SessionCatalog>>,
     thread: Option<(Entity<ThreadView>, Subscription)>,
     last_render: Option<Instant>,
     _ticker: Task<()>,
@@ -43,7 +35,11 @@ pub struct AgentPanel {
 impl AgentPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sessions = AgentSessions::global(cx);
+        let catalog = SessionCatalog::global(cx);
         let mut subscriptions = Vec::new();
+        if let Some(catalog) = &catalog {
+            subscriptions.push(cx.observe(catalog, |_, _, cx| cx.notify()));
+        }
         if let Some(sessions) = &sessions {
             subscriptions.push(cx.observe(sessions, |_, _, cx| cx.notify()));
             subscriptions.push(cx.subscribe_in(
@@ -51,13 +47,10 @@ impl AgentPanel {
                 window,
                 |this, _, event: &AgentsEvent, window, cx| match event {
                     AgentsEvent::SessionStarted { session_id, .. } => {
-                        this.historical.remove(session_id);
                         this.open_thread(session_id, window, cx);
                     }
-                    AgentsEvent::SessionArchived { session_id } => {
-                        this.historical.remove(session_id);
+                    AgentsEvent::SessionArchived { .. } => {
                         this.thread = None;
-                        this.reload_history(cx);
                         cx.notify();
                     }
                 },
@@ -76,21 +69,16 @@ impl AgentPanel {
                 }
             }
         });
-        let mut this = Self {
+        Self {
             focus_handle: cx.focus_handle(),
             sessions,
             filter: SessionFilter::All,
-            history: Vec::new(),
-            history_loaded: false,
-            history_task: None,
-            historical: HashMap::new(),
+            catalog,
             thread: None,
             last_render: None,
             _ticker: ticker,
             _subscriptions: subscriptions,
-        };
-        this.reload_history(cx);
-        this
+        }
     }
 
     fn is_visible(&self) -> bool {
@@ -120,18 +108,19 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let live = self
-            .sessions
-            .as_ref()
-            .and_then(|sessions| sessions.read(cx).thread(session_id));
-        let Some(model) = live.or_else(|| self.historical_thread(session_id, cx)) else {
+        let Some(catalog) = self.catalog.clone() else {
+            return;
+        };
+        let Some(model) = catalog.update(cx, |catalog, cx| catalog.thread(session_id, cx)) else {
             return;
         };
         let view = cx.new(|cx| ThreadView::new(model, window, cx));
         let subscription = cx.subscribe(&view, |this, _, event: &ThreadViewEvent, cx| {
             let ThreadViewEvent::Back = event;
             this.thread = None;
-            this.reload_history(cx);
+            if let Some(catalog) = this.catalog.clone() {
+                catalog.update(cx, |catalog, cx| catalog.reload(cx));
+            }
             cx.notify();
         });
         self.thread = Some((view, subscription));
@@ -139,27 +128,14 @@ impl AgentPanel {
     }
 
     fn render_list(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
-        let now = Utc::now();
-        let mut cards = Vec::new();
-        let mut active = HashSet::new();
-        if let Some(sessions) = &self.sessions {
-            for thread in sessions.read(cx).threads() {
-                let thread = thread.read(cx);
-                active.insert(thread.info().session_id.clone());
-                cards.push(SessionCard::from_thread(thread, now, cx));
+        let (cards, loaded) = match &self.catalog {
+            Some(catalog) => {
+                let catalog = catalog.read(cx);
+                (catalog.cards(Utc::now(), cx), catalog.is_loaded())
             }
-        }
-        for history in &self.history {
-            if !active.contains(&history.row.id) {
-                cards.push(SessionCard::from_row(
-                    &history.row,
-                    history.counts,
-                    history.worktree_present,
-                    cx,
-                ));
-            }
-        }
-        render_list(cards, self.filter, self.history_loaded, cx)
+            None => (Vec::new(), false),
+        };
+        render_list(cards, self.filter, loaded, cx)
     }
 
     pub(super) fn new_review(window: &mut Window, cx: &mut App) {

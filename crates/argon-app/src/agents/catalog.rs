@@ -1,0 +1,247 @@
+use std::collections::HashMap;
+
+use argon_agents::defaults::agent_defaults;
+use argon_core::PrKey;
+use argon_store::{SessionRow, SessionStatus, Store};
+use chrono::{DateTime, Utc};
+use gpui_kit::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
+
+use super::card_status::SessionFilter;
+use super::finding_set::SeverityCounts;
+use super::sessions::{AgentSessions, AgentsEvent};
+use super::sessions_list::SessionCard;
+use super::thread_model::{SessionInfo, ThreadModel};
+use crate::inbox::InboxModel;
+use crate::services::{AppServices, flatten};
+
+struct HistoryRow {
+    row: SessionRow,
+    counts: SeverityCounts,
+    worktree_present: bool,
+}
+
+fn load_rows(store: &mut Store) -> argon_store::Result<Vec<HistoryRow>> {
+    let mut rows = Vec::new();
+    for row in store.sessions()? {
+        let findings = store.findings(&row.id)?;
+        let counts = SeverityCounts::tally(
+            findings
+                .iter()
+                .map(|stored| (&stored.finding, stored.state)),
+        );
+        let worktree_present = row
+            .worktree_path
+            .as_deref()
+            .is_some_and(std::path::Path::exists);
+        rows.push(HistoryRow {
+            row,
+            counts,
+            worktree_present,
+        });
+    }
+    Ok(rows)
+}
+
+pub(super) fn session_info(row: &SessionRow, worktree_present: bool, cx: &App) -> SessionInfo {
+    let number =
+        InboxModel::global(cx).and_then(|inbox| inbox.read(cx).pr(&row.pr).map(|pr| pr.number));
+    SessionInfo {
+        session_id: row.id.clone(),
+        pr: row.pr.clone(),
+        number,
+        agent_label: agent_defaults(row.agent).label,
+        model: row.model.clone(),
+        model_label: row.model_label.clone().unwrap_or_else(|| row.model.clone()),
+        worktree: row.worktree_path.clone().filter(|_| worktree_present),
+        created_at: row.created_at,
+        ended_at: Some(row.updated_at),
+        resumable: agent_defaults(row.agent).load_session
+            && row.acp_session_id.is_some()
+            && row.status != SessionStatus::Archived,
+        failure_reason: row.failure_reason.clone(),
+        head_oid: None,
+    }
+}
+
+struct SessionCatalogHandle(Entity<SessionCatalog>);
+
+impl Global for SessionCatalogHandle {}
+
+pub struct SessionCatalog {
+    sessions: Entity<AgentSessions>,
+    history: Vec<HistoryRow>,
+    loaded: bool,
+    historical: HashMap<String, Entity<ThreadModel>>,
+    filter: SessionFilter,
+    agents_active: bool,
+    history_task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl SessionCatalog {
+    pub fn init(sessions: Entity<AgentSessions>, cx: &mut App) {
+        if Self::global(cx).is_some() {
+            return;
+        }
+        let catalog = cx.new(|cx| Self::new(sessions, cx));
+        cx.set_global(SessionCatalogHandle(catalog));
+    }
+
+    pub fn global(cx: &App) -> Option<Entity<Self>> {
+        cx.try_global::<SessionCatalogHandle>()
+            .map(|handle| handle.0.clone())
+    }
+
+    fn new(sessions: Entity<AgentSessions>, cx: &mut Context<Self>) -> Self {
+        let subscriptions = vec![
+            cx.observe(&sessions, |_, _, cx| cx.notify()),
+            cx.subscribe(&sessions, |this, _, event: &AgentsEvent, cx| {
+                let (AgentsEvent::SessionStarted { session_id, .. }
+                | AgentsEvent::SessionArchived { session_id }) = event;
+                this.historical.remove(session_id);
+                this.reload(cx);
+            }),
+        ];
+        let mut this = Self {
+            sessions,
+            history: Vec::new(),
+            loaded: false,
+            historical: HashMap::new(),
+            filter: SessionFilter::All,
+            agents_active: false,
+            history_task: None,
+            _subscriptions: subscriptions,
+        };
+        this.reload(cx);
+        this
+    }
+
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        let Some(services) = cx
+            .try_global::<AppServices>()
+            .map(|global| global.0.clone())
+        else {
+            return;
+        };
+        self.history_task = Some(cx.spawn(async move |this, cx| {
+            let loaded = flatten(services.store().call(load_rows).await);
+            _ = this.update(cx, |this, cx| {
+                this.loaded = true;
+                match loaded {
+                    Ok(rows) => this.history = rows,
+                    Err(error) => tracing::warn!(%error, "failed to load agent sessions"),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    pub fn cards(&self, now: DateTime<Utc>, cx: &App) -> Vec<SessionCard> {
+        let mut cards = Vec::new();
+        for thread in self.sessions.read(cx).threads() {
+            cards.push(SessionCard::from_thread(thread.read(cx), now, cx));
+        }
+        for history in &self.history {
+            if !cards.iter().any(|card| card.id == history.row.id) {
+                cards.push(SessionCard::from_row(
+                    &history.row,
+                    history.counts,
+                    history.worktree_present,
+                    cx,
+                ));
+            }
+        }
+        cards
+    }
+
+    #[allow(dead_code)]
+    pub fn count(&self, filter: SessionFilter, cx: &App) -> usize {
+        self.cards(Utc::now(), cx)
+            .iter()
+            .filter(|card| card.status.matches(filter))
+            .count()
+    }
+
+    pub fn thread(
+        &mut self,
+        session_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ThreadModel>> {
+        if let Some(live) = self.sessions.read(cx).thread(session_id) {
+            return Some(live);
+        }
+        if let Some(thread) = self.historical.get(session_id) {
+            return Some(thread.clone());
+        }
+        let history = self
+            .history
+            .iter()
+            .find(|history| history.row.id == session_id)?;
+        let info = session_info(&history.row, history.worktree_present, cx);
+        let status = history.row.status;
+        let thread = cx.new(|cx| ThreadModel::historical(info, status, cx));
+        self.historical
+            .insert(session_id.to_owned(), thread.clone());
+        Some(thread)
+    }
+
+    #[allow(dead_code)]
+    pub fn pr_of(&self, session_id: &str, cx: &App) -> Option<PrKey> {
+        if let Some(live) = self.sessions.read(cx).thread(session_id) {
+            return Some(live.read(cx).info().pr.clone());
+        }
+        self.history
+            .iter()
+            .find(|history| history.row.id == session_id)
+            .map(|history| history.row.pr.clone())
+    }
+
+    #[allow(dead_code)]
+    pub fn latest_for(&self, pr: &PrKey, cx: &App) -> Option<String> {
+        let live = self
+            .sessions
+            .read(cx)
+            .threads()
+            .map(|thread| thread.read(cx).info())
+            .filter(|info| info.pr == *pr)
+            .map(|info| (info.created_at, info.session_id.clone()));
+        let stored = self
+            .history
+            .iter()
+            .filter(|history| history.row.pr == *pr)
+            .map(|history| (history.row.created_at, history.row.id.clone()));
+        live.chain(stored)
+            .max_by_key(|(created_at, _)| *created_at)
+            .map(|(_, id)| id)
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    #[allow(dead_code)]
+    pub fn filter(&self) -> SessionFilter {
+        self.filter
+    }
+
+    #[allow(dead_code)]
+    pub fn set_filter(&mut self, filter: SessionFilter, cx: &mut Context<Self>) {
+        if self.filter != filter {
+            self.filter = filter;
+            cx.notify();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn agents_active(&self) -> bool {
+        self.agents_active
+    }
+
+    #[allow(dead_code)]
+    pub fn set_agents_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.agents_active != active {
+            self.agents_active = active;
+            cx.notify();
+        }
+    }
+}
