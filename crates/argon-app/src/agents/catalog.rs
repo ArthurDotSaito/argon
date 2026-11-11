@@ -4,7 +4,7 @@ use argon_agents::defaults::agent_defaults;
 use argon_core::PrKey;
 use argon_store::{SessionRow, SessionStatus, Store};
 use chrono::{DateTime, Utc};
-use gpui_kit::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
+use gpui_kit::{App, AppContext as _, Context, Entity, Global, SharedString, Subscription, Task};
 
 use super::card_status::{CardStatus, SessionFilter, card_status};
 use super::finding_set::SeverityCounts;
@@ -173,6 +173,27 @@ impl SessionCatalog {
                 .filter(|history| !live.contains(&history.row.id))
                 .filter(|history| card_status(history.row.status, false, 0).matches(filter))
                 .count()
+    }
+
+    pub fn tab_title(&self, session_id: &str, cx: &App) -> Option<SharedString> {
+        let (number, agent_label) = match self.sessions.read(cx).thread(session_id) {
+            Some(live) => {
+                let info = live.read(cx).info();
+                (info.number, info.agent_label)
+            }
+            None => {
+                let history = self
+                    .history
+                    .iter()
+                    .find(|history| history.row.id == session_id)?;
+                let info = session_info(&history.row, history.worktree_present, cx);
+                (info.number, info.agent_label)
+            }
+        };
+        Some(match number {
+            Some(number) => format!("#{number} · {agent_label}").into(),
+            None => agent_label.into(),
+        })
     }
 
     pub fn thread(

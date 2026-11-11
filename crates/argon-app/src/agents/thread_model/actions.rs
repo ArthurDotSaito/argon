@@ -4,6 +4,7 @@ use argon_store::FindingState;
 use gpui_kit::{Context, SharedString};
 
 use super::{ThreadEvent, ThreadModel};
+use crate::agents::SessionCatalog;
 use crate::agents::finding_set::draft_for;
 use crate::agents::panel_labels as labels;
 use crate::agents::sessions::AgentSessions;
@@ -229,6 +230,9 @@ impl ThreadModel {
             Ok(()) => {
                 self.findings.set_state(id, state);
                 self.action_error = None;
+                if let Some(catalog) = SessionCatalog::global(cx) {
+                    catalog.update(cx, |catalog, cx| catalog.reload(cx));
+                }
             }
             Err(error) => {
                 tracing::warn!(%error, "failed to update agent finding");

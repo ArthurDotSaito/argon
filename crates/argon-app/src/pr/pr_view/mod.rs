@@ -100,6 +100,7 @@ pub struct PrView {
     actions: Entity<ActionsTab>,
     review: Entity<ReviewTab>,
     focus_handle: FocusHandle,
+    pending_ai_review: bool,
     load_task: Option<Task<()>>,
     merge_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -171,6 +172,7 @@ impl PrView {
             actions,
             review,
             focus_handle: cx.focus_handle(),
+            pending_ai_review: false,
             load_task: None,
             merge_task: None,
             _subscriptions: subscriptions,
@@ -248,7 +250,8 @@ impl Focusable for PrView {
 }
 
 impl Render for PrView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settle_pending_ai_review(window, cx);
         let now = Utc::now();
         let detail = self.detail.clone();
         let store_pr = self.store_pr.clone();

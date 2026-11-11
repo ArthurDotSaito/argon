@@ -8,8 +8,9 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, FollowMode, IntoElement, ListAlignment, ListState,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, list, px,
+    App, AppContext as _, Context, Div, Entity, FocusHandle, FollowMode, IntoElement,
+    ListAlignment, ListState, ParentElement as _, Render, SharedString, Styled as _, Subscription,
+    Window, div, list, px,
 };
 
 use super::badges::{severity_counts, status_chip};
@@ -62,6 +63,12 @@ impl ThreadView {
         self.rows = rows;
         self.list.remeasure_items(0..rows);
         cx.notify();
+    }
+
+    pub fn composer_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        self.composer
+            .as_ref()
+            .map(|composer| composer.read(cx).input_focus_handle(cx))
     }
 
     pub(super) fn is_expanded(&self, key: &str) -> bool {

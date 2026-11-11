@@ -137,7 +137,15 @@ impl AgentsView {
     fn session_row(&self, card: SessionCard, cx: &App) -> Stateful<Div> {
         let theme = cx.theme();
         let id = card.id.clone();
-        let actions = controls(&card.controls, "agents-row", cx);
+        let actions = controls(&card.controls, "agents-row", cx).map(|actions| {
+            div()
+                .id(SharedString::from(format!(
+                    "agents-row-actions-{}",
+                    card.id
+                )))
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .child(actions)
+        });
         let detail = (card.counts.total() > 0 || card.note.is_some()).then(|| {
             h_flex()
                 .gap_2()

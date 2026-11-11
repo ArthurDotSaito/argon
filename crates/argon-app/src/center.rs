@@ -89,11 +89,7 @@ impl CenterPanel {
                 this.refresh_title(window, cx)
             })
         });
-        let catalog_subscription = SessionCatalog::global(cx).map(|catalog| {
-            cx.observe_in(&catalog, window, |this, _, window, cx| {
-                this.refresh_title(window, cx)
-            })
-        });
+        let catalog_subscription = Self::watch_catalog(&item, window, cx);
         Self {
             title: item.title(cx),
             item,
@@ -104,6 +100,20 @@ impl CenterPanel {
             _inbox_subscription: inbox_subscription,
             _catalog_subscription: catalog_subscription,
         }
+    }
+
+    fn watch_catalog(
+        item: &CenterItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Subscription> {
+        let CenterItem::AgentSession(_) = item else {
+            return None;
+        };
+        let catalog = SessionCatalog::global(cx)?;
+        Some(cx.observe_in(&catalog, window, |this, _, window, cx| {
+            this.refresh_title(window, cx)
+        }))
     }
 
     fn watch_focus(
@@ -158,6 +168,7 @@ impl CenterPanel {
         self.content = (self.content_factory)(&item, window, cx);
         self._focus_subscription = Self::watch_focus(&self.content, window, cx);
         self.title = item.title(cx);
+        self._catalog_subscription = Self::watch_catalog(&item, window, cx);
         self.item = item;
         cx.notify();
     }
