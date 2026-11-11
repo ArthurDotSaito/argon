@@ -31,23 +31,27 @@ pub struct SessionTab {
     catalog: Option<Entity<SessionCatalog>>,
     view: Option<(Entity<ThreadModel>, Entity<ThreadView>)>,
     focus_handle: FocusHandle,
-    _subscription: Option<Subscription>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl SessionTab {
     pub fn new(session_id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let catalog = SessionCatalog::global(cx);
-        let subscription = catalog.as_ref().map(|catalog| {
+        let focus_handle = cx.focus_handle();
+        let mut subscriptions = vec![cx.on_focus(&focus_handle, window, |this, window, cx| {
+            this.focus_composer(window, cx)
+        })];
+        subscriptions.extend(catalog.as_ref().map(|catalog| {
             cx.observe_in(catalog, window, |this, _, window, cx| {
                 this.resolve(window, cx)
             })
-        });
+        }));
         let mut this = Self {
             session_id,
             catalog,
             view: None,
-            focus_handle: cx.focus_handle(),
-            _subscription: subscription,
+            focus_handle,
+            _subscriptions: subscriptions,
         };
         this.resolve(window, cx);
         this
@@ -72,7 +76,10 @@ impl SessionTab {
         let view = cx.new(|cx| ThreadView::new(model.clone(), window, cx));
         self.view = Some((model, view));
         if had_focus {
-            self.focus_composer(window, cx);
+            match self.composer_focus_handle(cx) {
+                Some(handle) => handle.focus(window, cx),
+                None => self.focus_handle.focus(window, cx),
+            }
         }
         cx.notify();
     }
@@ -108,9 +115,8 @@ impl SessionTab {
 }
 
 impl Focusable for SessionTab {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.composer_focus_handle(cx)
-            .unwrap_or_else(|| self.focus_handle.clone())
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
