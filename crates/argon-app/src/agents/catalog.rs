@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use argon_agents::defaults::agent_defaults;
 use argon_core::PrKey;
@@ -6,7 +6,7 @@ use argon_store::{SessionRow, SessionStatus, Store};
 use chrono::{DateTime, Utc};
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
 
-use super::card_status::SessionFilter;
+use super::card_status::{CardStatus, SessionFilter, card_status};
 use super::finding_set::SeverityCounts;
 use super::sessions::{AgentSessions, AgentsEvent};
 use super::sessions_list::SessionCard;
@@ -138,11 +138,14 @@ impl SessionCatalog {
 
     pub fn cards(&self, now: DateTime<Utc>, cx: &App) -> Vec<SessionCard> {
         let mut cards = Vec::new();
+        let mut live = HashSet::new();
         for thread in self.sessions.read(cx).threads() {
-            cards.push(SessionCard::from_thread(thread.read(cx), now, cx));
+            let thread = thread.read(cx);
+            live.insert(thread.info().session_id.clone());
+            cards.push(SessionCard::from_thread(thread, now, cx));
         }
         for history in &self.history {
-            if !cards.iter().any(|card| card.id == history.row.id) {
+            if !live.contains(&history.row.id) {
                 cards.push(SessionCard::from_row(
                     &history.row,
                     history.counts,
@@ -156,10 +159,20 @@ impl SessionCatalog {
 
     #[allow(dead_code)]
     pub fn count(&self, filter: SessionFilter, cx: &App) -> usize {
-        self.cards(Utc::now(), cx)
-            .iter()
-            .filter(|card| card.status.matches(filter))
-            .count()
+        let mut live = HashSet::new();
+        let mut total = 0;
+        for thread in self.sessions.read(cx).threads() {
+            let thread = thread.read(cx);
+            live.insert(thread.info().session_id.clone());
+            total += usize::from(thread.card_status().matches(filter));
+        }
+        total
+            + self
+                .history
+                .iter()
+                .filter(|history| !live.contains(&history.row.id))
+                .filter(|history| card_status(history.row.status, false, 0).matches(filter))
+                .count()
     }
 
     pub fn thread(
@@ -202,17 +215,30 @@ impl SessionCatalog {
             .sessions
             .read(cx)
             .threads()
-            .map(|thread| thread.read(cx).info())
-            .filter(|info| info.pr == *pr)
-            .map(|info| (info.created_at, info.session_id.clone()));
+            .map(|thread| thread.read(cx))
+            .filter(|thread| thread.info().pr == *pr)
+            .map(|thread| {
+                let info = thread.info();
+                (
+                    thread.card_status() != CardStatus::Archived,
+                    info.created_at,
+                    info.session_id.clone(),
+                )
+            });
         let stored = self
             .history
             .iter()
             .filter(|history| history.row.pr == *pr)
-            .map(|history| (history.row.created_at, history.row.id.clone()));
+            .map(|history| {
+                (
+                    history.row.status != SessionStatus::Archived,
+                    history.row.created_at,
+                    history.row.id.clone(),
+                )
+            });
         live.chain(stored)
-            .max_by_key(|(created_at, _)| *created_at)
-            .map(|(_, id)| id)
+            .max_by_key(|(active, created_at, _)| (*active, *created_at))
+            .map(|(_, _, id)| id)
     }
 
     pub fn is_loaded(&self) -> bool {

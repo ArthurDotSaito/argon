@@ -4,8 +4,9 @@ use std::time::SystemTime;
 use argon_agents::{AgentEvent, WorktreeManager, orphan_worktrees};
 use argon_store::{SessionStatus, StaleWorktree, Store};
 use chrono::{TimeDelta, Utc};
-use gpui_kit::{App, Entity};
+use gpui_kit::{App, AsyncApp, Entity};
 
+use super::catalog::SessionCatalog;
 use super::lifecycle::APP_CLOSED_REASON;
 use super::sessions::AgentSessions;
 use crate::services::{Services, StoreHandle, flatten};
@@ -76,27 +77,36 @@ async fn remove_orphans(worktrees: &WorktreeManager, known: Vec<PathBuf>, starte
     }
 }
 
+fn reload_catalog(cx: &AsyncApp) {
+    cx.update(|cx| {
+        if let Some(catalog) = SessionCatalog::global(cx) {
+            catalog.update(cx, |catalog, cx| catalog.reload(cx));
+        }
+    });
+}
+
 impl AgentSessions {
     pub fn recover(sessions: &Entity<Self>, services: &Services, cx: &mut App) {
         let started = SystemTime::now();
         let worktrees = sessions.read(cx).worktrees();
         let store = services.store();
         let services = services.clone();
-        cx.background_executor()
-            .spawn(async move {
-                let recovered = match flatten(store.call(recover_store).await) {
-                    Ok(recovered) => recovered,
-                    Err(error) => {
-                        tracing::warn!(%error, "failed to recover agent sessions");
-                        return;
-                    }
-                };
-                let job = async move {
-                    remove_stale(&worktrees, &store, recovered.stale).await;
-                    remove_orphans(&worktrees, recovered.known, started).await;
-                };
-                _ = services.spawn_runtime(job).await;
-            })
-            .detach();
+        cx.spawn(async move |cx| {
+            let recovered = match flatten(store.call(recover_store).await) {
+                Ok(recovered) => recovered,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to recover agent sessions");
+                    return;
+                }
+            };
+            reload_catalog(cx);
+            let job = async move {
+                remove_stale(&worktrees, &store, recovered.stale).await;
+                remove_orphans(&worktrees, recovered.known, started).await;
+            };
+            _ = services.spawn_runtime(job).await;
+            reload_catalog(cx);
+        })
+        .detach();
     }
 }
