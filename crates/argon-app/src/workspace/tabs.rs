@@ -3,6 +3,7 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 
 use super::Workspace;
 use crate::actions::CloseActiveItem;
+use crate::agents::SessionCatalog;
 use crate::center::{CenterItem, CenterPanel, CenterPanelEvent};
 use crate::dock_items;
 
@@ -168,6 +169,14 @@ impl Workspace {
             }
             CenterPanelEvent::Focused => {
                 self.last_focused = Some(PanelId::from(panel.entity_id()));
+                let agents_active = match panel.read(cx).item() {
+                    CenterItem::Agents => Some(true),
+                    CenterItem::Inbox => Some(false),
+                    _ => None,
+                };
+                if let (Some(active), Some(catalog)) = (agents_active, SessionCatalog::global(cx)) {
+                    catalog.update(cx, |catalog, cx| catalog.set_agents_active(active, cx));
+                }
             }
         }
     }

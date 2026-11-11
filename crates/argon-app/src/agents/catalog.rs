@@ -157,7 +157,6 @@ impl SessionCatalog {
         cards
     }
 
-    #[allow(dead_code)]
     pub fn count(&self, filter: SessionFilter, cx: &App) -> usize {
         let mut live = HashSet::new();
         let mut total = 0;
@@ -270,7 +269,6 @@ impl SessionCatalog {
         self.filter
     }
 
-    #[allow(dead_code)]
     pub fn set_filter(&mut self, filter: SessionFilter, cx: &mut Context<Self>) {
         if self.filter != filter {
             self.filter = filter;
@@ -278,12 +276,10 @@ impl SessionCatalog {
         }
     }
 
-    #[allow(dead_code)]
     pub fn agents_active(&self) -> bool {
         self.agents_active
     }
 
-    #[allow(dead_code)]
     pub fn set_agents_active(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.agents_active != active {
             self.agents_active = active;

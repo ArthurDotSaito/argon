@@ -38,6 +38,7 @@ mod usage_view;
 pub mod warmup;
 
 pub use agents_view::AgentsView;
+pub use card_status::SessionFilter;
 pub use catalog::SessionCatalog;
 pub(crate) use choice::{Choice, permission_choices};
 pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};
@@ -46,6 +47,7 @@ pub use labels::{BUTTON_TOOLTIP, CLOSED_TOOLTIP, PR_CLOSED};
 pub(crate) use labels::{FULL_ACCESS_RISK, permission_mode_hint};
 pub(crate) use model_listing::Trigger;
 pub use panel::AgentPanel;
+pub use panel_labels::filter_label as session_filter_label;
 pub use panel_labels::status_bar as activity_label;
 pub use session_tab::{SessionTab, session_tab_title};
 pub use sessions::{Activity, AgentSessions, AgentsEvent};
