@@ -8,7 +8,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, WeakEntity, Window, div, px,
 };
 
-use crate::agents::{Activity, activity_label};
+use crate::agents::{Activity, SessionFilter, activity_label};
 use crate::inbox::{InboxView, needs_you_status};
 use crate::workspace::{DockPosition, Workspace};
 
@@ -62,7 +62,7 @@ impl WorkspaceStatusBar {
             DockPosition::Right => (
                 "toggle-right-dock",
                 IconName::PanelRight,
-                "Agentes (Ctrl+Alt+B)",
+                "Painel direito (Ctrl+Alt+B)",
             ),
         };
         Button::new(id)
@@ -111,6 +111,11 @@ impl RenderOnce for WorkspaceStatusBar {
 
         let active = self.agents.running + self.agents.awaiting > 0;
         let agents_workspace = self.workspace.clone();
+        let filter = if self.agents.awaiting > 0 {
+            SessionFilter::Awaiting
+        } else {
+            SessionFilter::Running
+        };
         let agents = active.then(|| {
             let color = if self.agents.awaiting > 0 {
                 cx.theme().warning
@@ -127,8 +132,9 @@ impl RenderOnce for WorkspaceStatusBar {
                     activity_label(self.agents.running, self.agents.awaiting).into(),
                 ))
                 .on_click(move |_, window, cx| {
-                    _ = agents_workspace
-                        .update(cx, |workspace, cx| workspace.reveal_agents(window, cx));
+                    _ = agents_workspace.update(cx, |workspace, cx| {
+                        workspace.show_agents(filter, window, cx)
+                    });
                 })
         });
 

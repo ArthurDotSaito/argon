@@ -36,7 +36,7 @@ use gpui_kit::{
 };
 use tracing_appender::non_blocking::WorkerGuard;
 
-use crate::agents::AgentSessions;
+use crate::agents::{AgentSessions, SessionCatalog};
 use crate::assets::AppAssets;
 use crate::inbox::{InboxHandle, InboxModel};
 use crate::services::{AppServices, Services};
@@ -78,6 +78,7 @@ fn main() {
             let sync_status = cx.new(|cx| SyncStatus::new(services.clone(), events, cx));
             let inbox = cx.new(|cx| InboxModel::new(services.clone(), &sync_status, cx));
             cx.set_global(AppServices(services));
+            SessionCatalog::init(sessions, cx);
             config_watch::init(cx);
             agents::warmup::on_app_start(cx);
             update::init(cx);

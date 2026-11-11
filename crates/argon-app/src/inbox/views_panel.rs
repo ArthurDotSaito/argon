@@ -3,7 +3,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
+    App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _, px,
@@ -13,14 +13,19 @@ use super::items::{AccountEntry, OrgEntry};
 use super::model::InboxModel;
 use super::{InboxView, labels};
 use crate::actions::OpenSettings;
+use crate::agents::{SessionCatalog, SessionFilter, session_filter_label};
+use crate::center::CenterItem;
 use crate::theme::density;
 use crate::ui::avatar;
+use crate::workspace::Workspace;
 
 pub const VIEWS_PANEL: &str = "argon.views";
 
 const ITEM_HEIGHT: f32 = 26.;
 const ORG_BADGE_SIZE: f32 = 16.;
 const ACCOUNT_AVATAR_SIZE: f32 = 22.;
+
+const AGENTS_GROUP_POSITION: usize = 1;
 
 const GROUPS: [(&str, &[InboxView]); 3] = [
     (
@@ -42,16 +47,19 @@ const GROUPS: [(&str, &[InboxView]); 3] = [
 pub struct ViewsPanel {
     model: Entity<InboxModel>,
     focus_handle: FocusHandle,
-    _subscription: Subscription,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl ViewsPanel {
     pub fn new(model: Entity<InboxModel>, cx: &mut Context<Self>) -> Self {
-        let subscription = cx.observe(&model, |_, _, cx| cx.notify());
+        let mut subscriptions = vec![cx.observe(&model, |_, _, cx| cx.notify())];
+        if let Some(catalog) = SessionCatalog::global(cx) {
+            subscriptions.push(cx.observe(&catalog, |_, _, cx| cx.notify()));
+        }
         Self {
             model,
             focus_handle: cx.focus_handle(),
-            _subscription: subscription,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -59,26 +67,25 @@ impl ViewsPanel {
         let theme = cx.theme();
         let model = self.model.read(cx);
         let count = model.count(view);
-        let highlighted = view == InboxView::NeedsYou && count > 0;
-        let counter = div()
-            .px_1()
-            .rounded(theme.radius)
-            .text_xs()
-            .when(highlighted, |this| {
-                this.bg(theme.primary)
-                    .text_color(theme.primary_foreground)
-                    .font_semibold()
-            })
-            .when(!highlighted, |this| this.text_color(theme.muted_foreground))
-            .child(count.to_string());
+        let accent = (view == InboxView::NeedsYou && count > 0)
+            .then_some((theme.primary, theme.primary_foreground));
+        let agents_active =
+            SessionCatalog::global(cx).is_some_and(|catalog| catalog.read(cx).agents_active());
         let inbox = self.model.downgrade();
-        nav_item(("view", view.index()), model.view() == view, cx)
-            .child(Icon::new(view_icon(view)).small())
-            .child(div().flex_1().truncate().child(labels::view_title(view)))
-            .child(counter)
-            .on_click(move |_, _, cx| {
-                _ = inbox.update(cx, |model, cx| model.show_view(view, cx));
-            })
+        nav_item(
+            ("view", view.index()),
+            !agents_active && model.view() == view,
+            cx,
+        )
+        .child(Icon::new(view_icon(view)).small())
+        .child(div().flex_1().truncate().child(labels::view_title(view)))
+        .child(counter(count, accent, cx))
+        .on_click(move |_, _, cx| {
+            if let Some(catalog) = SessionCatalog::global(cx) {
+                catalog.update(cx, |catalog, cx| catalog.set_agents_active(false, cx));
+            }
+            _ = inbox.update(cx, |model, cx| model.show_view(view, cx));
+        })
     }
 
     fn org_item(&self, ix: usize, org: &OrgEntry, cx: &App) -> Stateful<Div> {
@@ -153,6 +160,44 @@ impl ViewsPanel {
     }
 }
 
+fn agents_group(cx: &App) -> Option<Div> {
+    let catalog = SessionCatalog::global(cx)?;
+    let theme = cx.theme();
+    let catalog_ref = catalog.read(cx);
+    let counts = catalog_ref.counts(cx);
+    let active = catalog_ref.agents_active().then(|| catalog_ref.filter());
+    let items = SessionFilter::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(ix, filter)| {
+            let count = counts[ix];
+            let accent = (filter == SessionFilter::Awaiting && count > 0)
+                .then_some((theme.warning, theme.warning_foreground));
+            let catalog = catalog.clone();
+            nav_item(("agents-filter", ix), active == Some(filter), cx)
+                .child(Icon::new(filter_icon(filter)).small())
+                .child(
+                    div()
+                        .flex_1()
+                        .truncate()
+                        .child(session_filter_label(filter)),
+                )
+                .child(counter(count, accent, cx))
+                .on_click(move |_, window, cx| {
+                    catalog.update(cx, |catalog, cx| {
+                        catalog.set_filter(filter, cx);
+                        catalog.set_agents_active(true, cx);
+                    });
+                    if let Some(workspace) = Workspace::global(cx) {
+                        _ = workspace.update(cx, |workspace, cx| {
+                            workspace.open_item(CenterItem::Agents, false, window, cx)
+                        });
+                    }
+                })
+        });
+    Some(group(labels::GROUP_AGENTS, cx).children(items))
+}
+
 fn view_icon(view: InboxView) -> IconName {
     match view {
         InboxView::Inbox => IconName::Inbox,
@@ -163,6 +208,31 @@ fn view_icon(view: InboxView) -> IconName {
         InboxView::ReadyToMerge => IconName::GitMerge,
         InboxView::AlreadyDone => IconName::CheckCheck,
     }
+}
+
+fn filter_icon(filter: SessionFilter) -> IconName {
+    match filter {
+        SessionFilter::All => IconName::Bot,
+        SessionFilter::Awaiting => IconName::Hand,
+        SessionFilter::Running => IconName::LoaderCircle,
+        SessionFilter::Completed => IconName::CircleCheck,
+        SessionFilter::Archived => IconName::Archive,
+    }
+}
+
+fn counter(count: usize, accent: Option<(Hsla, Hsla)>, cx: &App) -> Div {
+    let theme = cx.theme();
+    div()
+        .px_1()
+        .rounded(theme.radius)
+        .text_xs()
+        .map(|this| match accent {
+            Some((background, foreground)) => {
+                this.bg(background).text_color(foreground).font_semibold()
+            }
+            None => this.text_color(theme.muted_foreground),
+        })
+        .child(count.to_string())
 }
 
 fn nav_item(id: (&'static str, usize), selected: bool, cx: &App) -> Stateful<Div> {
@@ -266,9 +336,12 @@ impl Panel for ViewsPanel {
 
 impl Render for ViewsPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let groups = GROUPS.iter().map(|(title, views)| {
+        let view_group = |(title, views): &(&'static str, &[InboxView])| {
             group(title, cx).children(views.iter().map(|view| self.view_item(*view, cx)))
-        });
+        };
+        let (first, rest) = GROUPS.split_at(AGENTS_GROUP_POSITION);
+        let before = first.iter().map(view_group);
+        let after = rest.iter().map(view_group);
         v_flex()
             .track_focus(&self.focus_handle)
             .size_full()
@@ -280,7 +353,9 @@ impl Render for ViewsPanel {
                     .overflow_y_scroll()
                     .p_2()
                     .gap_3()
-                    .children(groups)
+                    .children(before)
+                    .children(agents_group(cx))
+                    .children(after)
                     .child(self.orgs(cx)),
             )
             .child(div().p_2().child(self.accounts(cx)))

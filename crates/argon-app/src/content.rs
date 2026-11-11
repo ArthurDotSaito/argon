@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use gpui_kit::{AppContext as _, Entity};
 
+use crate::agents::{AgentsView, SessionTab};
 use crate::center::{CenterContent, CenterContentFactory, CenterItem};
 use crate::inbox::{InboxModel, InboxPane};
 use crate::pr::PrView;
@@ -16,6 +17,14 @@ pub fn content_factory(inbox: Entity<InboxModel>) -> CenterContentFactory {
         CenterItem::Pr(key) => {
             let view = cx.new(|cx| PrView::new(key.clone(), inbox.clone(), window, cx));
             settings::note_pr_opened(key.clone(), &view, cx);
+            CenterContent::new(view, cx)
+        }
+        CenterItem::Agents => {
+            let view = cx.new(|cx| AgentsView::new(window, cx));
+            CenterContent::new(view, cx)
+        }
+        CenterItem::AgentSession(id) => {
+            let view = cx.new(|cx| SessionTab::new(id.clone(), window, cx));
             CenterContent::new(view, cx)
         }
         CenterItem::Settings => {

@@ -18,8 +18,20 @@ pub enum ResumeAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionFilter {
     All,
-    Active,
+    Awaiting,
+    Running,
     Completed,
+    Archived,
+}
+
+impl SessionFilter {
+    pub const ALL: [SessionFilter; 5] = [
+        Self::All,
+        Self::Awaiting,
+        Self::Running,
+        Self::Completed,
+        Self::Archived,
+    ];
 }
 
 impl CardStatus {
@@ -30,8 +42,10 @@ impl CardStatus {
     pub fn matches(self, filter: SessionFilter) -> bool {
         match filter {
             SessionFilter::All => true,
-            SessionFilter::Active => self.is_active(),
+            SessionFilter::Awaiting => self == Self::Awaiting,
+            SessionFilter::Running => self == Self::Running,
             SessionFilter::Completed => matches!(self, Self::Completed | Self::Failed),
+            SessionFilter::Archived => self == Self::Archived,
         }
     }
 }
@@ -133,14 +147,19 @@ mod tests {
     }
 
     #[test]
-    fn filters_split_active_from_finished() {
-        assert!(CardStatus::Awaiting.matches(SessionFilter::Active));
-        assert!(!CardStatus::Failed.matches(SessionFilter::Active));
-        assert!(CardStatus::Failed.matches(SessionFilter::Completed));
-        assert!(CardStatus::Running.matches(SessionFilter::All));
-        assert!(CardStatus::Archived.matches(SessionFilter::All));
-        assert!(!CardStatus::Archived.matches(SessionFilter::Active));
-        assert!(!CardStatus::Archived.matches(SessionFilter::Completed));
+    fn filters_match_their_statuses() {
+        let table = [
+            (CardStatus::Awaiting, [true, true, false, false, false]),
+            (CardStatus::Running, [true, false, true, false, false]),
+            (CardStatus::Completed, [true, false, false, true, false]),
+            (CardStatus::Failed, [true, false, false, true, false]),
+            (CardStatus::Archived, [true, false, false, false, true]),
+        ];
+        for (status, matches) in table {
+            for (filter, expected) in SessionFilter::ALL.into_iter().zip(matches) {
+                assert_eq!(status.matches(filter), expected, "{status:?} {filter:?}");
+            }
+        }
         assert_eq!(
             card_status(SessionStatus::Archived, false, 0),
             CardStatus::Archived

@@ -6,6 +6,7 @@ use crate::ui;
 
 pub const PANEL_TITLE: &str = "Visões";
 pub const GROUP_INBOX: &str = "Inbox";
+pub const GROUP_AGENTS: &str = "Agentes";
 pub const GROUP_YOUR_PRS: &str = "Seus PRs";
 pub const GROUP_REVIEWED: &str = "Revisados";
 pub const GROUP_ORGS: &str = "Orgs";

@@ -3,13 +3,13 @@ use argon_core::Severity;
 use super::card_status::{CardStatus, SessionFilter};
 
 pub const PANEL_TITLE: &str = "Agentes";
-pub const NEW_REVIEW: &str = "Nova review com IA";
-pub const NEW_REVIEW_TOOLTIP: &str = "Revisar o PR da aba ativa com um agente (a)";
+pub const REVIEW_PR: &str = "Nova review";
+pub const OPEN_PR: &str = "Abrir PR";
 pub const NO_SESSIONS: &str = "Nenhuma sessão de agente ainda.";
 pub const NO_SESSIONS_IN_FILTER: &str = "Nenhuma sessão neste filtro.";
 pub const LOADING_SESSIONS: &str = "carregando sessões…";
-pub const BACK: &str = "Sessões";
 pub const SESSION_ENDED: &str = "Sessão encerrada — transcript somente leitura";
+pub const SESSION_TAB_FALLBACK: &str = "Sessão";
 pub const LOADING_TRANSCRIPT: &str = "carregando transcript…";
 pub const THINKING: &str = "pensando…";
 pub const THINKING_NOW: &str = "Pensando…";
@@ -53,8 +53,7 @@ pub const RESUMING: &str = "retomando…";
 pub const ARCHIVE: &str = "Arquivar";
 pub const ARCHIVE_TOOLTIP: &str = "Arquivar sessão (remove o worktree, mantém o transcript)";
 pub const ARCHIVE_TITLE: &str = "Arquivar sessão?";
-pub const ARCHIVE_MESSAGE: &str =
-    "O agente é encerrado e o worktree desta sessão é removido. O transcript continua em Todas.";
+pub const ARCHIVE_MESSAGE: &str = "O agente é encerrado e o worktree desta sessão é removido. O transcript continua em Arquivadas.";
 pub const HEAD_MOVED: &str = "O PR recebeu commits novos desde esta sessão";
 pub const NO_ACP_SESSION: &str = "esta sessão não tem id ACP para retomar";
 pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
@@ -63,9 +62,11 @@ pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
 
 pub fn filter_label(filter: SessionFilter) -> &'static str {
     match filter {
-        SessionFilter::All => "Todas",
-        SessionFilter::Active => "Ativas",
+        SessionFilter::All => "Todas as sessões",
+        SessionFilter::Awaiting => "Aguardando você",
+        SessionFilter::Running => "Rodando",
         SessionFilter::Completed => "Concluídas",
+        SessionFilter::Archived => "Arquivadas",
     }
 }
 
@@ -156,6 +157,13 @@ pub fn findings_heading(count: usize) -> String {
     match count {
         1 => "1 achado".into(),
         _ => format!("{count} achados"),
+    }
+}
+
+pub fn archived_more(count: usize) -> String {
+    match count {
+        1 => "+1 sessão arquivada".into(),
+        _ => format!("+{count} sessões arquivadas"),
     }
 }
 

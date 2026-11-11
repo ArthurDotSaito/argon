@@ -1,8 +1,9 @@
-use gpui_kit::component::dock::{DockPlacement, InsertTarget, PanelId, panel_handle};
+use gpui_kit::component::dock::{DockPlacement, InsertTarget, NodeId, PanelId, panel_handle};
 use gpui_kit::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 
 use super::Workspace;
 use crate::actions::CloseActiveItem;
+use crate::agents::SessionCatalog;
 use crate::center::{CenterItem, CenterPanel, CenterPanelEvent};
 use crate::dock_items;
 
@@ -69,6 +70,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<CenterPanel> {
+        let is_session = matches!(item, CenterItem::AgentSession(_));
         let factory = self.content_factory.clone();
         let panel = cx.new(|cx| CenterPanel::new(item, preview, factory, window, cx));
         let id = PanelId::from(panel.entity_id());
@@ -76,7 +78,14 @@ impl Workspace {
         let group = self
             .last_focused_panel(cx)
             .and_then(|focused| dock_items::locate(self.dock_area.read(cx), focused))
-            .map(|(_, node)| node);
+            .map(|(_, node)| node)
+            .and_then(|node| {
+                if is_session || !self.is_session_group(node, cx) {
+                    Some(node)
+                } else {
+                    self.first_non_session_group(cx)
+                }
+            });
         self.dock_area.update(cx, |area, cx| {
             area.add_panel_view(handle, DockPlacement::Center, None, window, cx);
             let added_to = dock_items::locate(area, id).map(|(_, node)| node);
@@ -91,6 +100,29 @@ impl Workspace {
         });
         self.watch_center_panels(cx);
         panel
+    }
+
+    fn is_session_group(&self, node: NodeId, cx: &App) -> bool {
+        let area = self.dock_area.read(cx);
+        let panels = self.center_panels(cx);
+        let members = dock_items::group_panels(area, node);
+        !members.is_empty()
+            && members.iter().all(|member| {
+                panels.iter().any(|panel| {
+                    PanelId::from(panel.entity_id()) == *member
+                        && matches!(panel.read(cx).item(), CenterItem::AgentSession(_))
+                })
+            })
+    }
+
+    fn first_non_session_group(&self, cx: &App) -> Option<NodeId> {
+        let area = self.dock_area.read(cx);
+        self.center_panels(cx)
+            .iter()
+            .filter_map(|panel| dock_items::locate(area, PanelId::from(panel.entity_id())))
+            .filter(|(placement, _)| *placement == DockPlacement::Center)
+            .map(|(_, node)| node)
+            .find(|node| !self.is_session_group(*node, cx))
     }
 
     pub(super) fn reveal_center_panel(
@@ -146,6 +178,13 @@ impl Workspace {
 
     pub(super) fn watch_center_panels(&mut self, cx: &mut Context<Self>) {
         let panels = self.center_panels(cx);
+        if !panels
+            .iter()
+            .any(|panel| *panel.read(cx).item() == CenterItem::Agents)
+            && let Some(catalog) = SessionCatalog::global(cx)
+        {
+            catalog.update(cx, |catalog, cx| catalog.set_agents_active(false, cx));
+        }
         self.center_subscriptions
             .retain(|id, _| panels.iter().any(|panel| panel.entity_id() == *id));
         for panel in panels {
@@ -168,6 +207,14 @@ impl Workspace {
             }
             CenterPanelEvent::Focused => {
                 self.last_focused = Some(PanelId::from(panel.entity_id()));
+                let agents_active = match panel.read(cx).item() {
+                    CenterItem::Agents => Some(true),
+                    CenterItem::Inbox => Some(false),
+                    _ => None,
+                };
+                if let (Some(active), Some(catalog)) = (agents_active, SessionCatalog::global(cx)) {
+                    catalog.update(cx, |catalog, cx| catalog.set_agents_active(active, cx));
+                }
             }
         }
     }

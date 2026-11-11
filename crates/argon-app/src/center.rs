@@ -10,6 +10,7 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{SessionCatalog, session_tab_title};
 use crate::inbox::{self, InboxModel};
 
 pub const CENTER_PANEL: &str = "argon.center";
@@ -34,6 +35,8 @@ impl CenterContent {
 pub enum CenterItem {
     Inbox,
     Pr(PrKey),
+    Agents,
+    AgentSession(String),
     Settings,
 }
 
@@ -42,6 +45,8 @@ impl CenterItem {
         match self {
             Self::Inbox => "Inbox".into(),
             Self::Pr(key) => inbox::pr_tab_title(key, cx),
+            Self::Agents => "Agentes".into(),
+            Self::AgentSession(id) => session_tab_title(id, cx),
             Self::Settings => "Configurações".into(),
         }
     }
@@ -66,6 +71,7 @@ pub struct CenterPanel {
     content_factory: CenterContentFactory,
     _focus_subscription: Subscription,
     _inbox_subscription: Option<Subscription>,
+    _catalog_subscription: Option<Subscription>,
 }
 
 impl CenterPanel {
@@ -83,6 +89,7 @@ impl CenterPanel {
                 this.refresh_title(window, cx)
             })
         });
+        let catalog_subscription = Self::watch_catalog(&item, window, cx);
         Self {
             title: item.title(cx),
             item,
@@ -91,7 +98,22 @@ impl CenterPanel {
             content_factory,
             _focus_subscription: focus_subscription,
             _inbox_subscription: inbox_subscription,
+            _catalog_subscription: catalog_subscription,
         }
+    }
+
+    fn watch_catalog(
+        item: &CenterItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Subscription> {
+        let CenterItem::AgentSession(_) = item else {
+            return None;
+        };
+        let catalog = SessionCatalog::global(cx)?;
+        Some(cx.observe_in(&catalog, window, |this, _, window, cx| {
+            this.refresh_title(window, cx)
+        }))
     }
 
     fn watch_focus(
@@ -146,6 +168,7 @@ impl CenterPanel {
         self.content = (self.content_factory)(&item, window, cx);
         self._focus_subscription = Self::watch_focus(&self.content, window, cx);
         self.title = item.title(cx);
+        self._catalog_subscription = Self::watch_catalog(&item, window, cx);
         self.item = item;
         cx.notify();
     }

@@ -6,6 +6,7 @@ use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::{App, FocusHandle, Focusable as _};
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
     Subscription, Window, div,
@@ -34,6 +35,10 @@ pub struct Composer {
 }
 
 impl Composer {
+    pub fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.input.focus_handle(cx)
+    }
+
     pub fn new(model: Entity<ThreadModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
