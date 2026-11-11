@@ -19,6 +19,7 @@ use super::lifecycle::APP_CLOSED_REASON;
 use super::panel::AgentPanel;
 use super::panel_labels as labels;
 use super::session_actions::{SessionControls, controls};
+use super::session_tab::open_session_tab;
 use super::thread_model::ThreadModel;
 use super::transcript::{Item, PermissionState};
 use crate::bottom::duration_label;
@@ -27,6 +28,8 @@ use crate::inbox::InboxModel;
 pub struct SessionCard {
     pub id: String,
     pub pr: PrKey,
+    pub number: Option<u64>,
+    pub agent_label: &'static str,
     pub title: SharedString,
     pub reference: SharedString,
     pub agent_line: SharedString,
@@ -83,6 +86,8 @@ impl SessionCard {
         Self {
             id: info.session_id.clone(),
             pr: info.pr.clone(),
+            number: info.number,
+            agent_label: info.agent_label,
             title,
             reference,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
@@ -118,6 +123,8 @@ impl SessionCard {
         Self {
             id: row.id.clone(),
             pr: row.pr.clone(),
+            number: info.number,
+            agent_label: info.agent_label,
             title,
             reference,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
@@ -203,7 +210,7 @@ fn card(card: SessionCard, cx: &mut Context<AgentPanel>) -> Stateful<Div> {
         )
         .child(foot)
         .children(actions)
-        .on_click(cx.listener(move |this, _, window, cx| this.open_thread(&id, window, cx)))
+        .on_click(move |_, window, cx| open_session_tab(&id, window, cx))
 }
 
 fn filter_bar(filter: SessionFilter, cards: &[SessionCard], cx: &mut Context<AgentPanel>) -> Div {

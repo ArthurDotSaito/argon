@@ -245,7 +245,6 @@ impl SessionCatalog {
         self.loaded
     }
 
-    #[allow(dead_code)]
     pub fn filter(&self) -> SessionFilter {
         self.filter
     }

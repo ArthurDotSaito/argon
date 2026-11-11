@@ -1,3 +1,4 @@
+mod agents_view;
 mod badges;
 mod card_status;
 mod catalog;
@@ -22,6 +23,7 @@ mod recovery;
 mod resume;
 mod safe_markdown;
 mod session_actions;
+mod session_tab;
 mod sessions;
 mod sessions_list;
 mod sink;
@@ -35,6 +37,7 @@ mod usage_refresh;
 mod usage_view;
 pub mod warmup;
 
+pub use agents_view::AgentsView;
 pub use catalog::SessionCatalog;
 pub(crate) use choice::{Choice, permission_choices};
 pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};
@@ -44,6 +47,7 @@ pub(crate) use labels::{FULL_ACCESS_RISK, permission_mode_hint};
 pub(crate) use model_listing::Trigger;
 pub use panel::AgentPanel;
 pub use panel_labels::status_bar as activity_label;
+pub use session_tab::{SessionTab, session_tab_title};
 pub use sessions::{Activity, AgentSessions, AgentsEvent};
 pub use start_dialog::{ReviewTarget, open as open_start_dialog};
 pub(crate) use usage_cache::{UsageState, needs_consent, plan_usage_consent};

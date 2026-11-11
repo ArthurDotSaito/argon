@@ -67,6 +67,13 @@ impl Workspace {
         }
     }
 
+    pub fn review_pr_with_ai(&mut self, pr: PrKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
+        if let Some(view) = self.pr_view(&pr, cx) {
+            view.update(cx, |view, cx| view.open_ai_review(window, cx));
+        }
+    }
+
     pub(super) fn close_requested(&mut self, cx: &mut Context<Self>) -> bool {
         let services = cx
             .try_global::<AppServices>()

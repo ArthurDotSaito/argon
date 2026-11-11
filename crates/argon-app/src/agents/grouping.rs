@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::cmp::Reverse;
 
 use argon_core::PrKey;

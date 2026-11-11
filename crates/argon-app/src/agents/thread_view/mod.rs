@@ -8,9 +8,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, EventEmitter, FollowMode, IntoElement, ListAlignment,
-    ListState, ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div,
-    list, px,
+    AppContext as _, Context, Div, Entity, FollowMode, IntoElement, ListAlignment, ListState,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, list, px,
 };
 
 use super::badges::{severity_counts, status_chip};
@@ -23,10 +22,6 @@ use crate::bottom::duration_label;
 
 const LIST_OVERDRAW: f32 = 600.;
 
-pub enum ThreadViewEvent {
-    Back,
-}
-
 pub struct ThreadView {
     model: Entity<ThreadModel>,
     composer: Option<Entity<Composer>>,
@@ -35,8 +30,6 @@ pub struct ThreadView {
     rows: usize,
     _subscriptions: Vec<Subscription>,
 }
-
-impl EventEmitter<ThreadViewEvent> for ThreadView {}
 
 impl ThreadView {
     pub fn new(model: Entity<ThreadModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -111,16 +104,8 @@ impl ThreadView {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(
-                        Button::new("agent-thread-back")
-                            .icon(Icon::new(IconName::ArrowLeft))
-                            .label(labels::BACK)
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(ThreadViewEvent::Back))),
-                    )
-                    .child(div().flex_1())
                     .child(status_chip(status, cx))
+                    .child(div().flex_1())
                     .child(
                         div()
                             .text_xs()

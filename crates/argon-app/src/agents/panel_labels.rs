@@ -4,12 +4,14 @@ use super::card_status::{CardStatus, SessionFilter};
 
 pub const PANEL_TITLE: &str = "Agentes";
 pub const NEW_REVIEW: &str = "Nova review com IA";
+pub const REVIEW_PR: &str = "Nova review";
+pub const OPEN_PR: &str = "Abrir PR";
 pub const NEW_REVIEW_TOOLTIP: &str = "Revisar o PR da aba ativa com um agente (a)";
 pub const NO_SESSIONS: &str = "Nenhuma sessão de agente ainda.";
 pub const NO_SESSIONS_IN_FILTER: &str = "Nenhuma sessão neste filtro.";
 pub const LOADING_SESSIONS: &str = "carregando sessões…";
-pub const BACK: &str = "Sessões";
 pub const SESSION_ENDED: &str = "Sessão encerrada — transcript somente leitura";
+pub const SESSION_TAB_FALLBACK: &str = "Sessão";
 pub const LOADING_TRANSCRIPT: &str = "carregando transcript…";
 pub const THINKING: &str = "pensando…";
 pub const THINKING_NOW: &str = "Pensando…";
@@ -161,7 +163,6 @@ pub fn findings_heading(count: usize) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn archived_more(count: usize) -> String {
     match count {
         1 => "+1 sessão arquivada".into(),

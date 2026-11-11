@@ -5,17 +5,16 @@ use chrono::Utc;
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
-    Task, Window,
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Task, Window,
 };
 
 use super::card_status::SessionFilter;
 use super::catalog::SessionCatalog;
 use super::panel_labels as labels;
+use super::session_tab::open_session_tab;
 use super::sessions::{AgentSessions, AgentsEvent};
 use super::sessions_list::render_list;
-use super::thread_view::{ThreadView, ThreadViewEvent};
 use crate::workspace::Workspace;
 
 const PANEL_NAME: &str = "argon.agents";
@@ -26,7 +25,6 @@ pub struct AgentPanel {
     sessions: Option<Entity<AgentSessions>>,
     filter: SessionFilter,
     catalog: Option<Entity<SessionCatalog>>,
-    thread: Option<(Entity<ThreadView>, Subscription)>,
     last_render: Option<Instant>,
     _ticker: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -45,13 +43,9 @@ impl AgentPanel {
             subscriptions.push(cx.subscribe_in(
                 sessions,
                 window,
-                |this, _, event: &AgentsEvent, window, cx| match event {
-                    AgentsEvent::SessionStarted { session_id, .. } => {
-                        this.open_thread(session_id, window, cx);
-                    }
-                    AgentsEvent::SessionArchived { .. } => {
-                        this.thread = None;
-                        cx.notify();
+                |_, _, event: &AgentsEvent, window, cx| {
+                    if let AgentsEvent::SessionStarted { session_id, .. } = event {
+                        open_session_tab(session_id, window, cx);
                     }
                 },
             ));
@@ -74,7 +68,6 @@ impl AgentPanel {
             sessions,
             filter: SessionFilter::All,
             catalog,
-            thread: None,
             last_render: None,
             _ticker: ticker,
             _subscriptions: subscriptions,
@@ -100,31 +93,6 @@ impl AgentPanel {
             self.filter = filter;
             cx.notify();
         }
-    }
-
-    pub(super) fn open_thread(
-        &mut self,
-        session_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(catalog) = self.catalog.clone() else {
-            return;
-        };
-        let Some(model) = catalog.update(cx, |catalog, cx| catalog.thread(session_id, cx)) else {
-            return;
-        };
-        let view = cx.new(|cx| ThreadView::new(model, window, cx));
-        let subscription = cx.subscribe(&view, |this, _, event: &ThreadViewEvent, cx| {
-            let ThreadViewEvent::Back = event;
-            this.thread = None;
-            if let Some(catalog) = this.catalog.clone() {
-                catalog.update(cx, |catalog, cx| catalog.reload(cx));
-            }
-            cx.notify();
-        });
-        self.thread = Some((view, subscription));
-        cx.notify();
     }
 
     fn render_list(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
@@ -182,10 +150,7 @@ impl Panel for AgentPanel {
 impl Render for AgentPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.last_render = Some(Instant::now());
-        let body = match &self.thread {
-            Some((view, _)) => view.clone().into_any_element(),
-            None => self.render_list(cx).into_any_element(),
-        };
+        let body = self.render_list(cx);
         v_flex()
             .track_focus(&self.focus_handle)
             .size_full()
