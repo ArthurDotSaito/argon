@@ -147,6 +147,13 @@ impl Workspace {
 
     pub(super) fn watch_center_panels(&mut self, cx: &mut Context<Self>) {
         let panels = self.center_panels(cx);
+        if !panels
+            .iter()
+            .any(|panel| *panel.read(cx).item() == CenterItem::Agents)
+            && let Some(catalog) = SessionCatalog::global(cx)
+        {
+            catalog.update(cx, |catalog, cx| catalog.set_agents_active(false, cx));
+        }
         self.center_subscriptions
             .retain(|id, _| panels.iter().any(|panel| panel.entity_id() == *id));
         for panel in panels {

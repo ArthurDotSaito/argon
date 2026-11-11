@@ -88,43 +88,6 @@ impl ViewsPanel {
         })
     }
 
-    fn agents_group(&self, cx: &App) -> Option<Div> {
-        let catalog = SessionCatalog::global(cx)?;
-        let theme = cx.theme();
-        let catalog_ref = catalog.read(cx);
-        let active = catalog_ref.agents_active().then(|| catalog_ref.filter());
-        let items = SessionFilter::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(ix, filter)| {
-                let count = catalog_ref.count(filter, cx);
-                let accent = (filter == SessionFilter::Awaiting && count > 0)
-                    .then_some((theme.warning, theme.warning_foreground));
-                let catalog = catalog.clone();
-                nav_item(("agents-filter", ix), active == Some(filter), cx)
-                    .child(Icon::new(filter_icon(filter)).small())
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .child(session_filter_label(filter)),
-                    )
-                    .child(counter(count, accent, cx))
-                    .on_click(move |_, window, cx| {
-                        catalog.update(cx, |catalog, cx| {
-                            catalog.set_filter(filter, cx);
-                            catalog.set_agents_active(true, cx);
-                        });
-                        if let Some(workspace) = Workspace::global(cx) {
-                            _ = workspace.update(cx, |workspace, cx| {
-                                workspace.open_item(CenterItem::Agents, false, window, cx)
-                            });
-                        }
-                    })
-            });
-        Some(group(labels::GROUP_AGENTS, cx).children(items))
-    }
-
     fn org_item(&self, ix: usize, org: &OrgEntry, cx: &App) -> Stateful<Div> {
         let theme = cx.theme();
         let selected = self.model.read(cx).is_org_selected(&org.key);
@@ -195,6 +158,44 @@ impl ViewsPanel {
         }
         footer.children(accounts.iter().map(|account| account_item(account, cx)))
     }
+}
+
+fn agents_group(cx: &App) -> Option<Div> {
+    let catalog = SessionCatalog::global(cx)?;
+    let theme = cx.theme();
+    let catalog_ref = catalog.read(cx);
+    let counts = catalog_ref.counts(cx);
+    let active = catalog_ref.agents_active().then(|| catalog_ref.filter());
+    let items = SessionFilter::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(ix, filter)| {
+            let count = counts[ix];
+            let accent = (filter == SessionFilter::Awaiting && count > 0)
+                .then_some((theme.warning, theme.warning_foreground));
+            let catalog = catalog.clone();
+            nav_item(("agents-filter", ix), active == Some(filter), cx)
+                .child(Icon::new(filter_icon(filter)).small())
+                .child(
+                    div()
+                        .flex_1()
+                        .truncate()
+                        .child(session_filter_label(filter)),
+                )
+                .child(counter(count, accent, cx))
+                .on_click(move |_, window, cx| {
+                    catalog.update(cx, |catalog, cx| {
+                        catalog.set_filter(filter, cx);
+                        catalog.set_agents_active(true, cx);
+                    });
+                    if let Some(workspace) = Workspace::global(cx) {
+                        _ = workspace.update(cx, |workspace, cx| {
+                            workspace.open_item(CenterItem::Agents, false, window, cx)
+                        });
+                    }
+                })
+        });
+    Some(group(labels::GROUP_AGENTS, cx).children(items))
 }
 
 fn view_icon(view: InboxView) -> IconName {
@@ -353,7 +354,7 @@ impl Render for ViewsPanel {
                     .p_2()
                     .gap_3()
                     .children(before)
-                    .children(self.agents_group(cx))
+                    .children(agents_group(cx))
                     .children(after)
                     .child(self.orgs(cx)),
             )

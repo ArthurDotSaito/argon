@@ -157,21 +157,25 @@ impl SessionCatalog {
         cards
     }
 
-    pub fn count(&self, filter: SessionFilter, cx: &App) -> usize {
+    pub fn counts(&self, cx: &App) -> [usize; SessionFilter::ALL.len()] {
+        let mut counts = [0; SessionFilter::ALL.len()];
+        let mut tally = |status: CardStatus| {
+            for (slot, filter) in counts.iter_mut().zip(SessionFilter::ALL) {
+                *slot += usize::from(status.matches(filter));
+            }
+        };
         let mut live = HashSet::new();
-        let mut total = 0;
         for thread in self.sessions.read(cx).threads() {
             let thread = thread.read(cx);
             live.insert(thread.info().session_id.clone());
-            total += usize::from(thread.card_status().matches(filter));
+            tally(thread.card_status());
         }
-        total
-            + self
-                .history
-                .iter()
-                .filter(|history| !live.contains(&history.row.id))
-                .filter(|history| card_status(history.row.status, false, 0).matches(filter))
-                .count()
+        for history in &self.history {
+            if !live.contains(&history.row.id) {
+                tally(card_status(history.row.status, false, 0));
+            }
+        }
+        counts
     }
 
     pub fn tab_title(&self, session_id: &str, cx: &App) -> Option<SharedString> {
