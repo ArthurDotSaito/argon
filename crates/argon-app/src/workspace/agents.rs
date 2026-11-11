@@ -157,13 +157,27 @@ impl Workspace {
             .find(|panel| panel.read(cx).item() == &CenterItem::Pr(pr.clone()))
             .and_then(|panel| dock_items::locate(area, PanelId::from(panel.entity_id())))
             .map(|(_, node)| node);
-        let sibling_group = self
+        let session_ids: Vec<PanelId> = self
             .center_panels(cx)
             .iter()
             .filter(|panel| matches!(panel.read(cx).item(), CenterItem::AgentSession(_)))
-            .filter_map(|panel| dock_items::locate(area, PanelId::from(panel.entity_id())))
+            .map(|panel| PanelId::from(panel.entity_id()))
+            .collect();
+        let sibling_group = session_ids
+            .iter()
+            .filter_map(|id| dock_items::locate(area, *id))
             .map(|(_, node)| node)
-            .find(|node| Some(*node) != pr_node);
+            .find(|node| {
+                Some(*node) != pr_node
+                    && dock_items::group_panels(area, *node)
+                        .iter()
+                        .all(|id| session_ids.contains(id))
+            });
+        let pr_panel = self
+            .center_panels(cx)
+            .iter()
+            .find(|panel| panel.read(cx).item() == &CenterItem::Pr(pr.clone()))
+            .map(|panel| PanelId::from(panel.entity_id()));
         let panel = self.add_center_panel(item, false, window, cx);
         let id = PanelId::from(panel.entity_id());
         let target = match (sibling_group, pr_node) {
@@ -180,12 +194,15 @@ impl Workspace {
             (None, None) => None,
         };
         if let Some(target) = target {
-            self.dock_area
-                .update(cx, |area, cx| area.move_panel(id, target, window, cx));
+            self.dock_area.update(cx, |area, cx| {
+                area.move_panel(id, target, window, cx);
+                if let Some(pr_panel) = pr_panel {
+                    area.select_panel(pr_panel, window, cx);
+                }
+            });
         }
         self.reveal_center_panel(&panel, window, cx);
         panel.read(cx).focus_handle(cx).focus(window, cx);
-        self.schedule_save(cx);
         window.refresh();
     }
 

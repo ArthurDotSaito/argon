@@ -41,6 +41,17 @@ pub fn active_in_group_of(area: &DockArea, panel: PanelId) -> Option<PanelId> {
     }
 }
 
+pub fn group_panels(area: &DockArea, node: NodeId) -> Vec<PanelId> {
+    ITEM_PLACEMENTS
+        .into_iter()
+        .filter_map(|placement| area.layout(placement)?.find_node(node))
+        .find_map(|found| match found.kind() {
+            PaneRef::Tabs { panels, .. } => Some(panels.to_vec()),
+            PaneRef::Split { .. } => None,
+        })
+        .unwrap_or_default()
+}
+
 pub fn first_center_active(area: &DockArea) -> Option<PanelId> {
     let tree = area.layout(DockPlacement::Center)?;
     let mut active = None;

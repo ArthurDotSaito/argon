@@ -107,9 +107,7 @@ impl Workspace {
                 );
                 area.set_dock_size(dock.placement(), px(dock.default_size()), window, cx);
             }
-        });
-        let right = DockPosition::Right.placement();
-        self.dock_area.update(cx, |area, cx| {
+            let right = DockPosition::Right.placement();
             if area.is_dock_open(right) {
                 area.toggle_dock(right, window, cx);
             }
