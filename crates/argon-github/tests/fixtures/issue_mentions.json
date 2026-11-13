@@ -1,0 +1,82 @@
+{
+  "data": {
+    "nodes": [
+      {
+        "id": "I_kwDOOrbita0101",
+        "createdAt": "2026-10-01T08:00:00Z",
+        "author": { "login": "mcouto" },
+        "body": "Timeouts on large clinics.",
+        "timelineItems": {
+          "nodes": [
+            {
+              "createdAt": "2026-11-01T09:00:00Z",
+              "author": { "login": "dnogueira" },
+              "body": "Looping in @Arthur-Saito for the scheduling side."
+            },
+            {
+              "createdAt": "2026-11-02T09:00:00Z",
+              "author": { "login": "mcouto" },
+              "body": "Thanks. @arthur-saito can you confirm the repro?"
+            },
+            {
+              "createdAt": "2026-11-03T09:00:00Z",
+              "author": { "login": "arthur-saito" },
+              "body": "Note to self, @arthur-saito: check the budget."
+            },
+            {
+              "createdAt": "2026-11-04T09:00:00Z",
+              "author": { "login": "lfarias" },
+              "body": "Unrelated comment, no mention here."
+            }
+          ]
+        }
+      },
+      {
+        "id": "I_kwDOOrbita0087",
+        "createdAt": "2026-10-10T12:00:00Z",
+        "author": { "login": "lfarias" },
+        "body": "Export fails. Ask @arthur-saito.",
+        "timelineItems": {
+          "nodes": [
+            {
+              "createdAt": "2026-10-11T09:00:00Z",
+              "author": { "login": "mcouto" },
+              "body": "Old ping for @arthur-saito."
+            }
+          ]
+        }
+      },
+      {
+        "id": "I_kwDOOrbita0130",
+        "createdAt": "2026-10-31T09:20:00Z",
+        "author": { "login": "arthur-saito" },
+        "body": "I opened this, ping @arthur-saito.",
+        "timelineItems": { "nodes": [] }
+      },
+      {
+        "id": "I_kwDOOrbita0092",
+        "createdAt": "2026-11-02T07:30:00Z",
+        "author": null,
+        "body": "Heads up @arthur-saito, migration blocked.",
+        "timelineItems": null
+      },
+      {
+        "id": "I_kwDOOrbita0064",
+        "createdAt": "2026-09-02T15:30:00Z",
+        "author": { "login": "dnogueira" },
+        "body": "Legacy feeds. No one mentioned.",
+        "timelineItems": {
+          "nodes": [
+            {
+              "createdAt": "2026-10-28T16:45:00Z",
+              "author": { "login": "mcouto" },
+              "body": "x@arthur-saito.com sent the sample."
+            }
+          ]
+        }
+      },
+      {},
+      null
+    ]
+  }
+}

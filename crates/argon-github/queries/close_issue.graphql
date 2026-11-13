@@ -1,0 +1,5 @@
+mutation CloseIssue($input: CloseIssueInput!) {
+  closeIssue(input: $input) {
+    clientMutationId
+  }
+}

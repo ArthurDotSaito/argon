@@ -24,13 +24,13 @@ pub use actions::{Job, RunStatus, Step, WorkflowRun};
 pub use auth::{Account, discover_accounts, token_for};
 pub use client::{GithubClient, OrgInfo, Viewer};
 pub use detail::{
-    CommitInfo, Label, PrDetail, ReviewComment, ReviewThread, ReviewerStatus, ThreadComment,
-    TimelineItem,
+    CommitInfo, IssueDetail, Label, PrDetail, ReviewComment, ReviewThread, ReviewerStatus,
+    SubIssueRow, ThreadComment, TimelineItem,
 };
 pub use error::{GithubError, Result};
 pub use files::{FileStatus, PrFile};
 pub use inbox::{IssueOrgFetch, OrgFetch};
 pub use job_log::JobLog;
-pub use mutations::MergeMethod;
+pub use mutations::{CommentRef, MergeMethod};
 pub use releases::{Release, ReleaseAsset};
 pub use viewed::ViewedState;

@@ -446,6 +446,7 @@ pub(crate) struct ViewerData {
 
 #[derive(Deserialize)]
 pub(crate) struct WireViewer {
+    pub(crate) id: String,
     pub(crate) login: String,
     pub(crate) organizations: Connection<WireViewerOrg>,
 }

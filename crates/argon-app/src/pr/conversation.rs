@@ -132,7 +132,7 @@ impl Conversation {
             _ = this.update_in(cx, |this, window, cx| {
                 this.sending = false;
                 match result {
-                    Ok(()) => {
+                    Ok(_) => {
                         this.input
                             .update(cx, |input, cx| input.set_value("", window, cx));
                         cx.emit(ConversationEvent::Commented);
@@ -280,7 +280,7 @@ impl Render for Conversation {
             .gap_3()
             .children(self.timeline.iter().filter_map(|entry| {
                 let item = detail.timeline.get(entry.ix)?;
-                Some(timeline_item(item, entry, &detail.labels, now, cx))
+                timeline_item(item, entry, &detail.labels, now, cx)
             }));
         let content = v_flex()
             .w_full()

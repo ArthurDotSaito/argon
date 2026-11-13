@@ -1,0 +1,23 @@
+query IssueMentions($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Issue {
+      id
+      createdAt
+      author {
+        login
+      }
+      body
+      timelineItems(last: 20, itemTypes: [ISSUE_COMMENT]) {
+        nodes {
+          ... on IssueComment {
+            createdAt
+            author {
+              login
+            }
+            body
+          }
+        }
+      }
+    }
+  }
+}

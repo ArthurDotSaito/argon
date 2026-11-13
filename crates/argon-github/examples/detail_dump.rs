@@ -42,6 +42,12 @@ fn timeline_kind(item: &TimelineItem) -> &'static str {
         TimelineItem::Merged { .. } => "merged",
         TimelineItem::Closed { .. } => "closed",
         TimelineItem::ReadyForReview { .. } => "ready_for_review",
+        TimelineItem::Assigned { .. } => "assigned",
+        TimelineItem::Unassigned { .. } => "unassigned",
+        TimelineItem::Unlabeled { .. } => "unlabeled",
+        TimelineItem::Reopened { .. } => "reopened",
+        TimelineItem::CrossReferenced { .. } => "cross_referenced",
+        TimelineItem::Milestoned { .. } => "milestoned",
     }
 }
 

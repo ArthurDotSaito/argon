@@ -156,7 +156,7 @@ fn linked_pr(wire: WireLinkedPr) -> LinkedPr {
     }
 }
 
-fn issue_state(state: WireIssueState) -> IssueState {
+pub(crate) fn issue_state(state: WireIssueState) -> IssueState {
     match state {
         WireIssueState::Open | WireIssueState::Unknown => IssueState::Open,
         WireIssueState::Closed => IssueState::Closed,

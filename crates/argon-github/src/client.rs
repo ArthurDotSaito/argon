@@ -89,6 +89,11 @@ impl GithubClient {
         })
     }
 
+    pub async fn viewer_id(&self) -> Result<String> {
+        let data: ViewerData = self.graphql("viewer_id", VIEWER_QUERY, json!({})).await?;
+        Ok(data.viewer.id)
+    }
+
     pub(crate) fn check_status(&self, response: Response) -> Result<Response> {
         let status = response.status();
         if status == StatusCode::UNAUTHORIZED {
