@@ -16,7 +16,6 @@ use super::issue_view::IssueView;
 use super::labels;
 use crate::inbox::{pr_row, repo_ref};
 use crate::pr::{self, CONTENT_MAX_WIDTH, labels as pr_labels};
-use crate::workspace::Workspace;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum IssueTab {
@@ -160,22 +159,7 @@ impl IssueView {
     }
 
     fn open(&self, target: &Destination, window: &mut Window, cx: &mut Context<Self>) {
-        match target {
-            Destination::Argon(item) => {
-                let Some(workspace) = Workspace::global(cx) else {
-                    return;
-                };
-                let item = item.clone();
-                _ = workspace.update(cx, |workspace, cx| {
-                    workspace.open_item(item, false, window, cx)
-                });
-            }
-            Destination::Browser(url) => {
-                if let Err(error) = open::that_detached(url) {
-                    tracing::warn!(%error, url, "failed to open link in browser");
-                }
-            }
-        }
+        destination::open(target, window, cx);
     }
 }
 

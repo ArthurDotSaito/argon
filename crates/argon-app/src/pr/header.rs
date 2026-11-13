@@ -1,4 +1,4 @@
-use argon_core::{ChecksState, PrState, PullRequest, ReviewState};
+use argon_core::{ChecksState, IssueRef, PrState, PullRequest, ReviewState};
 use argon_github::{Label, PrDetail};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
@@ -8,13 +8,15 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, IntoElement as _,
-    ParentElement as _, Rgba, SharedString, StatefulInteractiveElement as _, Styled as _, div,
-    hsla, px, rgb,
+    ParentElement as _, Rgba, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    div, hsla, px, rgb,
 };
 
 use super::labels;
 use super::pr_view::{MergeState, PrView};
 use super::timeline_item::review_style;
+use crate::issue::destination::{self, Destination};
+use crate::issue::{self, IssueStatus};
 use crate::{agents, ui};
 
 const META_AVATAR: f32 = 18.;
@@ -22,9 +24,16 @@ const AI_BUTTON_HEIGHT: f32 = 24.;
 const BRANCH_MAX_WIDTH: f32 = 280.;
 const LIGHT_LABEL_LUMINANCE: f32 = 0.6;
 
+pub struct ClosingLink {
+    pub issue: IssueRef,
+    pub status: Option<IssueStatus>,
+    pub target: Destination,
+}
+
 pub struct HeaderProps<'a> {
     pub pr: &'a PullRequest,
     pub detail: Option<&'a PrDetail>,
+    pub closing: Vec<ClosingLink>,
     pub can_merge: bool,
     pub can_review_with_ai: bool,
     pub merge_state: &'a MergeState,
@@ -35,6 +44,7 @@ pub struct HeaderProps<'a> {
 pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
     let theme = cx.theme();
     let pr = props.pr;
+    let merged = pr.state == PrState::Merged || matches!(props.merge_state, MergeState::Merged);
     let title = h_flex()
         .gap_2()
         .items_baseline()
@@ -83,13 +93,8 @@ pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
                 .child(actions(&props, cx)),
         )
         .child(title)
-        .child(meta(
-            pr,
-            matches!(props.merge_state, MergeState::Merged),
-            props.now,
-            cx,
-        ))
-        .child(stats(pr, props.detail, cx))
+        .child(meta(pr, merged, props.now, cx))
+        .child(stats(pr, props.detail, merged, props.closing, cx))
         .children(status)
 }
 
@@ -275,7 +280,54 @@ fn branch(id: &'static str, name: &str, cx: &App) -> Div {
         )
 }
 
-fn stats(pr: &PullRequest, detail: Option<&PrDetail>, cx: &App) -> Div {
+fn closing_chip(
+    ix: usize,
+    pr: &PullRequest,
+    merged: bool,
+    link: ClosingLink,
+    cx: &mut Context<PrView>,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (icon, color) = match link.status {
+        Some(status) => issue::status_style(status, cx),
+        None => (IconName::CircleDot, theme.muted_foreground),
+    };
+    let target = link.target;
+    h_flex()
+        .id(("pr-closing-issue", ix))
+        .gap_1()
+        .px_2()
+        .h(px(22.))
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(theme.foreground)
+        .cursor_pointer()
+        .hover(|style| style.border_color(theme.primary))
+        .tooltip(|window, cx| Tooltip::new(labels::OPEN_ISSUE).build(window, cx))
+        .child(Icon::new(icon).xsmall().text_color(color))
+        .child(labels::closing_issue(&link.issue, &pr.repo, merged))
+        .on_click(
+            cx.listener(move |_, _: &ClickEvent, window, cx| {
+                destination::open(&target, window, cx)
+            }),
+        )
+}
+
+fn stats(
+    pr: &PullRequest,
+    detail: Option<&PrDetail>,
+    merged: bool,
+    closing: Vec<ClosingLink>,
+    cx: &mut Context<PrView>,
+) -> Div {
+    let chips: Vec<_> = closing
+        .into_iter()
+        .enumerate()
+        .map(|(ix, link)| closing_chip(ix, pr, merged, link, cx))
+        .collect();
     let theme = cx.theme();
     let diff = ui::diff_stat(pr.additions, pr.deletions, cx);
     let files = h_flex()
@@ -299,6 +351,7 @@ fn stats(pr: &PullRequest, detail: Option<&PrDetail>, cx: &App) -> Div {
         .child(files)
         .child(reviewers(pr, detail, cx))
         .children(labels_row)
+        .children(chips)
 }
 
 fn checks_summary(checks: Option<ChecksState>, cx: &App) -> Div {

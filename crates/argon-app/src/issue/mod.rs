@@ -1,5 +1,5 @@
 mod actions;
-mod destination;
+pub(crate) mod destination;
 mod header;
 mod issue_view;
 mod labels;

@@ -1,5 +1,6 @@
 mod ai;
 mod body;
+mod closing;
 mod loading;
 mod merge;
 
@@ -267,10 +268,12 @@ impl Render for PrView {
             Some(pr) => {
                 let can_merge = self.can_merge();
                 let can_review_with_ai = self.can_review_with_ai();
+                let closing = self.closing_links(pr, cx);
                 header(
                     HeaderProps {
                         pr,
                         detail: detail.as_deref(),
+                        closing,
                         can_merge,
                         can_review_with_ai,
                         merge_state: &self.merge_state,
