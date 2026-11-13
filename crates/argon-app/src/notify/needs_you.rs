@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use argon_core::{PrKey, Reason};
+use argon_core::{PrKey, Reason, SubjectKind};
 
 use super::toast::{Channel, ToastSpec, ToastTarget};
 
@@ -10,15 +10,17 @@ const MAX_TITLE_CHARS: usize = 80;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NeedsYouEntry {
     pub key: PrKey,
+    pub kind: SubjectKind,
     pub number: u64,
     pub title: String,
     pub reason: String,
 }
 
 impl NeedsYouEntry {
-    pub fn new(key: PrKey, number: u64, title: &str, reason: &Reason) -> Self {
+    pub fn new(key: PrKey, kind: SubjectKind, number: u64, title: &str, reason: &Reason) -> Self {
         Self {
             key,
+            kind,
             number,
             title: title.to_string(),
             reason: reason_text(reason),
@@ -48,7 +50,7 @@ pub fn toasts(entered: Vec<NeedsYouEntry>) -> Vec<ToastSpec> {
     if entered.len() > AGGREGATE_ABOVE {
         return vec![ToastSpec {
             channel: Channel::NeedsYou,
-            body: format!("{} PRs precisam de você", entered.len()),
+            body: format!("{} itens precisam de você", entered.len()),
             target: ToastTarget::NeedsYou,
         }];
     }
@@ -62,7 +64,10 @@ pub fn toasts(entered: Vec<NeedsYouEntry>) -> Vec<ToastSpec> {
                 shorten(&entry.title),
                 entry.reason
             ),
-            target: ToastTarget::Pr(entry.key),
+            target: match entry.kind {
+                SubjectKind::Pr => ToastTarget::Pr(entry.key),
+                SubjectKind::Issue => ToastTarget::Issue(entry.key),
+            },
         })
         .collect()
 }
@@ -103,9 +108,20 @@ mod tests {
     fn entry(id: &str, number: u64, title: &str) -> NeedsYouEntry {
         NeedsYouEntry::new(
             PrKey::new("github.com", id),
+            SubjectKind::Pr,
             number,
             title,
             &Reason::ReviewRequestedBy("ana".to_string()),
+        )
+    }
+
+    fn issue_entry(id: &str, number: u64, title: &str, reason: &Reason) -> NeedsYouEntry {
+        NeedsYouEntry::new(
+            PrKey::new("github.com", id),
+            SubjectKind::Issue,
+            number,
+            title,
+            reason,
         )
     }
 
@@ -156,7 +172,7 @@ mod tests {
         let entered = (1..=4).map(|n| entry(&n.to_string(), n, "t")).collect();
         let specs = toasts(entered);
         assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].body, "4 PRs precisam de você");
+        assert_eq!(specs[0].body, "4 itens precisam de você");
         assert_eq!(specs[0].target, ToastTarget::NeedsYou);
     }
 
@@ -169,5 +185,45 @@ mod tests {
                 .body
                 .starts_with(&format!("#7 {}…", "x".repeat(80)))
         );
+    }
+
+    #[test]
+    fn an_issue_that_entered_gets_an_issue_toast_with_its_reason() {
+        let mut tracker = NeedsYouTracker::default();
+        tracker.observe(vec![entry("a", 1, "x")]);
+        let entered = tracker.observe(vec![
+            entry("a", 1, "x"),
+            issue_entry("i", 9, "Crash on save", &Reason::IssueAssigned),
+        ]);
+        let specs = toasts(entered);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].body, "#9 Crash on save — atribuída a você");
+        assert_eq!(
+            specs[0].target,
+            ToastTarget::Issue(PrKey::new("github.com", "i"))
+        );
+    }
+
+    #[test]
+    fn a_mentioned_issue_uses_the_mention_text() {
+        let specs = toasts(vec![issue_entry("i", 3, "Docs", &Reason::Mentioned)]);
+        assert_eq!(specs[0].body, "#3 Docs — te mencionaram");
+    }
+
+    #[test]
+    fn an_issue_already_known_is_not_reported_again() {
+        let mut tracker = NeedsYouTracker::default();
+        let issue = || issue_entry("i", 9, "Crash on save", &Reason::IssueAssigned);
+        tracker.observe(vec![issue()]);
+        assert!(tracker.observe(vec![issue()]).is_empty());
+    }
+
+    #[test]
+    fn mixed_entries_collapse_into_the_neutral_aggregate() {
+        let mut entered: Vec<_> = (1..=3).map(|n| entry(&n.to_string(), n, "t")).collect();
+        entered.push(issue_entry("i", 9, "t", &Reason::Mentioned));
+        let specs = toasts(entered);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].body, "4 itens precisam de você");
     }
 }

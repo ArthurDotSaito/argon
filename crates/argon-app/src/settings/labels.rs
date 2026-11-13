@@ -81,7 +81,7 @@ pub const NEW_TEMPLATE_BODY: &str =
     "Revise o PR {{ pr.title }} (#{{ pr.number }}) em {{ repo }}.\n";
 
 pub const NOTIFICATIONS_HINT: &str = "Toasts do Windows. Valem a partir do próximo evento.";
-pub const NOTIFY_NEEDS_YOU: &str = "PR entrou em Needs you";
+pub const NOTIFY_NEEDS_YOU: &str = "PR ou issue entrou em Needs you";
 pub const NOTIFY_AGENTS: &str = "Agente pediu permissão ou terminou";
 
 pub const APPEARANCE_HINT: &str = "Aplica na hora, sem reiniciar.";

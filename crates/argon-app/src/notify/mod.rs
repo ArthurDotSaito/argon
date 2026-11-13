@@ -118,14 +118,15 @@ impl Notifier {
             .items()
             .iter()
             .filter(|item| item.views.contains(ViewSet::NEEDS_YOU))
-            .filter_map(|item| {
-                let pr = item.subject.as_pr()?;
-                Some(NeedsYouEntry::new(
-                    pr.key(),
-                    pr.number,
-                    &pr.title,
+            .map(|item| {
+                let subject = &item.subject;
+                NeedsYouEntry::new(
+                    subject.key(),
+                    subject.kind(),
+                    subject.number(),
+                    subject.title(),
                     &item.reason,
-                ))
+                )
             })
             .collect();
         let entered = self.needs_you.observe(current);

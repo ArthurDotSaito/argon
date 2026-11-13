@@ -12,6 +12,7 @@ pub enum Channel {
 pub enum ToastTarget {
     NeedsYou,
     Pr(PrKey),
+    Issue(PrKey),
     AgentReview(PrKey),
     AppUpdate,
 }

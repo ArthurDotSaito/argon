@@ -11,7 +11,7 @@ use crate::services::AppServices;
 use crate::sync_status::{SyncIndicator, SyncTone};
 
 const APP_NAME: &str = "Argon";
-const SEARCH_PLACEHOLDER: &str = "Buscar PRs, repos, comandos…";
+const SEARCH_PLACEHOLDER: &str = "Buscar PRs, issues, repos, comandos…";
 const SEARCH_SHORTCUT: &str = "Ctrl K";
 const SEARCH_WIDTH: f32 = 440.;
 const SIDE_WIDTH: f32 = 320.;

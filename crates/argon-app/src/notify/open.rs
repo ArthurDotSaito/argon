@@ -30,6 +30,9 @@ pub(super) fn open_target(target: ToastTarget, cx: &mut App) {
                 ToastTarget::Pr(key) => {
                     workspace.open_item(CenterItem::Pr(key), false, window, cx);
                 }
+                ToastTarget::Issue(key) => {
+                    workspace.open_item(CenterItem::Issue(key), false, window, cx);
+                }
                 ToastTarget::AppUpdate => workspace.show_about(window, cx),
                 ToastTarget::AgentReview(key) => {
                     workspace.open_item(CenterItem::Pr(key.clone()), false, window, cx);

@@ -49,8 +49,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.close_palette(window, cx);
-        if let PaletteEvent::OpenPr(key) = event {
-            self.open_item(CenterItem::Pr(key.clone()), false, window, cx);
+        match event {
+            PaletteEvent::OpenPr(key) => {
+                self.open_item(CenterItem::Pr(key.clone()), false, window, cx);
+            }
+            PaletteEvent::OpenIssue(key) => {
+                self.open_item(CenterItem::Issue(key.clone()), false, window, cx);
+            }
+            PaletteEvent::Dismiss => {}
         }
     }
 

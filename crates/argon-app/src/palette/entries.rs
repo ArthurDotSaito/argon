@@ -1,4 +1,4 @@
-use argon_core::{PrKey, PrState, PullRequest};
+use argon_core::{Issue, PrKey, PrState, PullRequest};
 use gpui_kit::assets::IconName;
 use gpui_kit::{Action, SharedString};
 
@@ -8,6 +8,7 @@ use crate::actions::{
     StartReview, SyncNow, ToggleBottomDock, ToggleLeftDock, ToggleRightDock, ToggleTheme,
 };
 use crate::inbox::InboxView;
+use crate::issue::IssueStatus;
 
 const REVIEW_WITH_AI_TITLE: &str = "Agent Review no PR atual";
 
@@ -38,6 +39,43 @@ impl PrEntry {
             state: pr.state,
             is_draft: pr.is_draft,
             number: pr.number,
+            haystack,
+        }
+    }
+
+    pub fn candidate(&self) -> Candidate<'_> {
+        Candidate {
+            text: &self.haystack,
+            number: Some(self.number),
+        }
+    }
+}
+
+pub struct IssueEntry {
+    pub key: PrKey,
+    pub title: SharedString,
+    pub reference: SharedString,
+    pub status: IssueStatus,
+    number: u64,
+    haystack: String,
+}
+
+impl IssueEntry {
+    pub fn new(issue: &Issue) -> Self {
+        let reference = format!("{} #{}", issue.repo, issue.number);
+        let mut parts = vec![
+            issue.title.as_str(),
+            reference.as_str(),
+            issue.author.as_str(),
+        ];
+        parts.extend(issue.labels.iter().map(|label| label.name.as_str()));
+        let haystack = parts.join("\n");
+        Self {
+            key: issue.key(),
+            title: issue.title.clone().into(),
+            reference: reference.into(),
+            status: IssueStatus::of(issue.state, issue.state_reason),
+            number: issue.number,
             haystack,
         }
     }
