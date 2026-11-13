@@ -1,12 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use argon_core::Issue;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use crate::Store;
 use crate::error::Result;
 use crate::local::LocalState;
+
+const ISSUE_BASELINE: &str = "issue_baseline";
 
 impl Store {
     pub fn upsert_issues(&mut self, host: &str, issues: &[Issue]) -> Result<()> {
@@ -61,14 +63,50 @@ impl Store {
             |row| row.get(0),
         )?)
     }
+
+    pub fn issue_baseline_done(&self, host: &str) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sync_state WHERE host = ?1 AND key = ?2)",
+            params![host, ISSUE_BASELINE],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn mark_issue_baseline_done(&mut self, host: &str, at: DateTime<Utc>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO sync_state (host, key, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT(host, key) DO UPDATE SET value = excluded.value",
+            params![host, ISSUE_BASELINE, at.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn stored_last_mentions(&self, host: &str) -> Result<HashMap<String, DateTime<Utc>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, data FROM issues WHERE host = ?1")?;
+        let rows = stmt
+            .query_map([host], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, data)| {
+                let issue: Issue = serde_json::from_str(&data).ok()?;
+                Some((id, issue.last_mention_at?))
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use argon_core::fixtures::{days_ago, issue_on, pr_on};
     use argon_core::{DEFAULT_HOST, PrKey};
+    use rusqlite::params;
 
     use crate::Store;
 
@@ -252,6 +290,61 @@ mod tests {
                 .iter()
                 .filter(|(i, _)| i.host == DEFAULT_HOST)
                 .all(|(_, state)| !state.unread)
+        );
+    }
+
+    #[test]
+    fn issue_baseline_is_tracked_per_host() {
+        let mut store = Store::open_in_memory().unwrap();
+        assert!(!store.issue_baseline_done(DEFAULT_HOST).unwrap());
+
+        store
+            .mark_issue_baseline_done(DEFAULT_HOST, days_ago(1))
+            .unwrap();
+        assert!(store.issue_baseline_done(DEFAULT_HOST).unwrap());
+        assert!(!store.issue_baseline_done(GHE).unwrap());
+
+        store
+            .mark_issue_baseline_done(DEFAULT_HOST, days_ago(0))
+            .unwrap();
+        assert!(store.issue_baseline_done(DEFAULT_HOST).unwrap());
+    }
+
+    #[test]
+    fn issue_baseline_survives_an_empty_issue_table() {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .mark_issue_baseline_done(DEFAULT_HOST, days_ago(0))
+            .unwrap();
+        store.prune_issues(DEFAULT_HOST, &HashSet::new()).unwrap();
+        assert!(!store.has_issues(DEFAULT_HOST).unwrap());
+        assert!(store.issue_baseline_done(DEFAULT_HOST).unwrap());
+    }
+
+    #[test]
+    fn stored_last_mentions_reads_mentioned_issues_of_one_host() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut mentioned = issue_on(DEFAULT_HOST, "mentioned", days_ago(1));
+        mentioned.last_mention_at = Some(days_ago(2));
+        let quiet = issue_on(DEFAULT_HOST, "quiet", days_ago(1));
+        let mut other_host = issue_on(GHE, "other", days_ago(1));
+        other_host.last_mention_at = Some(days_ago(3));
+        store
+            .upsert_issues(DEFAULT_HOST, &[mentioned, quiet])
+            .unwrap();
+        store.upsert_issues(GHE, &[other_host]).unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO issues (host, id, repo, number, data, updated_at, synced_at)
+                 VALUES (?1, 'broken', 'acme/api', 1, '{not json', 0, 0)",
+                params![DEFAULT_HOST],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.stored_last_mentions(DEFAULT_HOST).unwrap(),
+            HashMap::from([("mentioned".to_string(), days_ago(2))])
         );
     }
 

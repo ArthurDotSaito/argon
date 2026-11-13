@@ -9,7 +9,7 @@ use argon_github::{
     token_for,
 };
 use argon_store::Store;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::runtime::{Handle, Runtime};
@@ -370,7 +370,7 @@ impl SyncLoop {
             .await?;
         let org = org_issues.len();
         issues.extend(org_issues);
-        let mentions = self.check_mentions(session, &mut issues).await;
+        let mentions = self.check_mentions(session, &mut issues, window).await;
         let checked = mentions.as_ref().ok();
         let candidates = checked.map_or(0, |check| check.candidates);
         let new_mentions = checked.map_or(0, |check| check.found);
@@ -399,16 +399,26 @@ impl SyncLoop {
         &self,
         session: &Session,
         issues: &mut [Issue],
+        window: i64,
     ) -> Result<MentionCheck, IssueError> {
         let account = &session.account;
         let host = account.host.clone();
-        let last_seen = flatten(
+        let loaded = flatten(
             self.worker
                 .store
                 .call(move |store| store.last_seen_map(&host))
                 .await,
-        )
-        .map_err(IssueError::Store)?;
+        );
+        let last_seen = match loaded {
+            Ok(last_seen) => last_seen,
+            Err(error) => {
+                let every: HashSet<String> =
+                    issues.iter().map(|issue| issue.id.0.clone()).collect();
+                self.keep_stored_mentions(&account.host, issues, &every)
+                    .await;
+                return Err(IssueError::Store(error));
+            }
+        };
         let candidates: Vec<String> = issues
             .iter()
             .filter(|issue| {
@@ -420,19 +430,43 @@ impl SyncLoop {
         if candidates.is_empty() {
             return Ok(MentionCheck::default());
         }
-        let latest = session
+        let window_start = Utc::now() - ChronoDuration::days(window);
+        let since = mention_floors(&candidates, &last_seen, window_start);
+        match session
             .client
-            .latest_mentions(&candidates, &account.login, &last_seen)
-            .await?;
-        for issue in issues.iter_mut() {
-            if let Some(at) = latest.get(&issue.id.0) {
-                issue.last_mention_at = Some(*at);
+            .latest_mentions(&candidates, &account.login, &since)
+            .await
+        {
+            Ok(latest) => {
+                apply_mentions(issues, &latest);
+                Ok(MentionCheck {
+                    candidates: candidates.len(),
+                    found: latest.len(),
+                })
+            }
+            Err(error) => {
+                let candidates: HashSet<String> = candidates.into_iter().collect();
+                self.keep_stored_mentions(&account.host, issues, &candidates)
+                    .await;
+                Err(error.into())
             }
         }
-        Ok(MentionCheck {
-            candidates: candidates.len(),
-            found: latest.len(),
-        })
+    }
+
+    async fn keep_stored_mentions(&self, host: &str, issues: &mut [Issue], ids: &HashSet<String>) {
+        let owned = host.to_string();
+        let stored = self
+            .worker
+            .store
+            .call(move |store| store.stored_last_mentions(&owned))
+            .await;
+        match flatten(stored) {
+            Ok(mut stored) => {
+                stored.retain(|id, _| ids.contains(id));
+                apply_mentions(issues, &stored);
+            }
+            Err(error) => warn!(host, %error, "failed to read stored mention times"),
+        }
     }
 
     async fn store_issues(&self, host: &str, issues: Vec<Issue>) -> Result<bool, IssueError> {
@@ -441,7 +475,7 @@ impl SyncLoop {
             .worker
             .store
             .call(move |store| -> argon_store::Result<bool> {
-                let baseline = !store.has_issues(&host)?;
+                let baseline = !store.issue_baseline_done(&host)?;
                 let kept: HashSet<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
                 store.upsert_issues(&host, &issues)?;
                 store.prune_issues(&host, &kept)?;
@@ -451,6 +485,7 @@ impl SyncLoop {
                         .map(|issue| (issue.id.0.clone(), issue.updated_at))
                         .collect();
                     store.mark_seen_all(&host, &seen)?;
+                    store.mark_issue_baseline_done(&host, Utc::now())?;
                 }
                 Ok(baseline)
             })
@@ -676,6 +711,28 @@ impl SyncLoop {
     }
 }
 
+fn mention_floors(
+    candidates: &[String],
+    last_seen: &HashMap<String, DateTime<Utc>>,
+    window_start: DateTime<Utc>,
+) -> HashMap<String, DateTime<Utc>> {
+    candidates
+        .iter()
+        .map(|id| {
+            let floor = last_seen.get(id).copied().unwrap_or(window_start);
+            (id.clone(), floor)
+        })
+        .collect()
+}
+
+fn apply_mentions(issues: &mut [Issue], mentions: &HashMap<String, DateTime<Utc>>) {
+    for issue in issues {
+        if let Some(at) = mentions.get(&issue.id.0) {
+            issue.last_mention_at = Some(*at);
+        }
+    }
+}
+
 fn combine_orgs_with_more(pr: &[String], issue: &[String]) -> Vec<String> {
     let mut combined: Vec<String> = Vec::with_capacity(pr.len() + issue.len());
     for org in pr.iter().chain(issue) {
@@ -724,8 +781,28 @@ mod tests {
         &'static [&'static str],
     );
 
-    fn orgs(names: &[&str]) -> Vec<String> {
+    fn strings(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn mention_floors_fall_back_to_the_window_start_for_unseen_issues() {
+        let window_start = DateTime::from_timestamp(1_000, 0).unwrap();
+        let seen_at = DateTime::from_timestamp(5_000, 0).unwrap();
+        let last_seen = HashMap::from([
+            ("seen".to_string(), seen_at),
+            ("not_a_candidate".to_string(), seen_at),
+        ]);
+
+        let floors = mention_floors(&strings(&["seen", "unseen"]), &last_seen, window_start);
+
+        assert_eq!(
+            floors,
+            HashMap::from([
+                ("seen".to_string(), seen_at),
+                ("unseen".to_string(), window_start),
+            ])
+        );
     }
 
     #[test]
@@ -752,8 +829,8 @@ mod tests {
 
         for (name, pr, issue, expected) in cases {
             assert_eq!(
-                combine_orgs_with_more(&orgs(pr), &orgs(issue)),
-                orgs(expected),
+                combine_orgs_with_more(&strings(pr), &strings(issue)),
+                strings(expected),
                 "{name}"
             );
         }

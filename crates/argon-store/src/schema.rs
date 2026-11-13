@@ -182,7 +182,7 @@ const SESSION_TRANSPORT: &str =
 const SESSION_PERMISSION_MODE: &str =
     "ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'supervised';";
 
-const ISSUES_TABLE: &str = "
+const ISSUE_TABLES: &str = "
 CREATE TABLE issues (
     host TEXT NOT NULL,
     id TEXT NOT NULL,
@@ -192,6 +192,12 @@ CREATE TABLE issues (
     updated_at INTEGER NOT NULL,
     synced_at INTEGER NOT NULL,
     PRIMARY KEY (host, id)
+);
+CREATE TABLE sync_state (
+    host TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (host, key)
 );
 ";
 
@@ -203,7 +209,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(SESSION_LIFECYCLE),
     M::up(SESSION_TRANSPORT),
     M::up(SESSION_PERMISSION_MODE),
-    M::up(ISSUES_TABLE),
+    M::up(ISSUE_TABLES),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -452,11 +458,13 @@ mod tests {
     }
 
     #[test]
-    fn migration_eight_adds_issues_table_and_keeps_pull_requests() {
+    fn migration_eight_adds_issue_tables_and_keeps_pull_requests() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", true).unwrap();
         migrations().to_version(&mut conn, 7).unwrap();
-        assert!(!names(&conn, "table").contains(&"issues".to_string()));
+        let tables = names(&conn, "table");
+        assert!(!tables.contains(&"issues".to_string()));
+        assert!(!tables.contains(&"sync_state".to_string()));
 
         let pr = pr_on(DEFAULT_HOST, "PR_old", days_ago(2));
         conn.execute(
@@ -480,9 +488,12 @@ mod tests {
 
         migrate(&mut conn).unwrap();
 
-        assert!(names(&conn, "table").contains(&"issues".to_string()));
+        let tables = names(&conn, "table");
+        assert!(tables.contains(&"issues".to_string()));
+        assert!(tables.contains(&"sync_state".to_string()));
         let mut store = Store { conn };
         assert!(store.list_issues().unwrap().is_empty());
+        assert!(!store.issue_baseline_done(DEFAULT_HOST).unwrap());
 
         let listed = store.list_prs().unwrap();
         assert_eq!(listed.len(), 1);
