@@ -20,8 +20,9 @@ pub use findings::{
     Finding, FindingsError, FindingsParse, Severity, filter_findings, parse_findings,
 };
 pub use model::{
-    ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrKey, PrState,
-    PullRequest, ReviewDecision, ReviewState, Side,
+    ChecksState, DEFAULT_HOST, Involvement, Issue, IssueLabel, IssueRef, IssueState,
+    IssueStateReason, LatestReview, LinkedPr, Mergeable, PrId, PrKey, PrState, PullRequest,
+    ReviewDecision, ReviewState, SessionKind, Side, SubIssues, SubjectKind,
 };
 pub use paths::Paths;
 pub use prompt::{

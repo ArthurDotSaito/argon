@@ -294,6 +294,8 @@ fn union(left: Involvement, right: Involvement) -> Involvement {
         assigned: left.assigned || right.assigned,
         authored: left.authored || right.authored,
         reviewed: left.reviewed || right.reviewed,
+        mentioned: left.mentioned || right.mentioned,
+        commented: left.commented || right.commented,
     }
 }
 
@@ -341,7 +343,7 @@ mod tests {
                 requested: true,
                 authored: true,
                 reviewed: true,
-                assigned: false,
+                ..Involvement::default()
             }
         );
         assert_eq!(merged[1].1, requested);

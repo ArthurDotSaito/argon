@@ -75,6 +75,7 @@ pub(crate) fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
         updated_at: wire.updated_at,
         closed_at: wire.closed_at,
         involvement: Involvement::default(),
+        closing_issues: Vec::new(),
     }
 }
 

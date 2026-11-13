@@ -66,11 +66,75 @@ pub enum Side {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Involvement {
     pub requested: bool,
     pub assigned: bool,
     pub authored: bool,
     pub reviewed: bool,
+    pub mentioned: bool,
+    pub commented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SubjectKind {
+    Pr,
+    Issue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SessionKind {
+    Review,
+    Plan,
+}
+
+impl SessionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Plan => "plan",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IssueState {
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IssueStateReason {
+    Completed,
+    NotPlanned,
+    Duplicate,
+    Reopened,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueLabel {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkedPr {
+    pub repo: String,
+    pub number: u64,
+    pub state: PrState,
+    pub is_draft: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubIssues {
+    pub total: u32,
+    pub completed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct IssueRef {
+    pub repo: String,
+    pub number: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +172,8 @@ pub struct PullRequest {
     pub updated_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
     pub involvement: Involvement,
+    #[serde(default)]
+    pub closing_issues: Vec<IssueRef>,
 }
 
 impl PullRequest {
@@ -116,5 +182,101 @@ impl PullRequest {
             host: self.host.clone(),
             id: self.id.clone(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: PrId,
+    pub host: String,
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub state: IssueState,
+    pub state_reason: Option<IssueStateReason>,
+    pub issue_type: Option<String>,
+    pub labels: Vec<IssueLabel>,
+    pub assignees: Vec<String>,
+    pub milestone: Option<String>,
+    pub comments: u32,
+    pub linked_prs: Vec<LinkedPr>,
+    pub sub_issues: Option<SubIssues>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub closed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_mention_at: Option<DateTime<Utc>>,
+    pub involvement: Involvement,
+}
+
+impl Issue {
+    pub fn key(&self) -> PrKey {
+        PrKey {
+            host: self.host.clone(),
+            id: self.id.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixtures;
+
+    #[test]
+    fn pull_request_json_without_closing_issues_deserializes() {
+        let mut value = serde_json::to_value(fixtures::pr()).unwrap();
+        value.as_object_mut().unwrap().remove("closing_issues");
+        value["involvement"] = serde_json::json!({
+            "requested": true,
+            "assigned": false,
+            "authored": false,
+            "reviewed": false
+        });
+
+        let parsed: PullRequest = serde_json::from_value(value).unwrap();
+
+        assert!(parsed.closing_issues.is_empty());
+        assert!(parsed.involvement.requested);
+    }
+
+    #[test]
+    fn involvement_json_without_new_fields_deserializes() {
+        let parsed: Involvement = serde_json::from_str(
+            r#"{"requested":false,"assigned":true,"authored":false,"reviewed":false}"#,
+        )
+        .unwrap();
+
+        assert!(parsed.assigned);
+        assert!(!parsed.mentioned);
+        assert!(!parsed.commented);
+    }
+
+    #[test]
+    fn issue_round_trips_through_json() {
+        let issue = fixtures::issue();
+
+        let json = serde_json::to_string(&issue).unwrap();
+        let parsed: Issue = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed, issue);
+    }
+
+    #[test]
+    fn issue_json_without_last_mention_at_deserializes() {
+        let mut value = serde_json::to_value(fixtures::issue()).unwrap();
+        value.as_object_mut().unwrap().remove("last_mention_at");
+
+        let parsed: Issue = serde_json::from_value(value).unwrap();
+
+        assert_eq!(parsed.last_mention_at, None);
+    }
+
+    #[test]
+    fn session_kind_as_str_matches_persisted_values() {
+        assert_eq!(SessionKind::Review.as_str(), "review");
+        assert_eq!(SessionKind::Plan.as_str(), "plan");
     }
 }

@@ -192,6 +192,7 @@ fn fake_pr(index: u64, now: DateTime<Utc>, rng: &mut Rng) -> PullRequest {
             assigned: rng.chance(5),
             authored: author == ME,
             reviewed: rng.chance(10),
+            ..Involvement::default()
         },
         ..fixtures::pr()
     }
