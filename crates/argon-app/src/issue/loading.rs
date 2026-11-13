@@ -38,6 +38,7 @@ impl IssueView {
                     if this.read_after_epoch.is_some_and(|after| epoch >= after) {
                         this.read_after_epoch = None;
                     }
+                    this.action.reloaded(epoch);
                     if epoch > this.applied_epoch {
                         this.applied_epoch = epoch;
                         this.fail(labels::load_failed(&error.to_string()), cx);
@@ -61,6 +62,7 @@ impl IssueView {
             composer.set_timeline(&detail.timeline, cx)
         });
         self.detail = Some(Rc::new(detail));
+        self.settle_action(epoch, cx);
         if self.read_after_epoch.is_some_and(|after| epoch >= after) {
             self.read_after_epoch = None;
             self.mark_read(cx);

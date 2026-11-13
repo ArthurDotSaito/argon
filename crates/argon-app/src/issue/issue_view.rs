@@ -111,7 +111,7 @@ impl IssueView {
         pr::retry_button(id).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)))
     }
 
-    fn viewer_login(&self, cx: &App) -> Option<SharedString> {
+    pub(super) fn viewer_login(&self, cx: &App) -> Option<SharedString> {
         self.inbox
             .read(cx)
             .accounts()
@@ -210,7 +210,7 @@ impl Render for IssueView {
             .map(|detail| &detail.issue)
             .or(store_issue.as_deref());
         let viewer_login = self.viewer_login(cx);
-        let running = self.action.running();
+        let running = self.action.busy();
         let head = match issue {
             Some(issue) => {
                 let bar = ActionBar::of(issue, viewer_login.as_deref(), running);

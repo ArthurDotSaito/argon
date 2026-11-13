@@ -147,16 +147,17 @@ fn close_button(running: Option<IssueAction>, cx: &mut Context<IssueView>) -> im
         .dropdown_caret(true)
         .loading(matches!(running, Some(IssueAction::Close(_))))
         .disabled(running.is_some())
-        .dropdown_menu(move |menu, _, _| {
+        .dropdown_menu(move |menu, _, cx| {
+            let (not_planned_icon, not_planned_color) = status_style(IssueStatus::NotPlanned, cx);
             menu.item(close_item(
                 labels::CLOSE_COMPLETED,
-                IconName::CircleCheck,
+                Icon::new(IconName::CircleCheck),
                 IssueStateReason::Completed,
                 &view,
             ))
             .item(close_item(
                 labels::CLOSE_NOT_PLANNED,
-                IconName::CircleSlash,
+                Icon::new(not_planned_icon).text_color(not_planned_color),
                 IssueStateReason::NotPlanned,
                 &view,
             ))
@@ -165,13 +166,13 @@ fn close_button(running: Option<IssueAction>, cx: &mut Context<IssueView>) -> im
 
 fn close_item(
     label: &'static str,
-    icon: IconName,
+    icon: Icon,
     reason: IssueStateReason,
     view: &WeakEntity<IssueView>,
 ) -> PopupMenuItem {
     let view = view.clone();
     PopupMenuItem::new(label)
-        .icon(Icon::new(icon))
+        .icon(icon)
         .on_click(move |_, _, cx| {
             _ = view.update(cx, |this, cx| {
                 this.run_action(IssueAction::Close(reason), cx)
