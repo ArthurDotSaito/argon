@@ -1,13 +1,15 @@
-use argon_core::{DateBucket, Reason};
+use argon_core::{DateBucket, IssueLabel, Reason};
 use chrono::{DateTime, Utc};
 
 use super::InboxView;
+use super::filter::KindFilter;
 use crate::ui;
 
 pub const PANEL_TITLE: &str = "Visões";
 pub const GROUP_INBOX: &str = "Inbox";
 pub const GROUP_AGENTS: &str = "Agentes";
 pub const GROUP_YOUR_PRS: &str = "Seus PRs";
+pub const GROUP_ISSUES: &str = "Issues";
 pub const GROUP_REVIEWED: &str = "Revisados";
 pub const GROUP_ORGS: &str = "Orgs";
 pub const GROUP_ACCOUNTS: &str = "Contas";
@@ -15,17 +17,23 @@ pub const OPEN_SETTINGS: &str = "Configurações";
 pub const ADMIN_BADGE: &str = "admin";
 pub const NO_ACCOUNTS: &str = "Nenhuma conta conectada";
 pub const NO_ORGS: &str = "Nenhuma org rastreada";
-pub const FILTER_PLACEHOLDER: &str = "Filtrar por título, repo, autor, branch…";
+pub const FILTER_PLACEHOLDER: &str = "Filtrar por título, repo, autor, label…";
 pub const FILTER_SHORTCUT: &str = "/";
-pub const LOADING: &str = "Carregando PRs…";
+pub const LOADING: &str = "Carregando…";
 pub const LOAD_MORE: &str = "Carregar mais";
-pub const EMPTY_VIEW: &str = "Nenhum PR nesta visão.";
-pub const EMPTY_FILTER: &str = "Nenhum PR corresponde ao filtro.";
+pub const EMPTY_PR_VIEW: &str = "Nenhum PR nesta visão.";
+pub const EMPTY_ISSUE_VIEW: &str = "Nenhuma issue nesta visão.";
+pub const EMPTY_MIXED_VIEW: &str = "Nada nesta visão.";
+pub const EMPTY_FILTER: &str = "Nada corresponde ao filtro.";
+pub const KIND_ALL: &str = "Tudo";
+pub const KIND_PRS: &str = "PRs";
+pub const KIND_ISSUES: &str = "Issues";
 pub const NEEDS_YOU_SECTION: &str = "Needs you";
 pub const PR_FALLBACK_TITLE: &str = "PR";
 pub const ISSUE_FALLBACK_TITLE: &str = "Issue";
 
 const TAB_TITLE_MAX_CHARS: usize = 16;
+const MAX_LABEL_DOTS: usize = 2;
 
 pub fn view_title(view: InboxView) -> &'static str {
     match view {
@@ -41,6 +49,31 @@ pub fn view_title(view: InboxView) -> &'static str {
         InboxView::IssuesAuthored => "Criadas por você",
         InboxView::IssuesParticipating => "Participando",
     }
+}
+
+pub fn empty_view(view: InboxView, kind: KindFilter) -> &'static str {
+    match view {
+        InboxView::Inbox | InboxView::NeedsYou => match kind {
+            KindFilter::All => EMPTY_MIXED_VIEW,
+            KindFilter::Prs => EMPTY_PR_VIEW,
+            KindFilter::Issues => EMPTY_ISSUE_VIEW,
+        },
+        InboxView::IssuesAssigned
+        | InboxView::IssuesMentioned
+        | InboxView::IssuesAuthored
+        | InboxView::IssuesParticipating => EMPTY_ISSUE_VIEW,
+        InboxView::YourPrs
+        | InboxView::WaitingOnOthers
+        | InboxView::ChangesRequested
+        | InboxView::ReadyToMerge
+        | InboxView::AlreadyDone => EMPTY_PR_VIEW,
+    }
+}
+
+pub fn visible_labels(labels: &[IssueLabel]) -> (&[IssueLabel], Option<String>) {
+    let shown = labels.len().min(MAX_LABEL_DOTS);
+    let hidden = labels.len() - shown;
+    (&labels[..shown], (hidden > 0).then(|| format!("+{hidden}")))
 }
 
 pub fn bucket_title(bucket: DateBucket) -> &'static str {
@@ -103,4 +136,71 @@ pub fn reason_line(reason: &Reason, now: DateTime<Utc>, updated_at: DateTime<Utc
 
 fn tracking_line(now: DateTime<Utc>, updated_at: DateTime<Utc>) -> String {
     format!("Acompanhando · atualizado {}", ui::ago(now, updated_at))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label(name: &str) -> IssueLabel {
+        IssueLabel {
+            name: name.to_string(),
+            color: "d73a4a".to_string(),
+        }
+    }
+
+    #[test]
+    fn issue_views_are_empty_with_the_issue_text() {
+        for view in [
+            InboxView::IssuesAssigned,
+            InboxView::IssuesMentioned,
+            InboxView::IssuesAuthored,
+            InboxView::IssuesParticipating,
+        ] {
+            for kind in [KindFilter::All, KindFilter::Prs, KindFilter::Issues] {
+                assert_eq!(empty_view(view, kind), EMPTY_ISSUE_VIEW, "{view:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pr_views_are_empty_with_the_pr_text() {
+        for view in [
+            InboxView::YourPrs,
+            InboxView::WaitingOnOthers,
+            InboxView::ChangesRequested,
+            InboxView::ReadyToMerge,
+            InboxView::AlreadyDone,
+        ] {
+            assert_eq!(empty_view(view, KindFilter::Issues), EMPTY_PR_VIEW);
+        }
+    }
+
+    #[test]
+    fn mixed_views_follow_the_kind_filter() {
+        for view in [InboxView::Inbox, InboxView::NeedsYou] {
+            assert_eq!(empty_view(view, KindFilter::All), EMPTY_MIXED_VIEW);
+            assert_eq!(empty_view(view, KindFilter::Prs), EMPTY_PR_VIEW);
+            assert_eq!(empty_view(view, KindFilter::Issues), EMPTY_ISSUE_VIEW);
+        }
+    }
+
+    #[test]
+    fn up_to_two_labels_show_without_a_counter() {
+        for total in 0..=2 {
+            let labels: Vec<_> = (0..total).map(|ix| label(&ix.to_string())).collect();
+            let (shown, more) = visible_labels(&labels);
+            assert_eq!(shown.len(), total);
+            assert_eq!(more, None);
+        }
+    }
+
+    #[test]
+    fn extra_labels_collapse_into_a_counter() {
+        let labels: Vec<_> = ["bug", "api", "ui", "docs"].map(label).into();
+        let (shown, more) = visible_labels(&labels);
+        let names: Vec<_> = shown.iter().map(|label| label.name.as_str()).collect();
+        assert_eq!(names, ["bug", "api"]);
+        assert_eq!(more.as_deref(), Some("+2"));
+    }
 }

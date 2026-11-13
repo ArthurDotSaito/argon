@@ -133,15 +133,37 @@ fn meta(issue: &Issue, now: DateTime<Utc>, cx: &App) -> Div {
         .child(labels::opened(&ui::ago(now, issue.created_at)))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IssueTypeKind {
+    Bug,
+    Feature,
+    Other,
+}
+
+impl IssueTypeKind {
+    fn of(name: &str) -> Self {
+        if name.eq_ignore_ascii_case("bug") {
+            Self::Bug
+        } else if name.eq_ignore_ascii_case("feature") {
+            Self::Feature
+        } else {
+            Self::Other
+        }
+    }
+}
+
+pub fn type_style(name: &str, cx: &App) -> (IconName, Hsla) {
+    let theme = cx.theme();
+    match IssueTypeKind::of(name) {
+        IssueTypeKind::Bug => (IconName::Bug, theme.danger),
+        IssueTypeKind::Feature => (IconName::Lightbulb, theme.blue),
+        IssueTypeKind::Other => (IconName::SquareCheck, theme.muted_foreground),
+    }
+}
+
 fn type_tag(name: &str, cx: &App) -> Div {
     let theme = cx.theme();
-    let (icon, color) = if name.eq_ignore_ascii_case("bug") {
-        (IconName::Bug, theme.danger)
-    } else if name.eq_ignore_ascii_case("feature") {
-        (IconName::Lightbulb, theme.blue)
-    } else {
-        (IconName::SquareCheck, theme.muted_foreground)
-    };
+    let (icon, color) = type_style(name, cx);
     h_flex()
         .gap_1()
         .px_1p5()
@@ -290,6 +312,14 @@ mod tests {
                 IssueStatus::Closed
             );
         }
+    }
+
+    #[test]
+    fn type_kind_ignores_case_and_defaults_to_other() {
+        assert_eq!(IssueTypeKind::of("Bug"), IssueTypeKind::Bug);
+        assert_eq!(IssueTypeKind::of("FEATURE"), IssueTypeKind::Feature);
+        assert_eq!(IssueTypeKind::of("Task"), IssueTypeKind::Other);
+        assert_eq!(IssueTypeKind::of(""), IssueTypeKind::Other);
     }
 
     #[test]

@@ -247,12 +247,10 @@ impl InboxModel {
         cx.notify();
     }
 
-    #[expect(dead_code)]
     pub fn kind_filter(&self) -> KindFilter {
         self.kind
     }
 
-    #[expect(dead_code)]
     pub fn set_kind_filter(&mut self, filter: KindFilter, cx: &mut Context<Self>) {
         if self.kind != filter {
             self.kind = filter;

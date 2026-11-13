@@ -1,4 +1,4 @@
-use argon_core::{ChecksState, Issue, IssueState, PullRequest};
+use argon_core::{ChecksState, Issue, IssueLabel, PullRequest};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
@@ -6,14 +6,16 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    App, ClickEvent, Div, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
+    Stateful, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::{InboxItem, Subject};
 use super::labels;
+use crate::issue::{IssueStatus, status_style, type_style};
+use crate::pr::label_color;
 use crate::theme::density;
-use crate::ui::{self, avatar, state_icon};
+use crate::ui::{self, avatar, state_icon, state_style_for};
 
 const PR_ROW_HEIGHT: f32 = 52.;
 const HEADER_HEIGHT: f32 = 28.;
@@ -30,6 +32,9 @@ const REVIEWERS_WIDTH: f32 = 46.;
 const DIFF_WIDTH: f32 = 104.;
 const COMMENTS_WIDTH: f32 = 40.;
 const AGE_WIDTH: f32 = 52.;
+const LABEL_DOT: f32 = 8.;
+const TAG_HEIGHT: f32 = 18.;
+const TAG_TEXT_SIZE: f32 = 11.;
 
 pub fn pr_row_height(cx: &App) -> f32 {
     density::scaled(PR_ROW_HEIGHT, cx)
@@ -145,25 +150,24 @@ fn pr_lines(item: &InboxItem, pr: &PullRequest, now: DateTime<Utc>, cx: &App) ->
 }
 
 fn issue_lines(item: &InboxItem, issue: &Issue, now: DateTime<Utc>, cx: &App) -> (Div, Div) {
-    let theme = cx.theme();
-    let state_color = match issue.state {
-        IssueState::Open => theme.success,
-        IssueState::Closed => theme.muted_foreground,
-    };
+    let (state_icon, state_color) =
+        status_style(IssueStatus::of(issue.state, issue.state_reason), cx);
     let summary = summary_line()
         .child(unread_dot(item.unread, cx))
-        .child(
-            Icon::new(IconName::CircleDot)
-                .small()
-                .text_color(state_color),
-        )
+        .child(Icon::new(state_icon).small().text_color(state_color))
         .child(avatar(&issue.author, AVATAR_SIZE))
         .child(title(item, cx))
+        .child(issue_type(issue.issue_type.as_deref(), cx))
+        .child(assignees(issue, cx))
+        .child(linkage(issue, cx))
         .child(comments(issue.comments, cx))
         .child(age(now, issue.updated_at, cx));
     let details = details_line(cx)
         .child(mono(labels::repo_ref(&issue.repo, issue.number), cx))
         .child(SEPARATOR)
+        .when(!issue.labels.is_empty(), |this| {
+            this.child(label_dots(&issue.labels, cx)).child(SEPARATOR)
+        })
         .child(reason(item, now, issue.updated_at));
     (summary, details)
 }
@@ -235,7 +239,6 @@ fn checks(checks: Option<ChecksState>, cx: &App) -> Div {
         .child(ui::checks_glyph(checks, cx))
 }
 fn reviewers(pr: &PullRequest, cx: &App) -> Div {
-    let theme = cx.theme();
     let mut logins: Vec<&str> = Vec::new();
     let candidates = pr.requested_reviewers.iter().map(String::as_str).chain(
         pr.latest_reviews
@@ -247,6 +250,15 @@ fn reviewers(pr: &PullRequest, cx: &App) -> Div {
             logins.push(login);
         }
     }
+    avatar_stack(logins, cx)
+}
+
+fn assignees(issue: &Issue, cx: &App) -> Div {
+    avatar_stack(issue.assignees.iter().map(String::as_str).collect(), cx)
+}
+
+fn avatar_stack(logins: Vec<&str>, cx: &App) -> Div {
+    let theme = cx.theme();
     h_flex().w(px(REVIEWERS_WIDTH)).flex_none().children(
         logins
             .into_iter()
@@ -259,6 +271,85 @@ fn reviewers(pr: &PullRequest, cx: &App) -> Div {
                     .when(ix > 0, |this| this.ml(px(REVIEWER_OVERLAP)))
             }),
     )
+}
+
+fn issue_type(name: Option<&str>, cx: &App) -> Div {
+    h_flex()
+        .w(px(CI_WIDTH))
+        .flex_none()
+        .justify_center()
+        .children(name.map(|name| {
+            let (icon, color) = type_style(name, cx);
+            Icon::new(icon).xsmall().text_color(color)
+        }))
+}
+
+fn linkage(issue: &Issue, cx: &App) -> Div {
+    let theme = cx.theme();
+    let chip = if let Some(linked) = issue.linked_prs.first() {
+        let style = state_style_for(linked.state, linked.is_draft, cx);
+        Some(
+            tag(cx)
+                .child(Icon::new(style.icon).xsmall().text_color(style.color))
+                .child(
+                    div()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.foreground)
+                        .child(format!("#{}", linked.number)),
+                ),
+        )
+    } else {
+        issue.sub_issues.map(|sub| {
+            tag(cx)
+                .child(Icon::new(IconName::ListTree).xsmall())
+                .child(format!("{}/{}", sub.completed, sub.total))
+        })
+    };
+    h_flex()
+        .w(px(DIFF_WIDTH))
+        .flex_none()
+        .justify_end()
+        .children(chip)
+}
+
+fn tag(cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .flex_none()
+        .h(px(TAG_HEIGHT))
+        .px_1p5()
+        .gap_1()
+        .items_center()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.border)
+        .text_size(px(TAG_TEXT_SIZE))
+        .text_color(theme.muted_foreground)
+}
+
+fn label_dots(issue_labels: &[IssueLabel], cx: &App) -> Div {
+    let theme = cx.theme();
+    let (shown, more) = labels::visible_labels(issue_labels);
+    h_flex()
+        .flex_none()
+        .gap_2()
+        .items_center()
+        .children(shown.iter().map(|label| {
+            let color: Hsla = label_color(&label.color).unwrap_or(theme.muted_foreground);
+            h_flex()
+                .flex_none()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .size(px(LABEL_DOT))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(color),
+                )
+                .child(label.name.clone())
+        }))
+        .children(more)
 }
 
 fn diff_stat(pr: &PullRequest, cx: &App) -> Div {

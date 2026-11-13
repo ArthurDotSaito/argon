@@ -419,6 +419,10 @@ pub fn label_chip(name: &str, color: Option<&str>, cx: &App) -> Div {
         .child(name.to_string())
 }
 
+pub fn label_color(color: &str) -> Option<Hsla> {
+    parse_hex(color).map(Hsla::from)
+}
+
 fn parse_hex(color: &str) -> Option<Rgba> {
     let hex = color.trim_start_matches('#');
     if hex.len() != 6 {

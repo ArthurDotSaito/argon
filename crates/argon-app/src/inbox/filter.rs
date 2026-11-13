@@ -3,15 +3,18 @@ use argon_core::SubjectKind;
 use super::InboxView;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), expect(dead_code))]
 pub enum KindFilter {
     All,
     Prs,
     Issues,
 }
 
+pub fn applies_to(view: InboxView) -> bool {
+    matches!(view, InboxView::Inbox | InboxView::NeedsYou)
+}
+
 pub fn passes(kind: SubjectKind, filter: KindFilter, view: InboxView) -> bool {
-    if !matches!(view, InboxView::Inbox | InboxView::NeedsYou) {
+    if !applies_to(view) {
         return true;
     }
     match filter {

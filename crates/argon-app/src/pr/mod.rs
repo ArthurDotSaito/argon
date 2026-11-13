@@ -9,7 +9,7 @@ mod pr_view;
 mod timeline_item;
 
 pub(crate) use conversation::{CONTENT_MAX_WIDTH, truncated_notice};
-pub(crate) use header::{breadcrumb, label_chip, state_pill};
+pub(crate) use header::{breadcrumb, label_chip, label_color, state_pill};
 pub use pr_view::PrView;
 pub(crate) use pr_view::{
     failure_banner, failure_panel, fallback_header, retry_button, skeleton, tab_button,
