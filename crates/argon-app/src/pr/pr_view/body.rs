@@ -3,7 +3,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement,
+    AnyElement, App, ClickEvent, Context, Div, ElementId, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
     px,
 };
@@ -38,39 +38,7 @@ impl PrView {
     fn tab_item(&self, ix: usize, tab: PrTab, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.tab == tab;
         let count = self.tab_count(tab, cx);
-        let theme = cx.theme();
-        let count = count.map(|count| {
-            div()
-                .px_1p5()
-                .rounded_full()
-                .bg(theme.muted)
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(count.to_string())
-        });
-        h_flex()
-            .id(("pr-tab", ix))
-            .h(px(TAB_HEIGHT))
-            .px_3()
-            .gap_1p5()
-            .items_center()
-            .border_b_2()
-            .border_color(if selected {
-                theme.primary
-            } else {
-                gpui_kit::transparent_black()
-            })
-            .text_sm()
-            .text_color(if selected {
-                theme.foreground
-            } else {
-                theme.muted_foreground
-            })
-            .cursor_pointer()
-            .hover(|style| style.text_color(theme.foreground))
-            .child(Icon::new(tab.icon()).small())
-            .child(tab.title())
-            .children(count)
+        tab_button(("pr-tab", ix), tab.icon(), tab.title(), count, selected, cx)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_tab(tab, cx)))
     }
 
@@ -84,7 +52,10 @@ impl PrView {
             };
         }
         match &self.load {
-            Load::Failed(message) => error_panel(message.clone(), cx).into_any_element(),
+            Load::Failed(message) => {
+                let retry = self.retry_button("pr-retry", cx);
+                failure_panel(message.clone(), retry, cx).into_any_element()
+            }
             Load::Loading | Load::Ready => skeleton().into_any_element(),
         }
     }
@@ -94,39 +65,89 @@ impl PrView {
             return None;
         };
         self.detail.as_ref()?;
-        let theme = cx.theme();
-        Some(
-            h_flex()
-                .mx_4()
-                .mb_2()
-                .px_3()
-                .py_1p5()
-                .gap_2()
-                .items_center()
-                .rounded(theme.radius)
-                .border_1()
-                .border_color(theme.danger.opacity(0.5))
-                .bg(theme.danger.opacity(0.08))
-                .text_sm()
-                .child(
-                    Icon::new(IconName::CircleAlert)
-                        .small()
-                        .text_color(theme.danger),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.foreground)
-                        .child(message.clone()),
-                )
-                .child(retry_button("pr-retry-banner", cx)),
-        )
+        let retry = self.retry_button("pr-retry-banner", cx);
+        Some(failure_banner(message.clone(), retry, cx))
+    }
+
+    fn retry_button(&self, id: &'static str, cx: &mut Context<Self>) -> Button {
+        retry_button(id).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)))
     }
 }
 
-pub(super) fn fallback_header(cx: &App) -> Div {
+pub fn tab_button(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    title: &'static str,
+    count: Option<usize>,
+    selected: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let count = count.map(|count| {
+        div()
+            .px_1p5()
+            .rounded_full()
+            .bg(theme.muted)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(count.to_string())
+    });
+    h_flex()
+        .id(id)
+        .h(px(TAB_HEIGHT))
+        .px_3()
+        .gap_1p5()
+        .items_center()
+        .border_b_2()
+        .border_color(if selected {
+            theme.primary
+        } else {
+            gpui_kit::transparent_black()
+        })
+        .text_sm()
+        .text_color(if selected {
+            theme.foreground
+        } else {
+            theme.muted_foreground
+        })
+        .cursor_pointer()
+        .hover(|style| style.text_color(theme.foreground))
+        .child(Icon::new(icon).small())
+        .child(title)
+        .children(count)
+}
+
+pub fn failure_banner(message: SharedString, retry: Button, cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .mx_4()
+        .mb_2()
+        .px_3()
+        .py_1p5()
+        .gap_2()
+        .items_center()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.danger.opacity(0.5))
+        .bg(theme.danger.opacity(0.08))
+        .text_sm()
+        .child(
+            Icon::new(IconName::CircleAlert)
+                .small()
+                .text_color(theme.danger),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(theme.foreground)
+                .child(message),
+        )
+        .child(retry)
+}
+
+pub fn fallback_header(title: &'static str, note: &'static str, cx: &App) -> Div {
     let theme = cx.theme();
     v_flex()
         .px_4()
@@ -138,17 +159,21 @@ pub(super) fn fallback_header(cx: &App) -> Div {
                 .text_xl()
                 .font_semibold()
                 .text_color(theme.foreground)
-                .child(PR_FALLBACK_TITLE),
+                .child(title),
         )
         .child(
             div()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child(labels::NOT_IN_INBOX),
+                .child(note),
         )
 }
 
-fn error_panel(message: SharedString, cx: &mut Context<PrView>) -> Div {
+pub(super) fn pr_fallback_header(cx: &App) -> Div {
+    fallback_header(PR_FALLBACK_TITLE, labels::NOT_IN_INBOX, cx)
+}
+
+pub fn failure_panel(message: SharedString, retry: Button, cx: &App) -> Div {
     let theme = cx.theme();
     v_flex()
         .size_full()
@@ -168,19 +193,18 @@ fn error_panel(message: SharedString, cx: &mut Context<PrView>) -> Div {
                 .text_color(theme.foreground)
                 .child(message),
         )
-        .child(retry_button("pr-retry", cx))
+        .child(retry)
 }
 
-fn retry_button(id: &'static str, cx: &mut Context<PrView>) -> Button {
+pub fn retry_button(id: &'static str) -> Button {
     Button::new(id)
         .icon(Icon::new(IconName::RotateCw))
         .label(labels::RETRY)
         .small()
         .outline()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)))
 }
 
-fn skeleton() -> Div {
+pub fn skeleton() -> Div {
     v_flex()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))

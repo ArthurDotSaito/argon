@@ -26,6 +26,10 @@ use crate::keymap::PR_VIEW_CONTEXT;
 use crate::review::{ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::services::{AppServices, Services};
 
+pub use body::{
+    failure_banner, failure_panel, fallback_header, retry_button, skeleton, tab_button,
+};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PrTab {
     #[default]
@@ -276,7 +280,7 @@ impl Render for PrView {
                     cx,
                 )
             }
-            None => body::fallback_header(cx),
+            None => body::pr_fallback_header(cx),
         };
         let banner = self.error_banner(cx);
         let tab_bar = self.tab_bar(cx);

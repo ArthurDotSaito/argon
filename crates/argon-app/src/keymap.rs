@@ -16,6 +16,7 @@ pub const COMMENT_EDITOR_CONTEXT: &str = "CommentEditor";
 const DIFF_VIEW_SHORTCUT_CONTEXT: &str = "DiffView && !Input";
 pub const PR_VIEW_CONTEXT: &str = "PrView";
 const PR_VIEW_SHORTCUT_CONTEXT: &str = "PrView && !Input";
+pub const ISSUE_VIEW_CONTEXT: &str = "IssueView";
 
 pub fn bind(cx: &mut App) {
     cx.bind_keys([

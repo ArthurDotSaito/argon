@@ -38,6 +38,7 @@ pub enum CenterItem {
     Agents,
     AgentSession(String),
     Settings,
+    Issue(PrKey),
 }
 
 impl CenterItem {
@@ -45,6 +46,7 @@ impl CenterItem {
         match self {
             Self::Inbox => "Inbox".into(),
             Self::Pr(key) => inbox::pr_tab_title(key, cx),
+            Self::Issue(key) => inbox::issue_tab_title(key, cx),
             Self::Agents => "Agentes".into(),
             Self::AgentSession(id) => session_tab_title(id, cx),
             Self::Settings => "Configurações".into(),

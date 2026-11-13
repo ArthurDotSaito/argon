@@ -9,7 +9,7 @@ use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AppContext as _, ClickEvent, Context, Div, Entity, EventEmitter, InteractiveElement as _,
+    App, AppContext as _, ClickEvent, Context, Div, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
@@ -176,40 +176,6 @@ impl Conversation {
         )
     }
 
-    fn truncated_notice(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        h_flex()
-            .w_full()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .items_center()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(theme.warning.opacity(0.5))
-            .bg(theme.warning.opacity(0.08))
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(
-                Icon::new(IconName::TriangleAlert)
-                    .small()
-                    .text_color(theme.warning),
-            )
-            .child(labels::TIMELINE_TRUNCATED)
-            .child(div().text_color(theme.muted_foreground).child("·"))
-            .child(
-                div()
-                    .id("pr-timeline-open-github")
-                    .text_color(theme.link)
-                    .cursor_pointer()
-                    .hover(|style| style.underline())
-                    .child(labels::OPEN_ON_GITHUB)
-                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
-                        cx.emit(ConversationEvent::OpenOnGithub)
-                    })),
-            )
-    }
-
     fn composer(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let empty = self.input.read(cx).value().trim().is_empty();
@@ -274,7 +240,11 @@ impl Render for Conversation {
             return scroller;
         };
         let now = Utc::now();
-        let notice = detail.truncated_timeline.then(|| self.truncated_notice(cx));
+        let notice = detail.truncated_timeline.then(|| {
+            let open =
+                cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ConversationEvent::OpenOnGithub));
+            truncated_notice("pr-timeline-open-github", open, cx)
+        });
         let timeline = v_flex()
             .w_full()
             .gap_3()
@@ -297,4 +267,40 @@ impl Render for Conversation {
             .child(self.composer(cx));
         scroller.child(content)
     }
+}
+
+pub fn truncated_notice(
+    id: &'static str,
+    on_open: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .w_full()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .items_center()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.warning.opacity(0.5))
+        .bg(theme.warning.opacity(0.08))
+        .text_sm()
+        .text_color(theme.foreground)
+        .child(
+            Icon::new(IconName::TriangleAlert)
+                .small()
+                .text_color(theme.warning),
+        )
+        .child(labels::TIMELINE_TRUNCATED)
+        .child(div().text_color(theme.muted_foreground).child("·"))
+        .child(
+            div()
+                .id(id)
+                .text_color(theme.link)
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .child(labels::OPEN_ON_GITHUB)
+                .on_click(on_open),
+        )
 }

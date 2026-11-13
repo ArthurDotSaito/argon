@@ -78,7 +78,7 @@ pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
                 .w_full()
                 .gap_2()
                 .items_center()
-                .child(breadcrumb(pr, cx))
+                .child(breadcrumb(&pr.repo, pr.number, cx))
                 .child(div().flex_1())
                 .child(actions(&props, cx)),
         )
@@ -93,9 +93,9 @@ pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
         .children(status)
 }
 
-fn breadcrumb(pr: &PullRequest, cx: &App) -> Div {
+pub fn breadcrumb(full_repo: &str, number: u64, cx: &App) -> Div {
     let theme = cx.theme();
-    let (owner, repo) = pr.repo.split_once('/').unwrap_or(("", pr.repo.as_str()));
+    let (owner, repo) = full_repo.split_once('/').unwrap_or(("", full_repo));
     let separator = || {
         div()
             .text_color(theme.muted_foreground.opacity(0.6))
@@ -114,7 +114,7 @@ fn breadcrumb(pr: &PullRequest, cx: &App) -> Div {
         .child(
             div()
                 .text_color(theme.foreground)
-                .child(format!("#{}", pr.number)),
+                .child(format!("#{number}")),
         )
 }
 
@@ -203,20 +203,6 @@ fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
     } else {
         ui::state_style(pr, cx)
     };
-    let pill = h_flex()
-        .gap_1()
-        .px_2()
-        .h(px(22.))
-        .items_center()
-        .rounded_full()
-        .bg(style.color.opacity(0.16))
-        .border_1()
-        .border_color(style.color.opacity(0.5))
-        .text_xs()
-        .font_semibold()
-        .text_color(style.color)
-        .child(Icon::new(style.icon).xsmall())
-        .child(style.label);
     h_flex()
         .w_full()
         .flex_wrap()
@@ -224,7 +210,7 @@ fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
         .items_center()
         .text_sm()
         .text_color(theme.muted_foreground)
-        .child(pill)
+        .child(state_pill(style.icon, style.color, style.label))
         .child(ui::avatar(&pr.author, META_AVATAR))
         .child(
             div()
@@ -237,6 +223,23 @@ fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
         .child(branch("pr-copy-base", &pr.base, cx))
         .child(div().text_color(theme.muted_foreground).child("←"))
         .child(branch("pr-copy-head", &pr.head, cx))
+}
+
+pub fn state_pill(icon: IconName, color: Hsla, label: &'static str) -> Div {
+    h_flex()
+        .gap_1()
+        .px_2()
+        .h(px(22.))
+        .items_center()
+        .rounded_full()
+        .bg(color.opacity(0.16))
+        .border_1()
+        .border_color(color.opacity(0.5))
+        .text_xs()
+        .font_semibold()
+        .text_color(color)
+        .child(Icon::new(icon).xsmall())
+        .child(label)
 }
 
 fn branch(id: &'static str, name: &str, cx: &App) -> Div {

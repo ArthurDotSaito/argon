@@ -304,7 +304,7 @@ pub fn card_text(content: impl IntoElement) -> Div {
         .child(content)
 }
 
-fn event(
+pub fn event(
     icon: IconName,
     color: Hsla,
     text: impl IntoElement,

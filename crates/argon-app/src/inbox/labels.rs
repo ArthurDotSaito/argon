@@ -23,6 +23,7 @@ pub const EMPTY_VIEW: &str = "Nenhum PR nesta visão.";
 pub const EMPTY_FILTER: &str = "Nenhum PR corresponde ao filtro.";
 pub const NEEDS_YOU_SECTION: &str = "Needs you";
 pub const PR_FALLBACK_TITLE: &str = "PR";
+pub const ISSUE_FALLBACK_TITLE: &str = "Issue";
 
 const TAB_TITLE_MAX_CHARS: usize = 16;
 

@@ -1,28 +1,21 @@
 use std::collections::HashMap;
 
-use argon_core::{PrKey, PullRequest, SubjectKind, ViewSet};
+use argon_core::{Issue, PrKey, PullRequest, SubjectKind, ViewSet};
 use argon_store::Store;
 use chrono::{Local, Utc};
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task};
 
 use super::InboxView;
 use super::filter::{self, KindFilter};
-use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, load_items};
+use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, Subject, load_items};
 use super::labels;
 use super::sections::{InboxRow, Sections};
 use crate::services::{Services, SyncEvent, flatten};
 use crate::sync_status::SyncStatus;
 
 pub enum InboxEvent {
-    OpenPr {
-        key: PrKey,
-        preview: bool,
-    },
-    #[expect(dead_code)]
-    OpenIssue {
-        key: PrKey,
-        preview: bool,
-    },
+    OpenPr { key: PrKey, preview: bool },
+    OpenIssue { key: PrKey, preview: bool },
     ShowList,
 }
 
@@ -173,9 +166,17 @@ impl InboxModel {
         self.rows_revision
     }
 
-    pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
+    pub(super) fn subject(&self, key: &PrKey) -> Option<&Subject> {
         let ix = *self.index.get(key)?;
-        self.items.get(ix)?.subject.as_pr()
+        Some(&self.items.get(ix)?.subject)
+    }
+
+    pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
+        self.subject(key)?.as_pr()
+    }
+
+    pub fn issue(&self, key: &PrKey) -> Option<&Issue> {
+        self.subject(key)?.as_issue()
     }
 
     pub fn is_loading_more(&self) -> bool {

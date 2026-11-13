@@ -80,6 +80,13 @@ impl Subject {
         }
     }
 
+    pub fn as_issue(&self) -> Option<&Issue> {
+        match self {
+            Self::Pr(_) => None,
+            Self::Issue(issue) => Some(issue),
+        }
+    }
+
     fn node_id(&self) -> &str {
         match self {
             Self::Pr(pr) => &pr.id.0,

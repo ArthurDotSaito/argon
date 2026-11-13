@@ -11,17 +11,25 @@ use argon_core::{PrKey, ViewSet};
 use gpui_kit::{App, SharedString};
 
 pub use inbox_view::InboxPane;
-pub use labels::{PR_FALLBACK_TITLE, needs_you_status};
+pub use labels::{ISSUE_FALLBACK_TITLE, PR_FALLBACK_TITLE, needs_you_status};
 pub use model::{InboxEvent, InboxHandle, InboxModel};
 pub use views_panel::{VIEWS_PANEL, ViewsPanel};
 
 pub fn pr_tab_title(key: &PrKey, cx: &App) -> SharedString {
+    tab_title(key, labels::PR_FALLBACK_TITLE, cx)
+}
+
+pub fn issue_tab_title(key: &PrKey, cx: &App) -> SharedString {
+    tab_title(key, labels::ISSUE_FALLBACK_TITLE, cx)
+}
+
+fn tab_title(key: &PrKey, fallback: &'static str, cx: &App) -> SharedString {
     InboxModel::global(cx)
         .and_then(|model| {
-            let pr = model.read(cx).pr(key)?;
-            Some(labels::pr_tab_title(pr.number, &pr.title).into())
+            let subject = model.read(cx).subject(key)?;
+            Some(labels::pr_tab_title(subject.number(), subject.title()).into())
         })
-        .unwrap_or_else(|| labels::PR_FALLBACK_TITLE.into())
+        .unwrap_or_else(|| fallback.into())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
