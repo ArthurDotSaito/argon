@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 
 use crate::Store;
 use crate::agents::millis;
@@ -73,18 +73,23 @@ impl Store {
         base_sha: &str,
     ) -> Result<PlanDraft> {
         let now = Utc::now().timestamp_millis();
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = match open_plan_id(&tx, session_id)? {
             Some(id) => {
-                tx.execute(
+                let changed = tx.execute(
                     "UPDATE plan_drafts SET
                          body = CASE WHEN edited = 0 THEN ?1 ELSE body END,
                          base_sha = CASE WHEN edited = 0 THEN ?2 ELSE base_sha END,
                          agent_body = CASE WHEN edited = 0 THEN agent_body ELSE ?1 END,
                          updated_at = ?3
-                     WHERE id = ?4",
+                     WHERE id = ?4 AND published_at IS NULL",
                     params![body, base_sha, now, id],
                 )?;
+                if changed == 0 {
+                    ensure_open(&tx, id)?;
+                }
                 id
             }
             None => {
@@ -103,32 +108,42 @@ impl Store {
     }
 
     pub fn edit_plan(&mut self, id: i64, body: &str) -> Result<()> {
-        let tx = self.conn.transaction()?;
-        ensure_open(&tx, id)?;
-        tx.execute(
-            "UPDATE plan_drafts SET body = ?1, edited = 1, updated_at = ?2 WHERE id = ?3",
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE plan_drafts SET body = ?1, edited = 1, updated_at = ?2
+             WHERE id = ?3 AND published_at IS NULL",
             params![body, Utc::now().timestamp_millis(), id],
         )?;
+        if changed == 0 {
+            ensure_open(&tx, id)?;
+        }
         tx.commit()?;
         Ok(())
     }
 
     pub fn resolve_agent_version(&mut self, id: i64, use_agent: bool) -> Result<()> {
-        let tx = self.conn.transaction()?;
-        ensure_open(&tx, id)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let now = Utc::now().timestamp_millis();
-        if use_agent {
+        let changed = if use_agent {
             tx.execute(
                 "UPDATE plan_drafts
                  SET body = agent_body, edited = 0, agent_body = NULL, updated_at = ?1
-                 WHERE id = ?2 AND agent_body IS NOT NULL",
+                 WHERE id = ?2 AND published_at IS NULL AND agent_body IS NOT NULL",
                 params![now, id],
-            )?;
+            )?
         } else {
             tx.execute(
-                "UPDATE plan_drafts SET agent_body = NULL, updated_at = ?1 WHERE id = ?2",
+                "UPDATE plan_drafts SET agent_body = NULL, updated_at = ?1
+                 WHERE id = ?2 AND published_at IS NULL",
                 params![now, id],
-            )?;
+            )?
+        };
+        if changed == 0 {
+            ensure_open(&tx, id)?;
         }
         tx.commit()?;
         Ok(())
@@ -144,11 +159,11 @@ impl Store {
         let changed = self.conn.execute(
             "UPDATE plan_drafts
              SET published_at = ?1, comment_id = ?2, comment_url = ?3, updated_at = ?1
-             WHERE id = ?4",
+             WHERE id = ?4 AND published_at IS NULL",
             params![at.timestamp_millis(), comment_id, comment_url, id],
         )?;
         if changed == 0 {
-            return Err(rusqlite::Error::QueryReturnedNoRows.into());
+            ensure_open(&self.conn, id)?;
         }
         Ok(())
     }

@@ -202,3 +202,58 @@ fn session_kind_and_base_sha_round_trip() {
     assert_eq!(review.kind, SessionKind::Review);
     assert_eq!(review.base_sha, None);
 }
+
+#[test]
+fn publishing_twice_fails_and_keeps_the_first_publication() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    let first_at = Utc.timestamp_millis_opt(5_000).unwrap();
+    store
+        .mark_plan_published(plan.id, "IC_1", "https://example.test/1", first_at)
+        .unwrap();
+
+    let error = store
+        .mark_plan_published(
+            plan.id,
+            "IC_2",
+            "https://example.test/2",
+            Utc.timestamp_millis_opt(9_000).unwrap(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, StoreError::PlanPublished(id) if id == plan.id));
+    let kept = &store.plans_for_session("s1").unwrap()[0];
+    assert_eq!(kept.published_at, Some(first_at));
+    assert_eq!(kept.comment_id.as_deref(), Some("IC_1"));
+    assert_eq!(kept.comment_url.as_deref(), Some("https://example.test/1"));
+}
+
+#[test]
+fn using_the_agent_version_of_a_published_draft_fails() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    store
+        .mark_plan_published(plan.id, "IC_1", "u", Utc::now())
+        .unwrap();
+
+    let error = store.resolve_agent_version(plan.id, true).unwrap_err();
+
+    assert!(matches!(error, StoreError::PlanPublished(id) if id == plan.id));
+    assert_eq!(store.plans_for_session("s1").unwrap()[0].body, "v1");
+}
+
+#[test]
+fn plan_after_accepting_the_agent_version_replaces_the_body_again() {
+    let mut store = Store::open_in_memory().unwrap();
+    let first = record(&mut store, "s1", "v1", "sha1");
+    store.edit_plan(first.id, "mine").unwrap();
+    record(&mut store, "s1", "agent v2", "sha1");
+    store.resolve_agent_version(first.id, true).unwrap();
+
+    let next = record(&mut store, "s1", "agent v3", "sha1");
+
+    assert_eq!(next.id, first.id);
+    assert_eq!(next.body, "agent v3");
+    assert_eq!(next.agent_body, None);
+    assert!(!next.edited);
+}
