@@ -8,6 +8,7 @@ mod model;
 mod paths;
 mod prompt;
 mod reason;
+mod redact;
 mod review;
 mod time;
 mod views;
@@ -28,10 +29,12 @@ pub use model::{
 };
 pub use paths::Paths;
 pub use prompt::{
-    InvalidTemplate, PromptContext, PromptError, PromptTemplate, RenderedPrompt, TemplateSet,
-    ensure_default_templates, load_templates, render_prompt, scan_templates,
+    InvalidTemplate, PlanComment, PlanContext, PromptContext, PromptError, PromptTemplate,
+    RenderedPrompt, TemplateKind, TemplateSet, ensure_default_templates, load_templates,
+    render_plan_prompt, render_prompt, scan_templates,
 };
 pub use reason::{Reason, issue_reason, reason};
+pub use redact::{redact_line, redact_text};
 pub use review::{
     DraftComment, DraftReview, DraftSource, DraftThreadInput, ReviewError, ReviewEvent,
     ReviewSubmission, build_submission, single_comment_submission,

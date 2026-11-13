@@ -138,6 +138,8 @@ impl TemplatesSection {
             id: current.id.clone(),
             name: self.name.read(cx).value().to_string(),
             description: current.description.clone(),
+            kind: current.kind,
+            version: current.version,
             body: self.body.read(cx).value().to_string(),
         })
     }

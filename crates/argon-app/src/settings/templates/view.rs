@@ -8,7 +8,9 @@ use gpui_kit::{
     px,
 };
 
-use super::naming::{VARIABLES, is_built_in, variable_token};
+use argon_core::TemplateKind;
+
+use super::naming::{is_built_in, variable_token, variables};
 use super::{Load, TemplatesSection};
 use crate::settings::labels;
 use crate::settings::ui::{badge, card, field, note, section};
@@ -98,8 +100,13 @@ impl TemplatesSection {
         let built_in = is_built_in(&current.id);
         let dirty = self.is_dirty(cx);
         let uses_nonce = self.draft(cx).is_some_and(|draft| draft.uses_nonce());
-        let chips: Vec<_> = VARIABLES
-            .into_iter()
+        let no_nonce = match current.kind {
+            TemplateKind::Review => labels::NO_NONCE,
+            TemplateKind::Plan => labels::NO_NONCE_PLAN,
+        };
+        let chips: Vec<_> = variables(current.kind)
+            .iter()
+            .copied()
             .enumerate()
             .map(|(ix, name)| {
                 Button::new(("settings-variable", ix))
@@ -153,7 +160,7 @@ impl TemplatesSection {
                     )
                     .child(h_flex().flex_wrap().gap_1().children(chips)),
             )
-            .children((!uses_nonce).then(|| note(labels::NO_NONCE, theme.warning)))
+            .children((!uses_nonce).then(|| note(no_nonce, theme.warning)))
             .child(
                 h_flex()
                     .flex_wrap()

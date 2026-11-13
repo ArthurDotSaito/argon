@@ -5,7 +5,6 @@ mod http;
 mod jsonrpc;
 mod opencode;
 pub mod process;
-pub mod redact;
 mod registry;
 pub mod session;
 mod usage;

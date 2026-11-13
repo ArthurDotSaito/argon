@@ -14,6 +14,76 @@ fn parses_header_with_name_and_description() {
 }
 
 #[test]
+fn header_without_kind_is_a_review_template() {
+    let template = parse_template("r", "+++\nname = \"R\"\n+++\nCorpo").unwrap();
+    let bare = parse_template("s", "Só corpo").unwrap();
+
+    assert_eq!(template.kind, TemplateKind::Review);
+    assert_eq!(template.version, None);
+    assert_eq!(bare.kind, TemplateKind::Review);
+}
+
+#[test]
+fn parses_kind_and_template_version() {
+    let plan = parse_template(
+        "plano",
+        "+++\nname = \"Plano\"\nkind = \"plan\"\nargon_template_version = 1\n+++\nCorpo",
+    )
+    .unwrap();
+    let review = parse_template("r", "+++\nkind = \"review\"\n+++\nCorpo").unwrap();
+
+    assert_eq!(plan.kind, TemplateKind::Plan);
+    assert_eq!(plan.version, Some(1));
+    assert_eq!(plan.body, "Corpo");
+    assert_eq!(review.kind, TemplateKind::Review);
+}
+
+#[test]
+fn unknown_kind_is_an_invalid_header() {
+    let error = parse_template("x", "+++\nkind = \"triage\"\n+++\nCorpo").unwrap_err();
+
+    assert!(matches!(&error, PromptError::InvalidHeader { id, .. } if id == "x"));
+    let message = error.to_string();
+    assert!(
+        message.contains("unknown template kind `triage`"),
+        "{message}"
+    );
+    assert!(message.contains("`review` or `plan`"), "{message}");
+}
+
+#[test]
+fn unknown_kind_is_listed_as_invalid_by_the_scan() {
+    let dir = TempDir::new("scan-kind");
+    fs::write(dir.path().join("ok.md"), "+++\nkind = \"plan\"\n+++\nx").unwrap();
+    fs::write(
+        dir.path().join("estranho.md"),
+        "+++\nkind = \"Plan\"\n+++\nx",
+    )
+    .unwrap();
+
+    let set = scan_templates(dir.path()).unwrap();
+
+    let ids: Vec<&str> = set.templates.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["ok"]);
+    assert_eq!(set.invalid.len(), 1);
+    assert_eq!(set.invalid[0].id, "estranho");
+    assert!(
+        set.invalid[0]
+            .error
+            .contains("unknown template kind `Plan`")
+    );
+}
+
+#[test]
+fn template_kind_text_round_trips() {
+    for kind in [TemplateKind::Review, TemplateKind::Plan] {
+        assert_eq!(TemplateKind::parse(kind.as_str()), Some(kind));
+    }
+    assert_eq!(TemplateKind::parse("plano"), None);
+    assert_eq!(TemplateKind::default(), TemplateKind::Review);
+}
+
+#[test]
 fn parses_header_with_crlf_line_endings() {
     let source = "+++\r\nname = \"Segurança\"\r\n+++\r\n\r\nCorpo\r\n";
 

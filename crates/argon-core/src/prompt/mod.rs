@@ -1,4 +1,5 @@
 mod defaults;
+mod plan;
 mod render;
 mod template;
 #[cfg(test)]
@@ -7,8 +8,11 @@ mod test_support;
 use std::path::PathBuf;
 
 pub use defaults::ensure_default_templates;
+pub use plan::{PlanComment, PlanContext, render_plan_prompt};
 pub use render::{PromptContext, RenderedPrompt, render_prompt};
-pub use template::{InvalidTemplate, PromptTemplate, TemplateSet, load_templates, scan_templates};
+pub use template::{
+    InvalidTemplate, PromptTemplate, TemplateKind, TemplateSet, load_templates, scan_templates,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PromptError {

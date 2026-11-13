@@ -72,9 +72,9 @@ pub struct RenderedPrompt {
 }
 
 #[derive(Debug)]
-struct FileList(Vec<String>);
+pub(super) struct TextList(pub(super) Vec<String>);
 
-impl Object for FileList {
+impl Object for TextList {
     fn repr(self: &Arc<Self>) -> ObjectRepr {
         ObjectRepr::Seq
     }
@@ -101,25 +101,29 @@ fn longest_backtick_run(content: &str) -> usize {
         .unwrap_or_default()
 }
 
-fn fence(value: Value) -> String {
-    let longest = longest_backtick_run(&value.to_string());
-    "`".repeat((longest + 1).max(MIN_FENCE_LEN))
+pub(super) fn fence_for(content: &str) -> String {
+    "`".repeat((longest_backtick_run(content) + 1).max(MIN_FENCE_LEN))
 }
 
-fn truncate_with_notice(text: &str, max_chars: usize, notice: &str) -> String {
-    let Some((cut, _)) = text.char_indices().nth(max_chars) else {
-        return text.to_owned();
-    };
+fn fence(value: Value) -> String {
+    fence_for(&value.to_string())
+}
+
+pub(super) fn cut_at_line(text: &str, max_chars: usize) -> Option<&str> {
+    let (cut, _) = text.char_indices().nth(max_chars)?;
     let head = &text[..cut];
-    let kept = if text[cut..].starts_with('\n') {
+    Some(if text[cut..].starts_with('\n') {
         head
     } else {
         head.rfind('\n').map_or("", |newline| &head[..newline])
-    };
-    if kept.is_empty() {
-        notice.to_owned()
-    } else {
-        format!("{kept}\n{notice}")
+    })
+}
+
+fn truncate_with_notice(text: &str, max_chars: usize, notice: &str) -> String {
+    match cut_at_line(text, max_chars) {
+        None => text.to_owned(),
+        Some("") => notice.to_owned(),
+        Some(kept) => format!("{kept}\n{notice}"),
     }
 }
 
@@ -142,13 +146,13 @@ fn file_lines(ctx: &PromptContext) -> Vec<String> {
         .collect()
 }
 
-fn random_nonce() -> Result<String, PromptError> {
+pub(super) fn random_nonce() -> Result<String, PromptError> {
     let mut bytes = [0u8; NONCE_BYTES];
     getrandom::fill(&mut bytes)?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn fresh_nonce(
+pub(super) fn fresh_nonce(
     untrusted: &[&str],
     mut generate: impl FnMut() -> Result<String, PromptError>,
 ) -> Result<String, PromptError> {
@@ -160,8 +164,8 @@ fn fresh_nonce(
     }
 }
 
-fn unknown_variable(template: &Template<'_, '_>) -> Option<String> {
-    let known: HashSet<&str> = KNOWN_VARIABLES.into_iter().collect();
+fn unknown_variable(template: &Template<'_, '_>, known_variables: &[&str]) -> Option<String> {
+    let known: HashSet<&str> = known_variables.iter().copied().collect();
     template
         .undeclared_variables(true)
         .into_iter()
@@ -169,19 +173,41 @@ fn unknown_variable(template: &Template<'_, '_>) -> Option<String> {
         .min()
 }
 
+pub(super) fn environment() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_keep_trailing_newline(true);
+    env.add_filter("fence", fence);
+    env
+}
+
+pub(super) fn compile<'env, 'source>(
+    env: &'env Environment<'static>,
+    template: &'source PromptTemplate,
+    known_variables: &[&str],
+) -> Result<Template<'env, 'source>, PromptError> {
+    let compiled = env.template_from_str(&template.body)?;
+    match unknown_variable(&compiled, known_variables) {
+        Some(name) => Err(PromptError::UnknownVariable { name }),
+        None => Ok(compiled),
+    }
+}
+
+pub(super) fn nonce_warnings(template: &PromptTemplate, warning: &str) -> Vec<String> {
+    if template.uses_nonce() {
+        Vec::new()
+    } else {
+        vec![warning.to_owned()]
+    }
+}
+
 pub fn render_prompt(
     template: &PromptTemplate,
     ctx: &PromptContext,
     max_diff_chars: usize,
 ) -> Result<RenderedPrompt, PromptError> {
-    let mut env = Environment::new();
-    env.set_undefined_behavior(UndefinedBehavior::Strict);
-    env.set_keep_trailing_newline(true);
-    env.add_filter("fence", fence);
-    let compiled = env.template_from_str(&template.body)?;
-    if let Some(name) = unknown_variable(&compiled) {
-        return Err(PromptError::UnknownVariable { name });
-    }
+    let env = environment();
+    let compiled = compile(&env, template, &KNOWN_VARIABLES)?;
     let files = file_lines(ctx);
     let joined_files = files.join("\n");
     let nonce = fresh_nonce(
@@ -221,7 +247,7 @@ pub fn render_prompt(
         head => ctx.head,
         diff => if inline { ctx.diff.as_str() } else { "" },
         diff_mode => if inline { DIFF_MODE_INLINE } else { DIFF_MODE_WORKTREE },
-        files => Value::from_object(FileList(files)),
+        files => Value::from_object(TextList(files)),
         previous_reviews => previous_reviews,
         ci_failures => truncate_with_notice(
             &ctx.ci_failures,
@@ -229,15 +255,9 @@ pub fn render_prompt(
             CI_FAILURES_NOTICE,
         ),
     };
-    let text = compiled.render(values)?;
-    let warnings = if template.uses_nonce() {
-        Vec::new()
-    } else {
-        vec![NO_NONCE_WARNING.to_owned()]
-    };
     Ok(RenderedPrompt {
-        text,
+        text: compiled.render(values)?,
         nonce,
-        warnings,
+        warnings: nonce_warnings(template, NO_NONCE_WARNING),
     })
 }

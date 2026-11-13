@@ -2,7 +2,10 @@ use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use argon_core::{PromptError, TemplateSet, ensure_default_templates, scan_templates};
+use argon_core::{
+    PromptError, PromptTemplate, TemplateKind, TemplateSet, ensure_default_templates,
+    scan_templates,
+};
 
 const HEADER_FENCE: &str = "+++";
 
@@ -30,15 +33,25 @@ fn toml_string(value: &str) -> String {
     out
 }
 
-pub fn compose(name: &str, description: Option<&str>, body: &str) -> String {
-    let mut source = format!("{HEADER_FENCE}\nname = {}\n", toml_string(name));
-    if let Some(description) = description.filter(|text| !text.trim().is_empty()) {
+pub fn compose(template: &PromptTemplate) -> String {
+    let mut source = format!("{HEADER_FENCE}\nname = {}\n", toml_string(&template.name));
+    if let Some(description) = template
+        .description
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+    {
         source.push_str(&format!("description = {}\n", toml_string(description)));
+    }
+    if template.kind != TemplateKind::Review {
+        source.push_str(&format!("kind = {}\n", toml_string(template.kind.as_str())));
+    }
+    if let Some(version) = template.version {
+        source.push_str(&format!("argon_template_version = {version}\n"));
     }
     source.push_str(HEADER_FENCE);
     source.push('\n');
-    source.push_str(body);
-    if !body.ends_with('\n') {
+    source.push_str(&template.body);
+    if !template.body.ends_with('\n') {
         source.push('\n');
     }
     source
@@ -100,25 +113,80 @@ mod tests {
         }
     }
 
+    fn draft(name: &str, description: Option<&str>, body: &str) -> PromptTemplate {
+        PromptTemplate {
+            id: "draft".into(),
+            name: name.into(),
+            description: description.map(str::to_owned),
+            body: body.into(),
+            ..PromptTemplate::default()
+        }
+    }
+
     #[test]
     fn composed_source_round_trips_through_the_loader() {
         let dir = TempDir::new("compose");
         let name = "Revisão \"rápida\" \\ v2";
-        let source = compose(name, Some("Só o essencial"), "Olá {{ pr.title }} {{nonce}}");
+        let source = compose(&draft(
+            name,
+            Some("Só o essencial"),
+            "Olá {{ pr.title }} {{nonce}}",
+        ));
         write_atomic(&template_path(&dir.0, "rapida"), &source).unwrap();
         let set = scan_templates(&dir.0).unwrap();
         let template = &set.templates[0];
         assert_eq!(template.id, "rapida");
         assert_eq!(template.name, name);
         assert_eq!(template.description.as_deref(), Some("Só o essencial"));
+        assert_eq!(template.kind, TemplateKind::Review);
+        assert_eq!(template.version, None);
         assert_eq!(template.body, "Olá {{ pr.title }} {{nonce}}\n");
         assert!(set.invalid.is_empty());
     }
 
     #[test]
     fn compose_skips_blank_description() {
-        let source = compose("x", Some("  "), "body\n");
+        let source = compose(&draft("x", Some("  "), "body\n"));
         assert_eq!(source, "+++\nname = \"x\"\n+++\nbody\n");
+    }
+
+    #[test]
+    fn compose_preserves_kind_and_template_version() {
+        let dir = TempDir::new("compose-kind");
+        let plan = PromptTemplate {
+            kind: TemplateKind::Plan,
+            version: Some(7),
+            ..draft(
+                "Meu plano",
+                Some("Plano curto"),
+                "Plano da #{{issue.number}}\n",
+            )
+        };
+        let source = compose(&plan);
+        assert_eq!(
+            source,
+            "+++\nname = \"Meu plano\"\ndescription = \"Plano curto\"\nkind = \"plan\"\nargon_template_version = 7\n+++\nPlano da #{{issue.number}}\n"
+        );
+        write_atomic(&template_path(&dir.0, "meu-plano"), &source).unwrap();
+        let set = scan_templates(&dir.0).unwrap();
+        assert_eq!(
+            set.templates,
+            [PromptTemplate {
+                id: "meu-plano".into(),
+                ..plan
+            }]
+        );
+    }
+
+    #[test]
+    fn composing_a_saved_built_in_reproduces_its_file() {
+        let dir = TempDir::new("compose-built-ins");
+        let set = load(&dir.0).unwrap();
+        assert_eq!(set.templates.len(), 4);
+        for template in &set.templates {
+            let saved = std::fs::read_to_string(template_path(&dir.0, &template.id)).unwrap();
+            assert_eq!(compose(template), saved, "{}", template.id);
+        }
     }
 
     #[test]

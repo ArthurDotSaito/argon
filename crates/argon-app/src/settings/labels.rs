@@ -64,8 +64,11 @@ pub const NAME: &str = "Nome";
 pub const VARIABLES: &str = "Variáveis";
 pub const NO_NONCE: &str =
     "Este template não usa {{nonce}} — os achados do agente não serão lidos.";
+pub const NO_NONCE_PLAN: &str =
+    "Este template não usa {{nonce}} — o plano do agente não será lido.";
 pub const PREVIEW: &str = "Preview";
 pub const PREVIEW_SAMPLE: &str = "Contexto de exemplo";
+pub const PREVIEW_SAMPLE_ISSUE: &str = "Issue de exemplo";
 pub const PREVIEW_LOADING: &str = "montando contexto do PR…";
 pub const NO_TEMPLATE_SELECTED: &str = "Selecione um template.";
 pub const LOADING_TEMPLATES: &str = "carregando templates…";

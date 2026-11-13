@@ -2,8 +2,7 @@ mod gather;
 #[cfg(test)]
 mod tests;
 
-use argon_agents::redact::redact_text;
-use argon_core::{PromptContext, ReviewState};
+use argon_core::{PromptContext, ReviewState, redact_text};
 use argon_github::{Job, PrDetail, PrFile, RunStatus, TimelineItem, WorkflowRun};
 
 use super::labels;

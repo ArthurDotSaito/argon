@@ -2,7 +2,11 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use argon_core::{PrKey, PromptContext, PullRequest, render_prompt};
+use argon_core::{
+    PlanComment, PlanContext, PrKey, PromptContext, PromptTemplate, PullRequest, TemplateKind,
+    render_plan_prompt, render_prompt,
+};
+use chrono::DateTime;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -18,9 +22,15 @@ use crate::settings::recent_prs;
 use crate::settings::ui::{card, note, services};
 
 const SAMPLE_ID: &str = "sample";
+const SAMPLE_COMMENT_AT: i64 = 1_794_660_000;
 const PREVIEW_HEIGHT: f32 = 300.;
 const ROW_HEIGHT: f32 = 17.;
 const TARGET_MAX_WIDTH: f32 = 420.;
+
+enum PreviewInput {
+    Review(PromptContext),
+    Plan(PlanContext),
+}
 
 pub(super) struct Rendered {
     lines: Vec<SharedString>,
@@ -80,6 +90,60 @@ pub fn sample_context() -> PromptContext {
         ],
         previous_reviews: String::new(),
         ci_failures: String::new(),
+    }
+}
+
+fn sample_plan_context() -> PlanContext {
+    PlanContext {
+        issue_title: "Agendamento duplicado ao confirmar duas vezes".into(),
+        issue_number: 517,
+        issue_url: "https://github.com/exemplo/scheduling-api/issues/517".into(),
+        issue_body:
+            "Com dois cliques rápidos em Confirmar, o mesmo horário é reservado duas vezes.".into(),
+        repo: "exemplo/scheduling-api".into(),
+        labels: vec!["bug".into(), "agendamento".into()],
+        assignees: vec!["maria".into()],
+        milestone: Some("Sprint 42".into()),
+        comments: vec![PlanComment {
+            author: "joao".into(),
+            created_at: DateTime::from_timestamp(SAMPLE_COMMENT_AT, 0).unwrap_or_default(),
+            body: "Acontece também pelo app, não só na web.".into(),
+        }],
+        base: "main".into(),
+        base_sha: "4f2c9e1".into(),
+    }
+}
+
+fn render_preview(
+    template: &PromptTemplate,
+    input: &PreviewInput,
+    max_diff_chars: usize,
+) -> Rendered {
+    let result = match input {
+        PreviewInput::Review(context) => render_prompt(template, context, max_diff_chars),
+        PreviewInput::Plan(context) => render_plan_prompt(template, context),
+    };
+    match result {
+        Ok(prompt) => Rendered {
+            lines: prompt
+                .text
+                .lines()
+                .map(|line| SharedString::from(line.to_owned()))
+                .collect(),
+            chars: prompt.text.chars().count(),
+            warnings: prompt
+                .warnings
+                .into_iter()
+                .map(SharedString::from)
+                .collect(),
+            error: None,
+        },
+        Err(error) => Rendered {
+            lines: Vec::new(),
+            chars: 0,
+            warnings: Vec::new(),
+            error: Some(labels::render_failed(&error.to_string()).into()),
+        },
     }
 }
 
@@ -186,47 +250,40 @@ impl TemplatesSection {
         }
     }
 
+    fn preview_input(
+        &self,
+        kind: Option<TemplateKind>,
+    ) -> Result<Option<PreviewInput>, SharedString> {
+        match kind {
+            Some(TemplateKind::Plan) => Ok(Some(PreviewInput::Plan(sample_plan_context()))),
+            Some(TemplateKind::Review) | None => self
+                .preview_context()
+                .map(|context| context.map(PreviewInput::Review)),
+        }
+    }
+
     pub(super) fn rerender(&mut self, cx: &mut Context<Self>) {
         self.preview.epoch += 1;
         let epoch = self.preview.epoch;
         let template = self.draft(cx);
-        let context = self.preview_context();
-        let (Some(template), Ok(Some(context))) = (template, context.clone()) else {
-            self.preview.rendered = context.err().map(|error| Rendered {
-                lines: Vec::new(),
-                chars: 0,
-                warnings: Vec::new(),
-                error: Some(error),
-            });
-            self.preview.render_task = None;
-            cx.notify();
-            return;
-        };
-        let max_diff_chars = self.config.review.max_diff_chars;
-        let job = cx.background_spawn(async move {
-            match render_prompt(&template, &context, max_diff_chars) {
-                Ok(prompt) => Rendered {
-                    lines: prompt
-                        .text
-                        .lines()
-                        .map(|line| SharedString::from(line.to_owned()))
-                        .collect(),
-                    chars: prompt.text.chars().count(),
-                    warnings: prompt
-                        .warnings
-                        .into_iter()
-                        .map(SharedString::from)
-                        .collect(),
-                    error: None,
-                },
-                Err(error) => Rendered {
+        let input = self.preview_input(template.as_ref().map(|template| template.kind));
+        let (template, input) = match (template, input) {
+            (Some(template), Ok(Some(input))) => (template, input),
+            (_, input) => {
+                self.preview.rendered = input.err().map(|error| Rendered {
                     lines: Vec::new(),
                     chars: 0,
                     warnings: Vec::new(),
-                    error: Some(labels::render_failed(&error.to_string()).into()),
-                },
+                    error: Some(error),
+                });
+                self.preview.render_task = None;
+                cx.notify();
+                return;
             }
-        });
+        };
+        let max_diff_chars = self.config.review.max_diff_chars;
+        let job =
+            cx.background_spawn(async move { render_preview(&template, &input, max_diff_chars) });
         self.preview.render_task = Some(cx.spawn(async move |this, cx| {
             let rendered = job.await;
             _ = this.update(cx, |this, cx| {
@@ -286,6 +343,20 @@ impl TemplatesSection {
             })
             .unwrap_or_default();
         let failed = rendered.is_some_and(|rendered| rendered.error.is_some());
+        let plan = self
+            .current()
+            .is_some_and(|template| template.kind == TemplateKind::Plan);
+        let target: AnyElement = if plan {
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(labels::PREVIEW_SAMPLE_ISSUE)
+                .into_any_element()
+        } else {
+            Select::new(&self.preview.target_select)
+                .small()
+                .into_any_element()
+        };
         let body: AnyElement = if lines == 0 {
             div()
                 .p_2()
@@ -322,7 +393,7 @@ impl TemplatesSection {
                             .flex_1()
                             .min_w_0()
                             .max_w(px(TARGET_MAX_WIDTH))
-                            .child(Select::new(&self.preview.target_select).small()),
+                            .child(target),
                     )
                     .children(size),
             )
@@ -338,5 +409,57 @@ impl TemplatesSection {
                     .text_xs()
                     .child(body),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::naming::{variable_token, variables};
+    use super::*;
+
+    fn chip_template(kind: TemplateKind) -> PromptTemplate {
+        PromptTemplate {
+            kind,
+            body: variables(kind)
+                .iter()
+                .map(|name| variable_token(name))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ..PromptTemplate::default()
+        }
+    }
+
+    #[test]
+    fn every_variable_chip_renders_with_the_sample_context_of_its_kind() {
+        let review = render_preview(
+            &chip_template(TemplateKind::Review),
+            &PreviewInput::Review(sample_context()),
+            1000,
+        );
+        let plan = render_preview(
+            &chip_template(TemplateKind::Plan),
+            &PreviewInput::Plan(sample_plan_context()),
+            0,
+        );
+
+        assert_eq!(review.error, None);
+        assert_eq!(plan.error, None);
+        assert!(
+            plan.lines
+                .iter()
+                .any(|line| line.contains("Agendamento duplicado"))
+        );
+    }
+
+    #[test]
+    fn review_chips_do_not_render_in_a_plan_preview() {
+        let rendered = render_preview(
+            &chip_template(TemplateKind::Review),
+            &PreviewInput::Plan(sample_plan_context()),
+            0,
+        );
+
+        assert!(rendered.error.is_some());
+        assert!(rendered.lines.is_empty());
     }
 }
