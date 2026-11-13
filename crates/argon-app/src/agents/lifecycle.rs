@@ -226,6 +226,8 @@ mod tests {
                 permission_mode: "supervised".into(),
                 nonce: String::new(),
                 allowed_files: Vec::new(),
+                kind: argon_core::SessionKind::Review,
+                base_sha: None,
             })
             .unwrap();
         store

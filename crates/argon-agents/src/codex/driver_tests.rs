@@ -451,6 +451,8 @@ async fn live_session(mode: PermissionMode, turns: Turns) -> Session {
             permission_mode: mode.as_str().into(),
             nonce: String::new(),
             allowed_files: Vec::new(),
+            kind: argon_core::SessionKind::Review,
+            base_sha: None,
         })
         .await
         .unwrap();

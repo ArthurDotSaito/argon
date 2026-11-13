@@ -178,6 +178,8 @@ pub(super) async fn launch(
                 permission_mode: permission_mode.as_str().to_owned(),
                 nonce: ctx.nonce.clone(),
                 allowed_files: ctx.allowed_files.clone(),
+                kind: argon_core::SessionKind::Review,
+                base_sha: None,
             })
             .await
             .map(|()| 0),

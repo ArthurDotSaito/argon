@@ -29,6 +29,8 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             permission_mode: "supervised".into(),
             nonce: NONCE.into(),
             allowed_files: vec!["src/lib.rs".into()],
+            kind: argon_core::SessionKind::Review,
+            base_sha: None,
         })
         .await
         .unwrap();

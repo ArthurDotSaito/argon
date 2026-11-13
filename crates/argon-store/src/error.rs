@@ -8,6 +8,8 @@ pub enum StoreError {
     Migration(#[from] rusqlite_migration::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("plan draft {0} is already published")]
+    PlanPublished(i64),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

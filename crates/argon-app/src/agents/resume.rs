@@ -199,6 +199,8 @@ mod tests {
             updated_at: chrono::Utc::now(),
             model_label: None,
             failure_reason: None,
+            kind: argon_core::SessionKind::Review,
+            base_sha: None,
         }
     }
 

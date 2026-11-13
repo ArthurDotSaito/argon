@@ -201,6 +201,28 @@ CREATE TABLE sync_state (
 );
 ";
 
+const SESSION_KIND_AND_PLAN_DRAFTS: &str = "
+ALTER TABLE agent_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'review';
+ALTER TABLE agent_sessions ADD COLUMN base_sha TEXT NULL;
+CREATE TABLE plan_drafts (
+    id INTEGER PRIMARY KEY,
+    host TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    agent_body TEXT NULL,
+    edited INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    published_at INTEGER NULL,
+    comment_id TEXT NULL,
+    comment_url TEXT NULL
+);
+CREATE INDEX idx_plan_drafts_issue ON plan_drafts(host, issue_id);
+CREATE INDEX idx_plan_drafts_session ON plan_drafts(session_id);
+";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
@@ -210,6 +232,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(SESSION_TRANSPORT),
     M::up(SESSION_PERMISSION_MODE),
     M::up(ISSUE_TABLES),
+    M::up(SESSION_KIND_AND_PLAN_DRAFTS),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -509,5 +532,39 @@ mod tests {
             .unwrap();
         assert_eq!(store.list_issues().unwrap()[0].0, issue);
         assert_eq!(store.list_prs().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migration_nine_defaults_existing_sessions_to_review_and_adds_plan_drafts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 8).unwrap();
+        assert!(!names(&conn, "table").contains(&"plan_drafts".to_string()));
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(names(&conn, "table").contains(&"plan_drafts".to_string()));
+        let indexes = names(&conn, "index");
+        assert!(indexes.contains(&"idx_plan_drafts_issue".to_string()));
+        assert!(indexes.contains(&"idx_plan_drafts_session".to_string()));
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM agent_sessions WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "review");
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert_eq!(session.kind, argon_core::SessionKind::Review);
+        assert_eq!(session.base_sha, None);
+        assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
     }
 }

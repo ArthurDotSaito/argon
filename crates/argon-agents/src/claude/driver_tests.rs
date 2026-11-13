@@ -457,6 +457,8 @@ async fn fake(mode: &str) -> Fake {
             permission_mode: PermissionMode::Supervised.as_str().to_owned(),
             nonce: String::new(),
             allowed_files: Vec::new(),
+            kind: argon_core::SessionKind::Review,
+            base_sha: None,
         })
         .await
         .unwrap();

@@ -17,6 +17,8 @@ fn session(id: &str) -> NewAgentSession {
         permission_mode: "supervised".into(),
         nonce: "n".into(),
         allowed_files: vec!["a.rs".into()],
+        kind: argon_core::SessionKind::Review,
+        base_sha: None,
     }
 }
 
