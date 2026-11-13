@@ -259,22 +259,16 @@ impl SyncLoop {
             return Step::Done(AccountOutcome::Failed);
         }
         let fetched = Instant::now();
-        let stored = self.stored_updated_at(&account.host, SubjectKind::Pr).await;
         let Fetched {
-            items: prs,
-            kept,
-            unchanged,
-        } = match session.client.fetch_important(&stored, window).await {
+            items: prs, kept, ..
+        } = match session.client.fetch_important(window).await {
             Ok(fetched) => fetched,
             Err(error) => return Step::Done(self.report(&account.host, error)),
         };
         let hydrated = prs.len();
         let host = account.host.clone();
         let saved = self
-            .store_prs(&account.host, move |store| {
-                store.upsert_prs(&host, &prs)?;
-                store.update_involvement(&host, SubjectKind::Pr, &unchanged)
-            })
+            .store_prs(&account.host, move |store| store.upsert_prs(&host, &prs))
             .await;
         if !saved {
             return Step::Done(AccountOutcome::Failed);

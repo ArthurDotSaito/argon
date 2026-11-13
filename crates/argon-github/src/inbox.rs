@@ -185,15 +185,11 @@ fn plan_hydration(
 }
 
 impl GithubClient {
-    pub async fn fetch_important(
-        &self,
-        known_updated: &HashMap<String, DateTime<Utc>>,
-        closed_window_days: i64,
-    ) -> Result<Fetched<PullRequest>> {
+    pub async fn fetch_important(&self, closed_window_days: i64) -> Result<Fetched<PullRequest>> {
         let found = self
             .run_searches(important_searches(&since(closed_window_days)))
             .await?;
-        self.hydrate_plan::<HydrateData>(plan_hydration(found, known_updated, &HashSet::new()))
+        self.hydrate_plan::<HydrateData>(plan_hydration(found, &HashMap::new(), &HashSet::new()))
             .await
     }
 

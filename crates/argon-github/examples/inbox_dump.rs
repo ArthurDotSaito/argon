@@ -32,10 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|org| org.can_admin)
             .map(|org| (org.login.clone(), 1))
             .collect();
-        let mut prs = client
-            .fetch_important(&HashMap::new(), CLOSED_WINDOW_DAYS)
-            .await?
-            .items;
+        let mut prs = client.fetch_important(CLOSED_WINDOW_DAYS).await?.items;
         let known: HashSet<String> = prs.iter().map(|pr| pr.id.0.clone()).collect();
         let orgs = client
             .fetch_orgs(&admin_orgs, &known, &HashMap::new(), CLOSED_WINDOW_DAYS)
