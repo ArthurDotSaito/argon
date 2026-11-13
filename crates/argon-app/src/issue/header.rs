@@ -2,9 +2,16 @@ use argon_core::{Issue, IssueState, IssueStateReason, LinkedPr};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
-use gpui_kit::{App, ClickEvent, Context, Div, Hsla, ParentElement as _, Styled as _, div, px};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
+use gpui_kit::{
+    App, ClickEvent, Context, Div, Hsla, IntoElement, ParentElement as _, Styled as _, WeakEntity,
+    div, px,
+};
 
+use super::actions::{ActionBar, IssueAction};
 use super::issue_view::IssueView;
 use super::labels;
 use crate::pr::{self, labels as pr_labels};
@@ -53,6 +60,7 @@ pub fn header(
     issue: &Issue,
     refreshing: bool,
     now: DateTime<Utc>,
+    bar: ActionBar,
     cx: &mut Context<IssueView>,
 ) -> Div {
     let theme = cx.theme();
@@ -86,14 +94,14 @@ pub fn header(
                 .items_center()
                 .child(pr::breadcrumb(&issue.repo, issue.number, cx))
                 .child(div().flex_1())
-                .child(actions(refreshing, cx)),
+                .child(actions(refreshing, bar, cx)),
         )
         .child(title)
         .child(meta(issue, now, cx))
         .child(stats(issue, cx))
 }
 
-fn actions(refreshing: bool, cx: &mut Context<IssueView>) -> Div {
+fn actions(refreshing: bool, bar: ActionBar, cx: &mut Context<IssueView>) -> Div {
     let open = Button::new("issue-open-github")
         .icon(Icon::new(IconName::ExternalLink))
         .label(pr_labels::OPEN_ON_GITHUB)
@@ -107,7 +115,68 @@ fn actions(refreshing: bool, cx: &mut Context<IssueView>) -> Div {
         .loading(refreshing)
         .tooltip(pr_labels::REFRESH)
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)));
-    h_flex().gap_1().items_center().child(open).child(refresh)
+    let busy = bar.running.is_some();
+    let assign = bar.assign.then(|| {
+        Button::new("issue-assign")
+            .icon(Icon::new(IconName::UserPlus))
+            .label(labels::ASSIGN_TO_ME)
+            .small()
+            .outline()
+            .loading(bar.running == Some(IssueAction::Assign))
+            .disabled(busy)
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.run_action(IssueAction::Assign, cx)),
+            )
+    });
+    let close = bar.close.then(|| close_button(bar.running, cx));
+    h_flex()
+        .gap_1()
+        .items_center()
+        .child(open)
+        .child(refresh)
+        .children(assign)
+        .children(close)
+}
+
+fn close_button(running: Option<IssueAction>, cx: &mut Context<IssueView>) -> impl IntoElement {
+    let view = cx.weak_entity();
+    Button::new("issue-close")
+        .label(labels::CLOSE)
+        .small()
+        .outline()
+        .dropdown_caret(true)
+        .loading(matches!(running, Some(IssueAction::Close(_))))
+        .disabled(running.is_some())
+        .dropdown_menu(move |menu, _, _| {
+            menu.item(close_item(
+                labels::CLOSE_COMPLETED,
+                IconName::CircleCheck,
+                IssueStateReason::Completed,
+                &view,
+            ))
+            .item(close_item(
+                labels::CLOSE_NOT_PLANNED,
+                IconName::CircleSlash,
+                IssueStateReason::NotPlanned,
+                &view,
+            ))
+        })
+}
+
+fn close_item(
+    label: &'static str,
+    icon: IconName,
+    reason: IssueStateReason,
+    view: &WeakEntity<IssueView>,
+) -> PopupMenuItem {
+    let view = view.clone();
+    PopupMenuItem::new(label)
+        .icon(Icon::new(icon))
+        .on_click(move |_, _, cx| {
+            _ = view.update(cx, |this, cx| {
+                this.run_action(IssueAction::Close(reason), cx)
+            });
+        })
 }
 
 fn meta(issue: &Issue, now: DateTime<Utc>, cx: &App) -> Div {

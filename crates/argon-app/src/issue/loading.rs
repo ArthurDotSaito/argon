@@ -35,6 +35,9 @@ impl IssueView {
                 Ok(detail) => this.apply(epoch, detail, cx),
                 Err(error) => {
                     tracing::warn!(%error, "failed to load issue detail");
+                    if this.read_after_epoch.is_some_and(|after| epoch >= after) {
+                        this.read_after_epoch = None;
+                    }
                     if epoch > this.applied_epoch {
                         this.applied_epoch = epoch;
                         this.fail(labels::load_failed(&error.to_string()), cx);
@@ -65,7 +68,7 @@ impl IssueView {
         cx.notify();
     }
 
-    pub(super) fn reload_after_comment(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reload_and_mark_read(&mut self, cx: &mut Context<Self>) {
         self.reload(cx);
         self.read_after_epoch = Some(self.epoch);
     }

@@ -12,6 +12,7 @@ use gpui_kit::{
     Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
+use super::actions::{ActionBar, ActionState};
 use super::header::header;
 use super::labels;
 use super::tabs::IssueTab;
@@ -41,6 +42,9 @@ pub struct IssueView {
     pub(super) seen_updated_at: Option<DateTime<Utc>>,
     pub(super) read_after_epoch: Option<u64>,
     pub(super) load_task: Option<Task<()>>,
+    pub(super) action: ActionState,
+    pub(super) action_task: Option<Task<()>>,
+    pub(super) viewer_id: Option<String>,
     pub(super) linked_scroll: ScrollHandle,
     pub(super) sub_scroll: ScrollHandle,
     scroll: ScrollHandle,
@@ -59,7 +63,7 @@ impl IssueView {
         let subscriptions = vec![
             cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
             cx.subscribe(&composer, |this, _, event, cx| match event {
-                ComposerEvent::Commented => this.reload_after_comment(cx),
+                ComposerEvent::Commented => this.reload_and_mark_read(cx),
                 ComposerEvent::CommentConfirmed => this.mark_read(cx),
                 ComposerEvent::Recheck => this.reload(cx),
             }),
@@ -81,6 +85,9 @@ impl IssueView {
             seen_updated_at,
             read_after_epoch: None,
             load_task: None,
+            action: ActionState::Idle,
+            action_task: None,
+            viewer_id: None,
             linked_scroll: ScrollHandle::new(),
             sub_scroll: ScrollHandle::new(),
             scroll: ScrollHandle::new(),
@@ -104,12 +111,31 @@ impl IssueView {
         pr::retry_button(id).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)))
     }
 
+    fn viewer_login(&self, cx: &App) -> Option<SharedString> {
+        self.inbox
+            .read(cx)
+            .accounts()
+            .iter()
+            .find(|account| account.host.eq_ignore_ascii_case(&self.key.host))
+            .map(|account| account.login.clone())
+    }
+
     fn error_banner(&self, cx: &mut Context<Self>) -> Option<Div> {
         let Load::Failed(message) = &self.load else {
             return None;
         };
         self.detail.as_ref()?;
         let retry = self.retry_button("issue-retry-banner", cx);
+        Some(pr::failure_banner(message.clone(), retry, cx))
+    }
+
+    fn action_banner(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let ActionState::Failed { action, message } = &self.action else {
+            return None;
+        };
+        let action = *action;
+        let retry = pr::retry_button("issue-action-retry")
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.run_action(action, cx)));
         Some(pr::failure_banner(message.clone(), retry, cx))
     }
 
@@ -183,11 +209,17 @@ impl Render for IssueView {
             .as_ref()
             .map(|detail| &detail.issue)
             .or(store_issue.as_deref());
+        let viewer_login = self.viewer_login(cx);
+        let running = self.action.running();
         let head = match issue {
-            Some(issue) => header(issue, self.refreshing, now, cx),
+            Some(issue) => {
+                let bar = ActionBar::of(issue, viewer_login.as_deref(), running);
+                header(issue, self.refreshing, now, bar, cx)
+            }
             None => pr::fallback_header(ISSUE_FALLBACK_TITLE, labels::NOT_IN_INBOX, cx),
         };
         let banner = self.error_banner(cx);
+        let action_banner = self.action_banner(cx);
         let tab_bar = self.tab_bar(cx);
         let body = self.body(detail.as_deref(), now, cx);
         let theme = cx.theme();
@@ -198,6 +230,7 @@ impl Render for IssueView {
             .bg(theme.background)
             .child(head)
             .children(banner)
+            .children(action_banner)
             .child(
                 div()
                     .flex_none()

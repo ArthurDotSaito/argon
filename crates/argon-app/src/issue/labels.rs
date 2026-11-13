@@ -1,5 +1,7 @@
 use argon_core::SubIssues;
 
+use super::actions::IssueAction;
+
 pub const NOT_IN_INBOX: &str = "Issue fora da inbox local.";
 pub const OPENED_THIS_ISSUE: &str = "abriu esta issue";
 pub const NO_ASSIGNEES: &str = "sem responsável";
@@ -9,8 +11,20 @@ pub const TAB_SUB_ISSUES: &str = "Sub-issues";
 pub const LINKED_PRS_HELP: &str = "PRs que fecham esta issue quando entrarem.";
 pub const NO_LINKED_PRS: &str = "Nenhum PR vinculado ainda.";
 
+pub const ASSIGN_TO_ME: &str = "Atribuir a mim";
+pub const CLOSE: &str = "Fechar";
+pub const CLOSE_COMPLETED: &str = "Fechar como concluída";
+pub const CLOSE_NOT_PLANNED: &str = "Fechar como não planejada";
+
 pub fn load_failed(error: &str) -> String {
     format!("Falha ao carregar a issue: {error}")
+}
+
+pub fn action_failed(action: IssueAction, error: &str) -> String {
+    match action {
+        IssueAction::Assign => format!("Falha ao atribuir a issue a você: {error}"),
+        IssueAction::Close(_) => format!("Falha ao fechar a issue: {error}"),
+    }
 }
 
 pub fn opened(ago: &str) -> String {
