@@ -376,10 +376,38 @@ fn large_comments_keep_the_newest_within_the_budget() {
     let authors: Vec<&str> = kept.comments.iter().map(|c| c.author.as_str()).collect();
     assert_eq!(authors, ["novo", "meio"]);
     assert_eq!(kept.comments[0].body, long_body("MARCA-NOVO"));
-    let total: usize = kept.comments.iter().map(|c| c.body.chars().count()).sum();
+    let cut = kept.comments[1]
+        .body
+        .strip_suffix(&format!("\n{COMMENT_CUT_MARKER}"))
+        .unwrap();
+    assert!(cut.ends_with(&"x".repeat(99)));
+    let total = kept.comments[0].body.chars().count() + cut.chars().count();
     assert!(total <= MAX_COMMENTS_CHARS, "{total}");
     assert!(total > MAX_COMMENTS_CHARS - 100, "{total}");
-    assert!(kept.comments[1].body.ends_with(&"x".repeat(99)));
+}
+
+#[test]
+fn comment_cut_mid_way_is_marked_inside_its_own_block() {
+    let mut ctx = context();
+    ctx.comments = vec![comment("ana", 1, &long_body("MARCA").repeat(2))];
+
+    let rendered = render_fixed(&template("{{issue.comments}}"), &ctx);
+
+    let text = &rendered.text;
+    let content = block(text, "issue_comment", NONCE);
+    assert!(content.starts_with("\nana · 2026-11-01 12:00 UTC\n```markdown\nMARCA\n"));
+    assert!(content.ends_with(&format!("{}\n{COMMENT_CUT_MARKER}\n```\n", "x".repeat(99))));
+    assert_eq!(text.matches(COMMENT_CUT_MARKER).count(), 1);
+    let close = format!("</untrusted nonce=\"{NONCE}\">");
+    assert_eq!(text.matches(&close).count(), 1);
+    assert!(text.ends_with(&format!("{close}\n\n{COMMENTS_NOTICE}")));
+}
+
+#[test]
+fn comments_that_fit_carry_no_cut_marker() {
+    let rendered = render_fixed(&template("{{issue.comments}}"), &context());
+
+    assert!(!rendered.text.contains(COMMENT_CUT_MARKER));
 }
 
 #[test]

@@ -71,7 +71,7 @@ struct Header {
     name: Option<String>,
     description: Option<String>,
     kind: Option<String>,
-    argon_template_version: Option<u32>,
+    argon_template_version: Option<toml::Value>,
 }
 
 pub(super) fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> PromptError {
@@ -128,7 +128,10 @@ pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, P
         name,
         description: header.description,
         kind,
-        version: header.argon_template_version,
+        version: header
+            .argon_template_version
+            .and_then(|value| value.as_integer())
+            .and_then(|version| u32::try_from(version).ok()),
         body: body.trim_start_matches(['\r', '\n']).to_owned(),
     })
 }

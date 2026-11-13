@@ -35,6 +35,7 @@ const NO_NONCE_WARNING: &str =
 const MAX_COMMENTS_CHARS: usize = 40_000;
 const COMMENTS_NOTICE: &str =
     "[comentários truncados — consulte a issue no GitHub para ver os mais antigos]";
+const COMMENT_CUT_MARKER: &str = "[comentário truncado]";
 const COMMENT_DATE_FORMAT: &str = "%Y-%m-%d %H:%M UTC";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +85,8 @@ fn kept_comments(comments: &[PlanComment]) -> KeptComments {
         let body = redact_text(&comment.body);
         if let Some(head) = cut_at_line(&body, budget) {
             if !head.is_empty() {
-                kept.comments.push(with_body(comment, head.to_owned()));
+                let cut = format!("{head}\n{COMMENT_CUT_MARKER}");
+                kept.comments.push(with_body(comment, cut));
             }
             kept.truncated = true;
             break;

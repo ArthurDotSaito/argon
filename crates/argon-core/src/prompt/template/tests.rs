@@ -39,6 +39,42 @@ fn parses_kind_and_template_version() {
 }
 
 #[test]
+fn odd_template_versions_are_ignored_without_invalidating_the_template() {
+    for value in ["\"3\"", "-1", "4294967296", "1.5", "true", "[1]"] {
+        let source = format!("+++\nname = \"V\"\nargon_template_version = {value}\n+++\nCorpo");
+
+        let template = parse_template("v", &source)
+            .unwrap_or_else(|error| panic!("{value} invalidated the template: {error}"));
+
+        assert_eq!(template.version, None, "{value}");
+        assert_eq!(template.name, "V", "{value}");
+    }
+    let max = parse_template("m", "+++\nargon_template_version = 4294967295\n+++\nx").unwrap();
+    assert_eq!(max.version, Some(u32::MAX));
+}
+
+#[test]
+fn odd_template_version_is_still_listed_as_a_valid_template() {
+    let dir = TempDir::new("scan-version");
+    fs::write(
+        dir.path().join("texto.md"),
+        "+++\nargon_template_version = \"3\"\n+++\nx",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("negativo.md"),
+        "+++\nargon_template_version = -1\n+++\nx",
+    )
+    .unwrap();
+
+    let set = scan_templates(dir.path()).unwrap();
+
+    assert!(set.invalid.is_empty());
+    assert_eq!(set.templates.len(), 2);
+    assert!(set.templates.iter().all(|t| t.version.is_none()));
+}
+
+#[test]
 fn unknown_kind_is_an_invalid_header() {
     let error = parse_template("x", "+++\nkind = \"triage\"\n+++\nCorpo").unwrap_err();
 
