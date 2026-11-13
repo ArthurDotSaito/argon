@@ -3,10 +3,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::{DEFAULT_HOST, Issue, is_mention_candidate};
+use argon_core::{DEFAULT_HOST, Involvement, Issue, SubjectKind, is_mention_candidate};
 use argon_github::{
-    Account, GithubClient, GithubError, IssueOrgFetch, OrgFetch, Viewer, discover_accounts,
-    token_for,
+    Account, Fetched, GithubClient, GithubError, OrgFetch, Viewer, discover_accounts, token_for,
 };
 use argon_store::Store;
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
@@ -260,14 +259,22 @@ impl SyncLoop {
             return Step::Done(AccountOutcome::Failed);
         }
         let fetched = Instant::now();
-        let prs = match session.client.fetch_important(window).await {
-            Ok(prs) => prs,
+        let stored = self.stored_updated_at(&account.host, SubjectKind::Pr).await;
+        let Fetched {
+            items: prs,
+            kept,
+            unchanged,
+        } = match session.client.fetch_important(&stored, window).await {
+            Ok(fetched) => fetched,
             Err(error) => return Step::Done(self.report(&account.host, error)),
         };
-        let kept: HashSet<String> = prs.iter().map(|pr| pr.id.0.clone()).collect();
+        let hydrated = prs.len();
         let host = account.host.clone();
         let saved = self
-            .store_prs(&account.host, move |store| store.upsert_prs(&host, &prs))
+            .store_prs(&account.host, move |store| {
+                store.upsert_prs(&host, &prs)?;
+                store.update_involvement(&host, SubjectKind::Pr, &unchanged)
+            })
             .await;
         if !saved {
             return Step::Done(AccountOutcome::Failed);
@@ -276,6 +283,7 @@ impl SyncLoop {
             host = %account.host,
             login = %account.login,
             prs = kept.len(),
+            hydrated,
             elapsed_ms = elapsed_ms(fetched),
             "important pull requests synced"
         );
@@ -317,20 +325,31 @@ impl SyncLoop {
     ) -> Result<Vec<String>, AccountOutcome> {
         let account = &session.account;
         let fetched = Instant::now();
+        let stored = self.stored_updated_at(&account.host, SubjectKind::Pr).await;
         let OrgFetch {
-            prs,
+            fetched:
+                Fetched {
+                    items: prs,
+                    kept: org_kept,
+                    unchanged,
+                },
             orgs_with_more,
-        } = match session.client.fetch_orgs(pages, &kept, window).await {
+        } = match session
+            .client
+            .fetch_orgs(pages, &kept, &stored, window)
+            .await
+        {
             Ok(fetch) => fetch,
             Err(error) => return Err(self.report(&account.host, error)),
         };
-        kept.extend(prs.iter().map(|pr| pr.id.0.clone()));
-        let org_prs = prs.len();
+        kept.extend(org_kept);
+        let hydrated = prs.len();
         let total = kept.len();
         let host = account.host.clone();
         let saved = self
             .store_prs(&account.host, move |store| {
                 store.upsert_prs(&host, &prs)?;
+                store.update_involvement(&host, SubjectKind::Pr, &unchanged)?;
                 store.prune_prs(&host, &kept)
             })
             .await;
@@ -340,7 +359,7 @@ impl SyncLoop {
         info!(
             host = %account.host,
             login = %account.login,
-            org_prs,
+            hydrated,
             prs = total,
             orgs_with_more = orgs_with_more.len(),
             elapsed_ms = elapsed_ms(fetched),
@@ -358,29 +377,45 @@ impl SyncLoop {
     ) -> Result<IssueSync, IssueError> {
         let account = &session.account;
         let fetched = Instant::now();
-        let mut issues = session.client.fetch_important_issues(window).await?;
-        let important = issues.len();
-        let known: HashSet<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
-        let IssueOrgFetch {
-            issues: org_issues,
+        let stored = self
+            .stored_updated_at(&account.host, SubjectKind::Issue)
+            .await;
+        let Fetched {
+            items: mut issues,
+            mut kept,
+            mut unchanged,
+        } = session
+            .client
+            .fetch_important_issues(&stored, window)
+            .await?;
+        let OrgFetch {
+            fetched:
+                Fetched {
+                    items: org_issues,
+                    kept: org_kept,
+                    unchanged: org_unchanged,
+                },
             orgs_with_more,
         } = session
             .client
-            .fetch_org_issues(pages, &known, window)
+            .fetch_org_issues(pages, &kept, &stored, window)
             .await?;
-        let org = org_issues.len();
+        kept.extend(org_kept);
+        unchanged.extend(org_unchanged);
         issues.extend(org_issues);
         let mentions = self.check_mentions(session, &mut issues, window).await;
         let checked = mentions.as_ref().ok();
         let candidates = checked.map_or(0, |check| check.candidates);
         let new_mentions = checked.map_or(0, |check| check.found);
-        let total = issues.len();
-        let baseline = self.store_issues(&account.host, issues).await?;
+        let hydrated = issues.len();
+        let total = kept.len();
+        let baseline = self
+            .store_issues(&account.host, issues, unchanged, kept)
+            .await?;
         info!(
             host = %account.host,
             login = %account.login,
-            important_issues = important,
-            org_issues = org,
+            hydrated,
             issues = total,
             mention_candidates = candidates,
             new_mentions,
@@ -469,15 +504,21 @@ impl SyncLoop {
         }
     }
 
-    async fn store_issues(&self, host: &str, issues: Vec<Issue>) -> Result<bool, IssueError> {
+    async fn store_issues(
+        &self,
+        host: &str,
+        issues: Vec<Issue>,
+        unchanged: Vec<(String, Involvement)>,
+        kept: HashSet<String>,
+    ) -> Result<bool, IssueError> {
         let host = host.to_string();
         let stored = self
             .worker
             .store
             .call(move |store| -> argon_store::Result<bool> {
                 let baseline = !store.issue_baseline_done(&host)?;
-                let kept: HashSet<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
                 store.upsert_issues(&host, &issues)?;
+                store.update_involvement(&host, SubjectKind::Issue, &unchanged)?;
                 store.prune_issues(&host, &kept)?;
                 if baseline {
                     let seen: Vec<(String, DateTime<Utc>)> = issues
@@ -491,6 +532,23 @@ impl SyncLoop {
             })
             .await;
         flatten(stored).map_err(IssueError::Store)
+    }
+
+    async fn stored_updated_at(
+        &self,
+        host: &str,
+        kind: SubjectKind,
+    ) -> HashMap<String, DateTime<Utc>> {
+        let owned = host.to_string();
+        let loaded = self
+            .worker
+            .store
+            .call(move |store| store.updated_at_map(&owned, kind))
+            .await;
+        flatten(loaded).unwrap_or_else(|error| {
+            warn!(host, %error, "failed to read stored update times, hydrating everything");
+            HashMap::new()
+        })
     }
 
     async fn store_prs(

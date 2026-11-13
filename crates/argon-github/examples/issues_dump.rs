@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use argon_github::{GithubClient, discover_accounts, token_for};
 
 const CLOSED_WINDOW_DAYS: i64 = 7;
@@ -12,7 +14,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for account in accounts {
         println!("== {} ({})", account.host, account.login);
         let client = GithubClient::new(&account.host, token_for(&account.host).await?);
-        let issues = client.fetch_important_issues(CLOSED_WINDOW_DAYS).await?;
+        let issues = client
+            .fetch_important_issues(&HashMap::new(), CLOSED_WINDOW_DAYS)
+            .await?
+            .items;
         println!("total: {}", issues.len());
         println!(
             "assigned: {}",

@@ -29,7 +29,7 @@ pub use detail::{
 };
 pub use error::{GithubError, Result};
 pub use files::{FileStatus, PrFile};
-pub use inbox::{IssueOrgFetch, OrgFetch};
+pub use inbox::{Fetched, OrgFetch};
 pub use job_log::JobLog;
 pub use mutations::{CommentRef, MergeMethod};
 pub use releases::{Release, ReleaseAsset};

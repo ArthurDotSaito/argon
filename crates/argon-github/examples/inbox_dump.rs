@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use argon_core::{PullRequest, ViewSet, classify};
 use argon_github::{GithubClient, discover_accounts, token_for};
@@ -32,12 +32,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|org| org.can_admin)
             .map(|org| (org.login.clone(), 1))
             .collect();
-        let mut prs = client.fetch_important(CLOSED_WINDOW_DAYS).await?;
+        let mut prs = client
+            .fetch_important(&HashMap::new(), CLOSED_WINDOW_DAYS)
+            .await?
+            .items;
         let known: HashSet<String> = prs.iter().map(|pr| pr.id.0.clone()).collect();
         let orgs = client
-            .fetch_orgs(&admin_orgs, &known, CLOSED_WINDOW_DAYS)
+            .fetch_orgs(&admin_orgs, &known, &HashMap::new(), CLOSED_WINDOW_DAYS)
             .await?;
-        prs.extend(orgs.prs);
+        prs.extend(orgs.fetched.items);
         print_summary(&prs, &viewer.login);
         println!("orgs with more pages: {:?}", orgs.orgs_with_more);
         println!("dropped nodes: {}", client.dropped_nodes());

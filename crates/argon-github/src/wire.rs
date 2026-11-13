@@ -176,8 +176,11 @@ pub(crate) struct IdsConnection {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct IdNode {
     pub(crate) id: Option<String>,
+    #[serde(default)]
+    pub(crate) updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]

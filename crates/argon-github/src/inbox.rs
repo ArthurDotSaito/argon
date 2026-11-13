@@ -55,7 +55,7 @@ struct Search {
 
 struct Found {
     involvement: Involvement,
-    ids: Vec<String>,
+    ids: Vec<(String, DateTime<Utc>)>,
     has_more: bool,
     org: Option<String>,
 }
@@ -131,22 +131,69 @@ impl HydratePage for IssueHydrateData {
     }
 }
 
-pub struct OrgFetch {
-    pub prs: Vec<PullRequest>,
+pub struct Fetched<T> {
+    pub items: Vec<T>,
+    pub kept: HashSet<String>,
+    pub unchanged: Vec<(String, Involvement)>,
+}
+
+pub struct OrgFetch<T> {
+    pub fetched: Fetched<T>,
     pub orgs_with_more: Vec<String>,
 }
 
-pub struct IssueOrgFetch {
-    pub issues: Vec<Issue>,
-    pub orgs_with_more: Vec<String>,
+struct Plan {
+    pending: Vec<(String, Involvement)>,
+    unchanged: Vec<(String, Involvement)>,
+    kept: HashSet<String>,
+}
+
+pub fn ids_to_hydrate(
+    found: &[(String, DateTime<Utc>)],
+    known_updated: &HashMap<String, DateTime<Utc>>,
+) -> (Vec<String>, HashSet<String>) {
+    let mut all = HashSet::with_capacity(found.len());
+    let mut stale = Vec::new();
+    for (id, updated_at) in found {
+        if all.insert(id.clone()) && known_updated.get(id) != Some(updated_at) {
+            stale.push(id.clone());
+        }
+    }
+    (stale, all)
+}
+
+fn plan_hydration(
+    found: Vec<Found>,
+    known_updated: &HashMap<String, DateTime<Utc>>,
+    skip: &HashSet<String>,
+) -> Plan {
+    let seen: Vec<(String, DateTime<Utc>)> = found
+        .iter()
+        .flat_map(|found| found.ids.iter().cloned())
+        .collect();
+    let (stale, kept) = ids_to_hydrate(&seen, known_updated);
+    let stale: HashSet<String> = stale.into_iter().collect();
+    let (pending, unchanged) = merge_ids(into_batches(found))
+        .into_iter()
+        .filter(|(id, _)| !skip.contains(id))
+        .partition(|(id, _)| stale.contains(id));
+    Plan {
+        pending,
+        unchanged,
+        kept,
+    }
 }
 
 impl GithubClient {
-    pub async fn fetch_important(&self, closed_window_days: i64) -> Result<Vec<PullRequest>> {
+    pub async fn fetch_important(
+        &self,
+        known_updated: &HashMap<String, DateTime<Utc>>,
+        closed_window_days: i64,
+    ) -> Result<Fetched<PullRequest>> {
         let found = self
             .run_searches(important_searches(&since(closed_window_days)))
             .await?;
-        self.hydrate_all::<HydrateData>(merge_ids(into_batches(found)))
+        self.hydrate_plan::<HydrateData>(plan_hydration(found, known_updated, &HashSet::new()))
             .await
     }
 
@@ -154,26 +201,31 @@ impl GithubClient {
         &self,
         orgs: &[(String, usize)],
         known: &HashSet<String>,
+        known_updated: &HashMap<String, DateTime<Utc>>,
         closed_window_days: i64,
-    ) -> Result<OrgFetch> {
+    ) -> Result<OrgFetch<PullRequest>> {
         let found = self
             .run_searches(org_searches(Kind::Pr, orgs, &since(closed_window_days)))
             .await?;
         let orgs_with_more = orgs_with_more(&found);
-        let prs = self
-            .hydrate_all::<HydrateData>(unknown_ids(merge_ids(into_batches(found)), known))
+        let fetched = self
+            .hydrate_plan::<HydrateData>(plan_hydration(found, known_updated, known))
             .await?;
         Ok(OrgFetch {
-            prs,
+            fetched,
             orgs_with_more,
         })
     }
 
-    pub async fn fetch_important_issues(&self, closed_window_days: i64) -> Result<Vec<Issue>> {
+    pub async fn fetch_important_issues(
+        &self,
+        known_updated: &HashMap<String, DateTime<Utc>>,
+        closed_window_days: i64,
+    ) -> Result<Fetched<Issue>> {
         let found = self
             .run_searches(important_issue_searches(&since(closed_window_days)))
             .await?;
-        self.hydrate_all::<IssueHydrateData>(merge_ids(into_batches(found)))
+        self.hydrate_plan::<IssueHydrateData>(plan_hydration(found, known_updated, &HashSet::new()))
             .await
     }
 
@@ -181,18 +233,41 @@ impl GithubClient {
         &self,
         orgs: &[(String, usize)],
         known: &HashSet<String>,
+        known_updated: &HashMap<String, DateTime<Utc>>,
         closed_window_days: i64,
-    ) -> Result<IssueOrgFetch> {
+    ) -> Result<OrgFetch<Issue>> {
         let found = self
             .run_searches(org_searches(Kind::Issue, orgs, &since(closed_window_days)))
             .await?;
         let orgs_with_more = orgs_with_more(&found);
-        let issues = self
-            .hydrate_all::<IssueHydrateData>(unknown_ids(merge_ids(into_batches(found)), known))
+        let fetched = self
+            .hydrate_plan::<IssueHydrateData>(plan_hydration(found, known_updated, known))
             .await?;
-        Ok(IssueOrgFetch {
-            issues,
+        Ok(OrgFetch {
+            fetched,
             orgs_with_more,
+        })
+    }
+
+    async fn hydrate_plan<P: HydratePage>(&self, plan: Plan) -> Result<Fetched<P::Item>> {
+        let Plan {
+            pending,
+            unchanged,
+            mut kept,
+        } = plan;
+        let requested: Vec<String> = pending.iter().map(|(id, _)| id.clone()).collect();
+        let items = self.hydrate_all::<P>(pending).await?;
+        let returned: HashSet<&str> = items.iter().map(|item| item.id()).collect();
+        for id in requested
+            .iter()
+            .filter(|id| !returned.contains(id.as_str()))
+        {
+            kept.remove(id);
+        }
+        Ok(Fetched {
+            items,
+            kept,
+            unchanged,
         })
     }
 
@@ -249,7 +324,7 @@ impl GithubClient {
                     .nodes
                     .into_iter()
                     .flatten()
-                    .filter_map(|node| node.id),
+                    .filter_map(|node| Some((node.id?, node.updated_at?))),
             );
             has_next_page = data.search.page_info.has_next_page;
             if !has_next_page {
@@ -434,17 +509,10 @@ fn org_searches(kind: Kind, orgs: &[(String, usize)], since: &str) -> Vec<Search
 fn into_batches(found: Vec<Found>) -> Vec<(Involvement, Vec<String>)> {
     found
         .into_iter()
-        .map(|found| (found.involvement, found.ids))
-        .collect()
-}
-
-fn unknown_ids(
-    merged: Vec<(String, Involvement)>,
-    known: &HashSet<String>,
-) -> Vec<(String, Involvement)> {
-    merged
-        .into_iter()
-        .filter(|(id, _)| !known.contains(id))
+        .map(|found| {
+            let ids = found.ids.into_iter().map(|(id, _)| id).collect();
+            (found.involvement, ids)
+        })
         .collect()
 }
 
@@ -528,32 +596,120 @@ mod tests {
         assert_eq!(merged[3].1, reviewed);
     }
 
+    fn at(seconds: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(seconds, 0).unwrap()
+    }
+
+    fn found_with(involvement: Involvement, ids: &[(&str, i64)]) -> Found {
+        Found {
+            involvement,
+            ids: ids
+                .iter()
+                .map(|(id, seconds)| (id.to_string(), at(*seconds)))
+                .collect(),
+            has_more: false,
+            org: None,
+        }
+    }
+
+    fn pair(id: &str, seconds: i64) -> (String, DateTime<Utc>) {
+        (id.to_string(), at(seconds))
+    }
+
     #[test]
-    fn org_hydration_skips_ids_known_from_the_important_phase() {
-        let ids: Vec<String> = fixture_prs().into_iter().map(|pr| pr.id.0).collect();
+    fn ids_to_hydrate_selects_new_changed_and_skips_equal() {
+        let found = vec![
+            pair("new", 100),
+            pair("same", 200),
+            pair("changed", 300),
+            pair("older_in_search", 50),
+        ];
+        let known = HashMap::from([
+            pair("same", 200),
+            pair("changed", 250),
+            pair("older_in_search", 60),
+            pair("gone", 10),
+        ]);
+
+        let (stale, all) = ids_to_hydrate(&found, &known);
+
+        assert_eq!(stale, vec!["new", "changed", "older_in_search"]);
+        assert_eq!(
+            all,
+            HashSet::from(["new", "same", "changed", "older_in_search"].map(String::from))
+        );
+    }
+
+    #[test]
+    fn ids_to_hydrate_with_empty_database_hydrates_everything_once() {
+        let found = vec![pair("a", 1), pair("b", 2), pair("a", 1)];
+
+        let (stale, all) = ids_to_hydrate(&found, &HashMap::new());
+
+        assert_eq!(stale, vec!["a", "b"]);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn ids_to_hydrate_with_nothing_found_is_empty() {
+        let known = HashMap::from([pair("a", 1)]);
+        let (stale, all) = ids_to_hydrate(&[], &known);
+        assert!(stale.is_empty() && all.is_empty());
+    }
+
+    #[test]
+    fn plan_keeps_every_found_id_but_hydrates_only_stale_ones_with_merged_involvement() {
         let requested = Involvement {
             requested: true,
             ..Involvement::default()
         };
-        let important = merge_ids(vec![(requested, vec![ids[0].clone()])]);
-        let known: HashSet<String> = important.iter().map(|(id, _)| id.clone()).collect();
+        let authored = Involvement {
+            authored: true,
+            ..Involvement::default()
+        };
+        let found = vec![
+            found_with(requested, &[("stale", 20), ("fresh", 10)]),
+            found_with(authored, &[("fresh", 10), ("fresh_too", 5)]),
+        ];
+        let known = HashMap::from([pair("stale", 19), pair("fresh", 10), pair("fresh_too", 5)]);
 
-        let pending = unknown_ids(
-            merge_ids(vec![
-                (Involvement::default(), vec![ids[0].clone(), ids[1].clone()]),
-                (Involvement::default(), vec![ids[2].clone()]),
-            ]),
-            &known,
-        );
+        let plan = plan_hydration(found, &known, &HashSet::new());
 
+        assert_eq!(plan.pending, vec![("stale".to_string(), requested)]);
         assert_eq!(
-            pending,
+            plan.unchanged,
             vec![
-                (ids[1].clone(), Involvement::default()),
-                (ids[2].clone(), Involvement::default()),
+                (
+                    "fresh".to_string(),
+                    Involvement {
+                        requested: true,
+                        authored: true,
+                        ..Involvement::default()
+                    }
+                ),
+                ("fresh_too".to_string(), authored),
             ]
         );
-        assert_eq!(important, vec![(ids[0].clone(), requested)]);
+        assert_eq!(plan.kept.len(), 3);
+    }
+
+    #[test]
+    fn plan_skips_ids_owned_by_the_important_phase_but_still_keeps_them() {
+        let found = vec![found_with(
+            Involvement::default(),
+            &[("owned", 1), ("other", 2), ("unchanged_owned", 3)],
+        )];
+        let owned = HashSet::from(["owned".to_string(), "unchanged_owned".to_string()]);
+        let known = HashMap::from([pair("unchanged_owned", 3)]);
+
+        let plan = plan_hydration(found, &known, &owned);
+
+        assert_eq!(
+            plan.pending,
+            vec![("other".to_string(), Involvement::default())]
+        );
+        assert!(plan.unchanged.is_empty());
+        assert_eq!(plan.kept.len(), 3);
     }
 
     #[test]
