@@ -1,0 +1,51 @@
+fragment IssueFields on Issue {
+  id
+  number
+  title
+  url
+  state
+  stateReason
+  createdAt
+  updatedAt
+  closedAt
+  author {
+    login
+  }
+  repository {
+    nameWithOwner
+  }
+  issueType {
+    name
+  }
+  labels(first: 20) {
+    nodes {
+      name
+      color
+    }
+  }
+  assignees(first: 20) {
+    nodes {
+      login
+    }
+  }
+  milestone {
+    title
+  }
+  comments {
+    totalCount
+  }
+  closedByPullRequestsReferences(first: 5) {
+    nodes {
+      number
+      repository {
+        nameWithOwner
+      }
+      state
+      isDraft
+    }
+  }
+  subIssuesSummary {
+    total
+    completed
+  }
+}

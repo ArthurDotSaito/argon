@@ -9,6 +9,10 @@ query InboxIds($query: String!, $after: String, $first: Int!) {
         id
         updatedAt
       }
+      ... on Issue {
+        id
+        updatedAt
+      }
     }
   }
   rateLimit {

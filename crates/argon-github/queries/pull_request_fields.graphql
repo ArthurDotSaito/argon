@@ -63,4 +63,12 @@ fragment PullRequestFields on PullRequest {
       }
     }
   }
+  closingIssuesReferences(first: 5) {
+    nodes {
+      number
+      repository {
+        nameWithOwner
+      }
+    }
+  }
 }

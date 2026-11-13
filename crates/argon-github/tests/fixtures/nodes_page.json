@@ -21,6 +21,12 @@
           "reviewDecision": "CHANGES_REQUESTED",
           "mergeable": "CONFLICTING",
           "comments": { "totalCount": 6 },
+          "closingIssuesReferences": {
+            "nodes": [
+              { "number": 130, "repository": { "nameWithOwner": "orbita-health/atlas" } },
+              { "number": 101, "repository": { "nameWithOwner": "orbita-health/atlas" } }
+            ]
+          },
           "reviewRequests": {
             "nodes": [
               { "requestedReviewer": { "login": "lfarias" } },

@@ -1,0 +1,11 @@
+query IssueHydrate($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Issue {
+      ...IssueFields
+    }
+  }
+  rateLimit {
+    remaining
+    resetAt
+  }
+}
