@@ -86,6 +86,12 @@ fn reason_text(reason: &Reason) -> String {
         Reason::ApprovedByYouWaitingAuthor => "você aprovou, aguardando o autor".to_string(),
         Reason::CiFailed => "CI falhou".to_string(),
         Reason::Conflict => "conflito com a base".to_string(),
+        Reason::IssueAssigned => "atribuída a você".to_string(),
+        Reason::Mentioned => "te mencionaram".to_string(),
+        Reason::IssueAuthored => "você abriu".to_string(),
+        Reason::Participating => "você comentou".to_string(),
+        Reason::NewInOrg(org) => format!("nova em {org}, sem responsável"),
+        Reason::ClosedBy(number) => format!("fechada por #{number}"),
         Reason::Tracking => "atualizado".to_string(),
     }
 }

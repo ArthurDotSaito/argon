@@ -86,6 +86,12 @@ pub fn reason_line(reason: &Reason, now: DateTime<Utc>, updated_at: DateTime<Utc
         }
         Reason::CiFailed => "CI falhou".to_string(),
         Reason::Conflict => "Conflito com a base".to_string(),
+        Reason::IssueAssigned => "Atribuída a você".to_string(),
+        Reason::Mentioned => "Te mencionaram".to_string(),
+        Reason::IssueAuthored => "Você abriu".to_string(),
+        Reason::Participating => "Você comentou".to_string(),
+        Reason::NewInOrg(org) => format!("Nova em {org} · sem responsável"),
+        Reason::ClosedBy(number) => format!("Fechada por #{number}"),
         Reason::Tracking => tracking_line(now, updated_at),
     }
 }
