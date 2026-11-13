@@ -51,28 +51,7 @@ impl Store {
     }
 
     pub fn list_prs(&self) -> Result<Vec<(PullRequest, LocalState)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT p.data, p.updated_at, l.last_seen_updated_at, l.archived_at
-             FROM pull_requests p
-             LEFT JOIN pr_local l ON l.host = p.host AND l.pr_id = p.id
-             ORDER BY p.updated_at DESC, p.host ASC, p.id ASC",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows.into_iter()
-            .map(|(data, updated_at, last_seen, archived_at)| {
-                let pr = serde_json::from_str(&data)?;
-                Ok((pr, LocalState::derive(updated_at, last_seen, archived_at)))
-            })
-            .collect()
+        self.list_with_local("pull_requests")
     }
 }
 

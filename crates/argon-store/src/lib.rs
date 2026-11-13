@@ -2,6 +2,7 @@ mod agent_log;
 mod agents;
 mod drafts;
 mod error;
+mod issues;
 mod lifecycle;
 mod local;
 mod prs;

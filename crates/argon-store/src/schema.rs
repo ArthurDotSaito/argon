@@ -182,6 +182,19 @@ const SESSION_TRANSPORT: &str =
 const SESSION_PERMISSION_MODE: &str =
     "ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'supervised';";
 
+const ISSUES_TABLE: &str = "
+CREATE TABLE issues (
+    host TEXT NOT NULL,
+    id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    synced_at INTEGER NOT NULL,
+    PRIMARY KEY (host, id)
+);
+";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
@@ -190,6 +203,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(SESSION_LIFECYCLE),
     M::up(SESSION_TRANSPORT),
     M::up(SESSION_PERMISSION_MODE),
+    M::up(ISSUES_TABLE),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -203,7 +217,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use argon_core::fixtures::{days_ago, pr_on};
+    use argon_core::fixtures::{days_ago, issue_on, pr_on};
     use argon_core::{DEFAULT_HOST, PrKey};
     use rusqlite::params;
 
@@ -419,5 +433,70 @@ mod tests {
         let session = store.session("s1").unwrap().unwrap();
         assert_eq!(session.permission_mode, "supervised");
         assert_eq!(session.transport, "acp");
+    }
+
+    fn pr_json_before_issues(pr: &argon_core::PullRequest) -> String {
+        let mut json = serde_json::to_value(pr).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("closing_issues");
+        object.insert(
+            "involvement".into(),
+            serde_json::json!({
+                "requested": true,
+                "assigned": false,
+                "authored": false,
+                "reviewed": false,
+            }),
+        );
+        json.to_string()
+    }
+
+    #[test]
+    fn migration_eight_adds_issues_table_and_keeps_pull_requests() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 7).unwrap();
+        assert!(!names(&conn, "table").contains(&"issues".to_string()));
+
+        let pr = pr_on(DEFAULT_HOST, "PR_old", days_ago(2));
+        conn.execute(
+            "INSERT INTO pull_requests (host, id, repo, number, data, updated_at, synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            params![
+                DEFAULT_HOST,
+                "PR_old",
+                pr.repo,
+                482,
+                pr_json_before_issues(&pr),
+                pr.updated_at.timestamp_millis()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pr_local (host, pr_id, last_seen_updated_at) VALUES (?1, 'PR_old', ?2)",
+            params![DEFAULT_HOST, days_ago(3).timestamp_millis()],
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(names(&conn, "table").contains(&"issues".to_string()));
+        let mut store = Store { conn };
+        assert!(store.list_issues().unwrap().is_empty());
+
+        let listed = store.list_prs().unwrap();
+        assert_eq!(listed.len(), 1);
+        let mut expected = pr;
+        expected.involvement.requested = true;
+        assert_eq!(listed[0].0, expected);
+        assert_eq!(listed[0].1.last_seen, Some(days_ago(3)));
+        assert!(listed[0].1.unread);
+
+        let issue = issue_on(DEFAULT_HOST, "ISSUE_1", days_ago(1));
+        store
+            .upsert_issues(DEFAULT_HOST, std::slice::from_ref(&issue))
+            .unwrap();
+        assert_eq!(store.list_issues().unwrap()[0].0, issue);
+        assert_eq!(store.list_prs().unwrap().len(), 1);
     }
 }
