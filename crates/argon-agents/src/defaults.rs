@@ -97,7 +97,7 @@ const CLAUDE_MODELS: &[KnownModel] = &[
     },
     KnownModel {
         id: "fable",
-        label: "Fable 5.1",
+        label: "Fable 5.2",
     },
     KnownModel {
         id: "sonnet",
@@ -106,6 +106,10 @@ const CLAUDE_MODELS: &[KnownModel] = &[
     KnownModel {
         id: "haiku",
         label: "Haiku 5.5",
+    },
+    KnownModel {
+        id: "claude-fable-5-1",
+        label: "Fable 5.1",
     },
     KnownModel {
         id: "claude-haiku-4-5-20251001",
@@ -153,6 +157,10 @@ const COMMAND_CODE_MODELS: &[KnownModel] = &[
     KnownModel {
         id: "claude-opus-5-5",
         label: "Claude Opus 5.5",
+    },
+    KnownModel {
+        id: "claude-fable-5-2",
+        label: "Claude Fable 5.2",
     },
     KnownModel {
         id: "claude-fable-5-1",
