@@ -6,7 +6,7 @@ use gpui_kit::{Context, Window};
 use super::{Load, MergeState, PrView};
 use crate::agents::{PR_CLOSED, ReviewTarget, open_start_dialog};
 
-const LOAD_FAILED: &str = "Não consegui carregar o PR para revisar com IA";
+const LOAD_FAILED: &str = "Não consegui carregar o PR para o Agent Review";
 
 impl PrView {
     pub(super) fn settle_pending_ai_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {

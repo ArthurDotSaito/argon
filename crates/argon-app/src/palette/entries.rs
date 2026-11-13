@@ -9,7 +9,7 @@ use crate::actions::{
 };
 use crate::inbox::InboxView;
 
-const REVIEW_WITH_AI_TITLE: &str = "Revisar com IA no PR atual";
+const REVIEW_WITH_AI_TITLE: &str = "Agent Review no PR atual";
 
 pub struct PrEntry {
     pub key: PrKey,
