@@ -4,6 +4,10 @@ pub const NOT_IN_INBOX: &str = "Issue fora da inbox local.";
 pub const OPENED_THIS_ISSUE: &str = "abriu esta issue";
 pub const NO_ASSIGNEES: &str = "sem responsável";
 pub const NO_LINKED_PR: &str = "sem PR vinculado";
+pub const TAB_LINKED_PRS: &str = "PRs vinculados";
+pub const TAB_SUB_ISSUES: &str = "Sub-issues";
+pub const LINKED_PRS_HELP: &str = "PRs que fecham esta issue quando entrarem.";
+pub const NO_LINKED_PRS: &str = "Nenhum PR vinculado ainda.";
 
 pub fn load_failed(error: &str) -> String {
     format!("Falha ao carregar a issue: {error}")
@@ -14,7 +18,11 @@ pub fn opened(ago: &str) -> String {
 }
 
 pub fn sub_issues(sub: SubIssues) -> String {
-    format!("{}/{} sub-issues", sub.completed, sub.total)
+    format!("{} sub-issues", sub_issue_progress(sub))
+}
+
+pub fn sub_issue_progress(sub: SubIssues) -> String {
+    format!("{}/{}", sub.completed, sub.total)
 }
 
 pub fn reference(issue_repo: &str, repo: &str, number: u64) -> String {
@@ -106,5 +114,6 @@ mod tests {
             completed: 1,
         };
         assert_eq!(sub_issues(sub), "1/3 sub-issues");
+        assert_eq!(sub_issue_progress(sub), "1/3");
     }
 }

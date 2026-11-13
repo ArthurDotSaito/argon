@@ -54,8 +54,32 @@ impl IssueView {
         self.load = Load::Ready;
         self.seen_updated_at = self.seen_updated_at.max(Some(detail.issue.updated_at));
         self.timeline = Timeline::new(&detail, self.inbox.read(cx));
+        self.composer.update(cx, |composer, cx| {
+            composer.set_timeline(&detail.timeline, cx)
+        });
         self.detail = Some(Rc::new(detail));
+        if self.read_after_epoch.is_some_and(|after| epoch >= after) {
+            self.read_after_epoch = None;
+            self.mark_read(cx);
+        }
         cx.notify();
+    }
+
+    pub(super) fn reload_after_comment(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+        self.read_after_epoch = Some(self.epoch);
+    }
+
+    pub(super) fn mark_read(&mut self, cx: &mut Context<Self>) {
+        let Some(updated_at) = self.detail.as_ref().map(|detail| detail.issue.updated_at) else {
+            return;
+        };
+        let key = self.key.clone();
+        self.inbox
+            .update(cx, |inbox, cx| inbox.mark_seen(&key, updated_at, cx));
+        if let Some(services) = cx.try_global::<AppServices>() {
+            services.0.sync_now();
+        }
     }
 
     fn fail(&mut self, message: String, cx: &mut Context<Self>) {

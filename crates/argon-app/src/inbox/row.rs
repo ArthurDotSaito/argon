@@ -6,8 +6,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, Div, Hsla, InteractiveElement as _, ParentElement as _, SharedString,
-    Stateful, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    App, ClickEvent, Div, ElementId, Hsla, InteractiveElement as _, ParentElement as _,
+    SharedString, Stateful, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::{InboxItem, Subject};
@@ -94,12 +94,29 @@ pub fn item_row(
     cx: &App,
 ) -> Stateful<Div> {
     let (summary, details) = match &item.subject {
-        Subject::Pr(pr) => pr_lines(item, pr, now, cx),
+        Subject::Pr(pr) => pr_lines(pr, Some(item), now, cx),
         Subject::Issue(issue) => issue_lines(item, issue, now, cx),
     };
+    row_frame(("inbox-row", position), selected, cx)
+        .child(summary)
+        .child(details)
+}
+
+pub fn pr_row(
+    id: impl Into<ElementId>,
+    pr: &PullRequest,
+    item: Option<&InboxItem>,
+    now: DateTime<Utc>,
+    cx: &App,
+) -> Stateful<Div> {
+    let (summary, details) = pr_lines(pr, item, now, cx);
+    row_frame(id, false, cx).child(summary).child(details)
+}
+
+fn row_frame(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
     div()
-        .id(("inbox-row", position))
+        .id(id)
         .w_full()
         .overflow_hidden()
         .h(px(pr_row_height(cx)))
@@ -120,16 +137,20 @@ pub fn item_row(
             this.hover(|style| style.bg(theme.list_hover))
         })
         .cursor_pointer()
-        .child(summary)
-        .child(details)
 }
 
-fn pr_lines(item: &InboxItem, pr: &PullRequest, now: DateTime<Utc>, cx: &App) -> (Div, Div) {
+fn pr_lines(
+    pr: &PullRequest,
+    item: Option<&InboxItem>,
+    now: DateTime<Utc>,
+    cx: &App,
+) -> (Div, Div) {
+    let unread = item.is_some_and(|item| item.unread);
     let summary = summary_line()
-        .child(unread_dot(item.unread, cx))
+        .child(unread_dot(unread, cx))
         .child(state_icon(pr, cx))
         .child(avatar(&pr.author, AVATAR_SIZE))
-        .child(title(item, cx))
+        .child(title(&pr.title, unread, cx))
         .child(checks(pr.checks, cx))
         .child(reviewers(pr, cx))
         .child(diff_stat(pr, cx))
@@ -144,8 +165,10 @@ fn pr_lines(item: &InboxItem, pr: &PullRequest, now: DateTime<Utc>, cx: &App) ->
                 .min_w_0()
                 .max_w(px(BRANCH_MAX_WIDTH)),
         )
-        .child(SEPARATOR)
-        .child(reason(item, now, pr.updated_at));
+        .when_some(item, |this, item| {
+            this.child(SEPARATOR)
+                .child(reason(item, now, pr.updated_at))
+        });
     (summary, details)
 }
 
@@ -156,7 +179,7 @@ fn issue_lines(item: &InboxItem, issue: &Issue, now: DateTime<Utc>, cx: &App) ->
         .child(unread_dot(item.unread, cx))
         .child(Icon::new(state_icon).small().text_color(state_color))
         .child(avatar(&issue.author, AVATAR_SIZE))
-        .child(title(item, cx))
+        .child(title(&issue.title, item.unread, cx))
         .child(issue_type(issue.issue_type.as_deref(), cx))
         .child(assignees(issue, cx))
         .child(linkage(issue, cx))
@@ -210,14 +233,14 @@ fn unread_dot(unread: bool, cx: &App) -> Div {
         .when(unread, |this| this.bg(cx.theme().primary))
 }
 
-fn title(item: &InboxItem, cx: &App) -> Div {
+fn title(text: &str, unread: bool, cx: &App) -> Div {
     div()
         .flex_1()
         .min_w_0()
         .truncate()
         .text_color(cx.theme().foreground)
-        .when(item.unread, |this| this.font_semibold())
-        .child(item.subject.title().to_string())
+        .when(unread, |this| this.font_semibold())
+        .child(text.to_string())
 }
 
 fn mono(text: impl Into<SharedString>, cx: &App) -> Div {

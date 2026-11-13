@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use argon_core::PrKey;
-use argon_github::PrDetail;
+use argon_core::{PrKey, SubjectKind};
+use argon_github::{PrDetail, TimelineItem};
 use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -11,7 +11,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _
 use gpui_kit::{
     App, AppContext as _, ClickEvent, Context, Div, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
 use super::comment_check::{SentComment, is_transport_error};
@@ -30,6 +30,12 @@ pub enum ConversationEvent {
     OpenOnGithub,
 }
 
+pub enum ComposerEvent {
+    Commented,
+    CommentConfirmed,
+    Recheck,
+}
+
 pub fn count(detail: &PrDetail) -> usize {
     detail
         .timeline
@@ -38,11 +44,9 @@ pub fn count(detail: &PrDetail) -> usize {
         .count()
 }
 
-pub struct Conversation {
-    key: PrKey,
-    detail: Option<Rc<PrDetail>>,
-    description: Option<MarkdownBlock>,
-    timeline: Vec<Entry>,
+pub struct Composer {
+    subject: PrKey,
+    kind: SubjectKind,
     input: Entity<TextareaState>,
     sending: bool,
     error: Option<SharedString>,
@@ -50,13 +54,17 @@ pub struct Conversation {
     unconfirmed: Option<SentComment>,
     clear_input: Option<String>,
     send_task: Option<Task<()>>,
-    scroll: ScrollHandle,
 }
 
-impl EventEmitter<ConversationEvent> for Conversation {}
+impl EventEmitter<ComposerEvent> for Composer {}
 
-impl Conversation {
-    pub fn new(key: PrKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
+impl Composer {
+    pub fn new(
+        subject: PrKey,
+        kind: SubjectKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(labels::COMMENT_PLACEHOLDER)
@@ -64,10 +72,8 @@ impl Conversation {
         });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         Self {
-            key,
-            detail: None,
-            description: None,
-            timeline: Vec::new(),
+            subject,
+            kind,
             input,
             sending: false,
             error: None,
@@ -75,29 +81,26 @@ impl Conversation {
             unconfirmed: None,
             clear_input: None,
             send_task: None,
-            scroll: ScrollHandle::new(),
         }
     }
 
-    pub fn set_detail(&mut self, detail: Rc<PrDetail>, cx: &mut Context<Self>) {
-        let mut order: Vec<usize> = (0..detail.timeline.len()).collect();
-        order.sort_by_key(|ix| timeline_item::timestamp(&detail.timeline[*ix]));
-        self.timeline = order
-            .into_iter()
-            .map(|ix| Entry::new(ix, &detail.timeline[ix]))
-            .collect();
-        self.description = (!detail.body.trim().is_empty())
-            .then(|| MarkdownBlock::new("pr-description".to_string(), &detail.body));
+    pub fn set_timeline(&mut self, timeline: &[TimelineItem], cx: &mut Context<Self>) {
         if let Some(sent) = self.unconfirmed.take()
-            && sent.landed_in(&detail.timeline)
+            && sent.landed_in(timeline)
         {
             self.error = None;
             self.notice = Some(labels::COMMENT_SENT.into());
             self.clear_input = Some(sent.body().to_string());
-            cx.emit(ConversationEvent::CommentConfirmed);
+            cx.emit(ComposerEvent::CommentConfirmed);
+            cx.notify();
         }
-        self.detail = Some(detail);
-        cx.notify();
+    }
+
+    fn submit_id(&self) -> &'static str {
+        match self.kind {
+            SubjectKind::Pr => "pr-comment-submit",
+            SubjectKind::Issue => "issue-comment-submit",
+        }
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -120,11 +123,12 @@ impl Conversation {
         let author = services
             .accounts()
             .into_iter()
-            .find(|account| account.host.eq_ignore_ascii_case(&self.key.host))
+            .find(|account| account.host.eq_ignore_ascii_case(&self.subject.host))
             .map(|account| account.login);
         let sent_body = body.clone();
-        let id = self.key.id.clone();
-        let task = services.spawn_github(cx, self.key.host.clone(), move |client| async move {
+        let id = self.subject.id.clone();
+        let kind = self.kind;
+        let task = services.spawn_github(cx, self.subject.host.clone(), move |client| async move {
             client.add_comment(&id, &body).await
         });
         self.send_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -135,14 +139,14 @@ impl Conversation {
                     Ok(_) => {
                         this.input
                             .update(cx, |input, cx| input.set_value("", window, cx));
-                        cx.emit(ConversationEvent::Commented);
+                        cx.emit(ComposerEvent::Commented);
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "failed to add pr comment");
+                        tracing::warn!(%error, ?kind, "failed to add comment");
                         this.error = Some(labels::comment_failed(&error.to_string()).into());
                         if let Some(author) = author.filter(|_| is_transport_error(&error)) {
                             this.unconfirmed = Some(SentComment::new(author, sent_body));
-                            cx.emit(ConversationEvent::Recheck);
+                            cx.emit(ComposerEvent::Recheck);
                         }
                     }
                 }
@@ -151,32 +155,16 @@ impl Conversation {
         }));
         cx.notify();
     }
+}
 
-    fn description(&self, detail: &PrDetail, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
-        let pr = &detail.pr;
-        let body = match &self.description {
-            Some(description) => description.view().into_any_element(),
-            None => div()
-                .italic()
-                .text_color(theme.muted_foreground)
-                .child(labels::NO_DESCRIPTION)
-                .into_any_element(),
-        };
-        card(
-            &pr.author,
-            card_body(
-                &pr.author,
-                div().child(labels::OPENED_THIS_PR),
-                pr.created_at,
-                Utc::now(),
-                cx,
-            )
-            .child(card_text(body)),
-        )
-    }
-
-    fn composer(&self, cx: &mut Context<Self>) -> Div {
+impl Render for Composer {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(sent) = self.clear_input.take()
+            && self.input.read(cx).value().trim() == sent
+        {
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         let theme = cx.theme();
         let empty = self.input.read(cx).value().trim().is_empty();
         let error = self.error.clone().map(|error| {
@@ -208,7 +196,7 @@ impl Conversation {
                     .children(notice)
                     .child(div().flex_1())
                     .child(
-                        Button::new("pr-comment-submit")
+                        Button::new(self.submit_id())
                             .label(labels::COMMENT)
                             .small()
                             .primary()
@@ -222,14 +210,80 @@ impl Conversation {
     }
 }
 
-impl Render for Conversation {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(sent) = self.clear_input.take()
-            && self.input.read(cx).value().trim() == sent
-        {
-            self.input
-                .update(cx, |input, cx| input.set_value("", window, cx));
+pub struct Conversation {
+    detail: Option<Rc<PrDetail>>,
+    description: Option<MarkdownBlock>,
+    timeline: Vec<Entry>,
+    composer: Entity<Composer>,
+    scroll: ScrollHandle,
+    _composer_events: Subscription,
+}
+
+impl EventEmitter<ConversationEvent> for Conversation {}
+
+impl Conversation {
+    pub fn new(key: PrKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let composer = cx.new(|cx| Composer::new(key, SubjectKind::Pr, window, cx));
+        let composer_events = cx.subscribe(&composer, |_, _, event, cx| {
+            cx.emit(match event {
+                ComposerEvent::Commented => ConversationEvent::Commented,
+                ComposerEvent::CommentConfirmed => ConversationEvent::CommentConfirmed,
+                ComposerEvent::Recheck => ConversationEvent::Recheck,
+            })
+        });
+        Self {
+            detail: None,
+            description: None,
+            timeline: Vec::new(),
+            composer,
+            scroll: ScrollHandle::new(),
+            _composer_events: composer_events,
         }
+    }
+
+    pub fn set_detail(&mut self, detail: Rc<PrDetail>, cx: &mut Context<Self>) {
+        let mut order: Vec<usize> = (0..detail.timeline.len()).collect();
+        order.sort_by_key(|ix| timeline_item::timestamp(&detail.timeline[*ix]));
+        self.timeline = order
+            .into_iter()
+            .map(|ix| Entry::new(ix, &detail.timeline[ix]))
+            .collect();
+        self.description = (!detail.body.trim().is_empty())
+            .then(|| MarkdownBlock::new("pr-description".to_string(), &detail.body));
+        self.composer.update(cx, |composer, cx| {
+            composer.set_timeline(&detail.timeline, cx)
+        });
+        self.detail = Some(detail);
+        cx.notify();
+    }
+
+    fn description(&self, detail: &PrDetail, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
+        let pr = &detail.pr;
+        let body = match &self.description {
+            Some(description) => description.view().into_any_element(),
+            None => div()
+                .italic()
+                .text_color(theme.muted_foreground)
+                .child(labels::NO_DESCRIPTION)
+                .into_any_element(),
+        };
+        card(
+            &pr.author,
+            card_body(
+                &pr.author,
+                div().child(labels::OPENED_THIS_PR),
+                pr.created_at,
+                Utc::now(),
+                cx,
+            )
+            .child(card_text(body)),
+        )
+    }
+}
+
+impl Render for Conversation {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let scroller = div()
             .id("pr-conversation-scroll")
             .size_full()
@@ -264,7 +318,7 @@ impl Render for Conversation {
             .child(self.description(&detail, cx))
             .children(notice)
             .child(timeline)
-            .child(self.composer(cx));
+            .child(self.composer.clone());
         scroller.child(content)
     }
 }

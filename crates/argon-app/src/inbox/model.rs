@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use argon_core::{Issue, PrKey, PullRequest, SubjectKind, ViewSet};
 use argon_store::Store;
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, Utc};
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task};
 
 use super::InboxView;
@@ -166,9 +166,12 @@ impl InboxModel {
         self.rows_revision
     }
 
+    pub fn item(&self, key: &PrKey) -> Option<&InboxItem> {
+        self.items.get(*self.index.get(key)?)
+    }
+
     pub(super) fn subject(&self, key: &PrKey) -> Option<&Subject> {
-        let ix = *self.index.get(key)?;
-        Some(&self.items.get(ix)?.subject)
+        Some(&self.item(key)?.subject)
     }
 
     pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
@@ -329,6 +332,18 @@ impl InboxModel {
             SubjectKind::Pr => InboxEvent::OpenPr { key, preview },
             SubjectKind::Issue => InboxEvent::OpenIssue { key, preview },
         });
+        cx.notify();
+    }
+
+    pub fn mark_seen(&mut self, key: &PrKey, updated_at: DateTime<Utc>, cx: &mut Context<Self>) {
+        if let Some(&ix) = self.index.get(key)
+            && let Some(item) = self.items.get_mut(ix)
+            && item.subject.updated_at() <= updated_at
+        {
+            item.unread = false;
+        }
+        let key = key.clone();
+        self.persist(move |store| store.mark_seen(&key, updated_at), cx);
         cx.notify();
     }
 

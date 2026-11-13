@@ -1,24 +1,24 @@
 use std::rc::Rc;
 
-use argon_core::{Issue, PrKey};
+use argon_core::{Issue, PrKey, SubjectKind};
 use argon_github::IssueDetail;
 use chrono::{DateTime, Utc};
-use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
     Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
 use super::header::header;
 use super::labels;
+use super::tabs::IssueTab;
 use super::timeline::Timeline;
 use crate::inbox::{ISSUE_FALLBACK_TITLE, InboxModel};
 use crate::keymap::ISSUE_VIEW_CONTEXT;
-use crate::pr::{self, CONTENT_MAX_WIDTH, labels as pr_labels};
+use crate::pr::{self, CONTENT_MAX_WIDTH, Composer, ComposerEvent};
 
 pub(super) enum Load {
     Loading,
@@ -29,15 +29,20 @@ pub(super) enum Load {
 pub struct IssueView {
     pub(super) key: PrKey,
     pub(super) inbox: Entity<InboxModel>,
+    pub(super) tab: IssueTab,
     pub(super) detail: Option<Rc<IssueDetail>>,
     pub(super) store_issue: Option<Rc<Issue>>,
     pub(super) timeline: Timeline,
+    pub(super) composer: Entity<Composer>,
     pub(super) load: Load,
     pub(super) refreshing: bool,
     pub(super) epoch: u64,
     pub(super) applied_epoch: u64,
     pub(super) seen_updated_at: Option<DateTime<Utc>>,
+    pub(super) read_after_epoch: Option<u64>,
     pub(super) load_task: Option<Task<()>>,
+    pub(super) linked_scroll: ScrollHandle,
+    pub(super) sub_scroll: ScrollHandle,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -47,24 +52,37 @@ impl IssueView {
     pub fn new(
         key: PrKey,
         inbox: Entity<InboxModel>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let subscriptions = vec![cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx))];
+        let composer = cx.new(|cx| Composer::new(key.clone(), SubjectKind::Issue, window, cx));
+        let subscriptions = vec![
+            cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
+            cx.subscribe(&composer, |this, _, event, cx| match event {
+                ComposerEvent::Commented => this.reload_after_comment(cx),
+                ComposerEvent::CommentConfirmed => this.mark_read(cx),
+                ComposerEvent::Recheck => this.reload(cx),
+            }),
+        ];
         let store_issue = inbox.read(cx).issue(&key).cloned().map(Rc::new);
         let seen_updated_at = store_issue.as_ref().map(|issue| issue.updated_at);
         let mut this = Self {
             key,
             inbox,
+            tab: IssueTab::default(),
             detail: None,
             store_issue,
             timeline: Timeline::default(),
+            composer,
             load: Load::Loading,
             refreshing: false,
             epoch: 0,
             applied_epoch: 0,
             seen_updated_at,
+            read_after_epoch: None,
             load_task: None,
+            linked_scroll: ScrollHandle::new(),
+            sub_scroll: ScrollHandle::new(),
             scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -95,18 +113,6 @@ impl IssueView {
         Some(pr::failure_banner(message.clone(), retry, cx))
     }
 
-    fn tab_bar(&self, cx: &App) -> Div {
-        let comments = self.issue().map(|issue| issue.comments as usize);
-        h_flex().px_2().gap_1().items_end().child(pr::tab_button(
-            "issue-tab-conversation",
-            IconName::MessageSquare,
-            pr_labels::TAB_CONVERSATION,
-            comments,
-            true,
-            cx,
-        ))
-    }
-
     fn body(
         &self,
         detail: Option<&IssueDetail>,
@@ -114,7 +120,11 @@ impl IssueView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(detail) = detail {
-            return self.conversation(detail, now, cx).into_any_element();
+            return match self.visible_tab() {
+                IssueTab::Conversation => self.conversation(detail, now, cx).into_any_element(),
+                IssueTab::LinkedPrs => self.linked_prs(detail, now, cx).into_any_element(),
+                IssueTab::SubIssues => self.sub_issues(detail, cx).into_any_element(),
+            };
         }
         match &self.load {
             Load::Failed(message) => {
@@ -146,7 +156,8 @@ impl IssueView {
             .text_color(cx.theme().foreground)
             .child(self.timeline.description(&detail.issue, now, cx))
             .children(notice)
-            .child(self.timeline.items(detail, now, cx));
+            .child(self.timeline.items(detail, now, cx))
+            .child(self.composer.clone());
         div()
             .id("issue-conversation-scroll")
             .size_full()

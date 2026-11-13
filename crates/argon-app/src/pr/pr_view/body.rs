@@ -37,7 +37,9 @@ impl PrView {
 
     fn tab_item(&self, ix: usize, tab: PrTab, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.tab == tab;
-        let count = self.tab_count(tab, cx);
+        let count = self
+            .tab_count(tab, cx)
+            .map(|count| count.to_string().into());
         tab_button(("pr-tab", ix), tab.icon(), tab.title(), count, selected, cx)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_tab(tab, cx)))
     }
@@ -78,7 +80,7 @@ pub fn tab_button(
     id: impl Into<ElementId>,
     icon: IconName,
     title: &'static str,
-    count: Option<usize>,
+    count: Option<SharedString>,
     selected: bool,
     cx: &App,
 ) -> Stateful<Div> {
@@ -90,7 +92,7 @@ pub fn tab_button(
             .bg(theme.muted)
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(count.to_string())
+            .child(count)
     });
     h_flex()
         .id(id)
