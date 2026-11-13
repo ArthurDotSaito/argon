@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argon · Issues</title>
+<link rel="stylesheet" href="shared/argon.css">
+<style>
+  body { overflow-y: auto; background: var(--bg); }
+  .hub { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; }
+  .top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .top h1 { font-size: 22px; font-weight: 600; }
+  .top .strip-btn { margin-left: auto; }
+  .lead { color: var(--muted-fg); max-width: 760px; line-height: 1.6; margin-bottom: 24px; }
+  .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 32px; }
+  .card {
+    border: 1px solid var(--border); border-radius: 8px; background: var(--muted); display: flex; flex-direction: column; overflow: hidden;
+    text-decoration: none; color: inherit; transition: border-color 0.15s;
+  }
+  .card:hover { border-color: var(--primary); }
+  .sketch { height: 132px; background: var(--bg); border-bottom: 1px solid var(--border); padding: 10px; display: flex; gap: 6px; }
+  .sk-side { width: 46px; display: flex; flex-direction: column; gap: 4px; }
+  .sk-main { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .sk-bar { height: 7px; border-radius: 3px; background: var(--accent); }
+  .sk-bar.hi { background: color-mix(in srgb, var(--note) 70%, transparent); }
+  .sk-bar.pr { background: color-mix(in srgb, var(--success) 45%, transparent); }
+  .sk-bar.is { background: color-mix(in srgb, var(--primary) 50%, transparent); }
+  .sk-row { display: flex; gap: 4px; align-items: center; }
+  .sk-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .sk-col { flex: 1; display: flex; flex-direction: column; gap: 4px; background: var(--muted); border-radius: 4px; padding: 4px; }
+  .sk-card { height: 16px; border-radius: 3px; background: var(--accent); }
+  .card-body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .card .tagline { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--note); }
+  .card h2 { font-size: 16px; font-weight: 600; }
+  .card p { color: var(--muted-fg); line-height: 1.5; font-size: 12.5px; }
+  .card ul { list-style: none; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; line-height: 1.45; }
+  .card li { display: flex; gap: 6px; }
+  .card li svg { margin-top: 2px; color: var(--success); }
+  .card .go { margin-top: auto; padding-top: 6px; color: var(--primary); font-weight: 500; display: flex; align-items: center; gap: 4px; }
+  h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+  .block { margin-bottom: 28px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.45; }
+  th { color: var(--muted-fg); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td:first-child { color: var(--muted-fg); width: 190px; }
+  .lvl { display: inline-flex; gap: 2px; margin-right: 6px; vertical-align: middle; }
+  .lvl i { width: 6px; height: 10px; border-radius: 1px; background: var(--border); display: inline-block; }
+  .lvl i.on { background: var(--warning); }
+  .reco { border: 1px solid color-mix(in srgb, var(--primary) 50%, transparent); background: color-mix(in srgb, var(--primary) 8%, transparent); border-radius: 8px; padding: 14px 16px; line-height: 1.6; }
+  .reco b { font-weight: 600; }
+  .data { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .data .box { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; line-height: 1.6; font-size: 12.5px; }
+  .data code { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; background: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+  .data ul { padding-left: 18px; }
+  @media (max-width: 900px) { .cards, .data { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="hub">
+  <div class="top">
+    <h1>Issues no Argon</h1>
+    <button class="strip-btn" id="theme">Tema</button>
+  </div>
+  <p class="lead">Três jeitos de ver issues no Argon, com o mesmo visual do app (One Dark / One Light, sidebar "Visões", abas e linha de PR). Os mocks são clicáveis; cada um tem anotações numeradas, e passar o mouse numa anotação destaca o ponto correspondente na tela. Dados de exemplo são fictícios.</p>
+
+  <div class="cards">
+    <a class="card" href="proposta-a-inbox-unificada.html">
+      <div class="sketch">
+        <div class="sk-side"><div class="sk-bar"></div><div class="sk-bar"></div><div class="sk-bar hi"></div><div class="sk-bar"></div><div class="sk-bar"></div></div>
+        <div class="sk-main">
+          <div class="sk-bar" style="width:40%"></div>
+          <div class="sk-row"><span class="sk-dot" style="background:var(--success)"></span><div class="sk-bar pr" style="flex:1"></div></div>
+          <div class="sk-row"><span class="sk-dot" style="background:var(--primary)"></span><div class="sk-bar is" style="flex:1"></div></div>
+          <div class="sk-row"><span class="sk-dot" style="background:var(--success)"></span><div class="sk-bar pr" style="flex:1"></div></div>
+          <div class="sk-row"><span class="sk-dot" style="background:var(--primary)"></span><div class="sk-bar is" style="flex:1"></div></div>
+          <div class="sk-row"><span class="sk-dot" style="background:var(--primary)"></span><div class="sk-bar is" style="flex:1"></div></div>
+        </div>
+      </div>
+      <div class="card-body">
+        <span class="tagline">Proposta A · escolhida</span>
+        <h2>Inbox unificada</h2>
+        <p>Issue vira mais um tipo de item da caixa de entrada, nas mesmas seções e com o mesmo desenho de linha dos PRs.</p>
+        <ul>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>"Needs you" passa a incluir issues</li>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Grupo ISSUES na sidebar e filtro Tudo / PRs / Issues</li>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Aba de issue no molde da aba de PR</li>
+        </ul>
+        <span class="go">Abrir mock →</span>
+      </div>
+    </a>
+
+    <a class="card" href="proposta-b-espaco-issues.html">
+      <div class="sketch">
+        <div class="sk-side"><div class="sk-bar"></div><div class="sk-bar hi"></div><div class="sk-bar hi"></div><div class="sk-bar"></div><div class="sk-bar"></div></div>
+        <div class="sk-main">
+          <div class="sk-bar" style="width:55%"></div>
+          <div class="sk-row"><div class="sk-bar is" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+        </div>
+        <div class="sk-main" style="flex:0.8;border-left:1px solid var(--border);padding-left:6px">
+          <div class="sk-bar hi" style="width:70%"></div><div class="sk-bar" style="width:50%"></div><div class="sk-bar"></div><div class="sk-bar"></div><div class="sk-bar" style="width:80%"></div>
+        </div>
+      </div>
+      <div class="card-body">
+        <span class="tagline">Proposta B</span>
+        <h2>Issues em espaço próprio</h2>
+        <p>Aba e grupo próprios, longe da inbox de PRs. Lista densa com agrupamento, preview à direita e modo quadro, feita para triar.</p>
+        <ul>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Agrupar por repo, milestone, status ou tipo</li>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Preview com atribuir, rotular e fechar sem abrir aba</li>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Quadro pelo Status do GitHub Projects</li>
+        </ul>
+        <span class="go">Abrir mock →</span>
+      </div>
+    </a>
+
+    <a class="card" href="proposta-c-fluxo-trabalho.html">
+      <div class="sketch">
+        <div class="sk-side"><div class="sk-bar"></div><div class="sk-bar hi"></div><div class="sk-bar hi"></div><div class="sk-bar hi"></div><div class="sk-bar"></div></div>
+        <div class="sk-main">
+          <div class="sk-bar" style="width:45%"></div>
+          <div class="sk-row" style="gap:3px;margin:6px 0">
+            <span class="sk-dot" style="background:var(--success)"></span><div class="sk-bar" style="flex:1;height:2px;background:var(--success)"></div>
+            <span class="sk-dot" style="background:var(--success)"></span><div class="sk-bar" style="flex:1;height:2px;background:var(--success)"></div>
+            <span class="sk-dot" style="background:var(--primary)"></span><div class="sk-bar" style="flex:1;height:2px"></div>
+            <span class="sk-dot" style="background:var(--border)"></span><div class="sk-bar" style="flex:1;height:2px"></div>
+            <span class="sk-dot" style="background:var(--border)"></span>
+          </div>
+          <div class="sk-row"><div class="sk-bar is" style="flex:1"></div><div class="sk-bar hi" style="width:22%"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+          <div class="sk-row"><div class="sk-bar" style="flex:1"></div></div>
+        </div>
+      </div>
+      <div class="card-body">
+        <span class="tagline">Proposta C</span>
+        <h2>Issue como início do trabalho</h2>
+        <p>Suas issues por estágio (a fazer, em andamento, em review, pronto para merge), com o agente implementando a partir da issue.</p>
+        <ul>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Trilho issue → branch → PR → review → merge</li>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>"Implementar com IA" reusa as sessões de agente</li>
+          <li><svg class="icon xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>PR e issue apontam um para o outro</li>
+        </ul>
+        <span class="go">Abrir mock →</span>
+      </div>
+    </a>
+  </div>
+
+  <div class="block">
+    <h3>Comparação</h3>
+    <table>
+      <thead><tr><th></th><th>A · Inbox unificada</th><th>B · Espaço próprio</th><th>C · Início do trabalho</th></tr></thead>
+      <tbody>
+        <tr><td>Pergunta que responde</td><td>"O que chegou para mim?"</td><td>"O que está aberto, e de quem é?"</td><td>"O que eu faço agora, e onde parou?"</td></tr>
+        <tr><td>Onde as issues aparecem</td><td>Na inbox, junto com os PRs, e num grupo ISSUES</td><td>Numa aba "Issues" e num grupo próprio</td><td>Numa aba "Trabalho", agrupadas por estágio</td></tr>
+        <tr><td>"Needs you" inclui issues</td><td>Sim</td><td>Não</td><td>Não (o "A fazer" faz esse papel)</td></tr>
+        <tr><td>Quais issues</td><td>As que envolvem você (atribuída, mencionado, autor, participando) e, se quiser, as novas das orgs</td><td>As suas e as das orgs rastreadas, incluindo sem responsável</td><td>Só as atribuídas a você</td></tr>
+        <tr><td>Reaproveita do app</td><td>Inbox, seções, linha, abas, sync</td><td>Sidebar, abas, cabeçalho de issue</td><td>Sessões de agente, worktrees, templates de prompt, aba de PR</td></tr>
+        <tr><td>Escritas novas no GitHub</td><td>Atribuir, fechar, comentar</td><td>Atribuir, labels, milestone, fechar, Status do Project</td><td>Atribuir, fechar, criar branch, abrir PR</td></tr>
+        <tr><td>Depende de</td><td>Nada novo</td><td>GitHub Projects para status e quadro (o token atual do gh não tem o escopo <code style="font-size:11px">read:project</code>)</td><td>PRs citando a issue ("Fixes #n") para calcular o estágio</td></tr>
+        <tr><td>Esforço relativo</td><td><span class="lvl"><i class="on"></i><i></i><i></i></span>Baixo</td><td><span class="lvl"><i class="on"></i><i class="on"></i><i></i></span>Médio</td><td><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i></span>Alto</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="block">
+    <h3>Minha recomendação</h3>
+    <div class="reco">
+      <b>Começar pela A</b>, que é o pedido ao pé da letra ("ver issues como vejo os PRs") e reaproveita quase tudo: a busca da inbox já roda com <code>type: ISSUE</code> no GraphQL e hoje só filtra <code>is:pr</code>. Da C, eu traria já na primeira versão o chip "Fecha #n" no PR e o PR vinculado na issue, que custam pouco e ligam as duas telas. Na issue, o botão de IA é o "Agent Plan" (planejar a solução); no PR, "Revisar com IA" passa a se chamar "Agent Review". A B só vale se triar issues de várias pessoas for parte da sua rotina; aí ela pode entrar depois, como visões extras, sem refazer a A.
+    </div>
+  </div>
+
+  <div class="block">
+    <h3>O que muda nos dados (vale para as três)</h3>
+    <div class="data">
+      <div class="box">
+        <b>Busca (mesma query <code>search</code> do sync)</b>
+        <ul>
+          <li><code>is:issue is:open assignee:@me</code></li>
+          <li><code>is:issue mentions:@me</code></li>
+          <li><code>is:issue author:@me</code>, <code>is:issue involves:@me</code></li>
+          <li>B: <code>is:issue is:open org:X no:assignee</code> para a fila sem responsável</li>
+          <li>No <code>inbox_ids.graphql</code>, um <code>... on Issue</code> ao lado do <code>... on PullRequest</code></li>
+        </ul>
+      </div>
+      <div class="box">
+        <b>Campos de Issue (conferidos no schema GraphQL)</b>
+        <ul>
+          <li><code>state</code> + <code>stateReason</code> (COMPLETED, NOT_PLANNED, DUPLICATE, REOPENED)</li>
+          <li><code>issueType</code>, <code>labels</code>, <code>assignees</code>, <code>milestone</code></li>
+          <li><code>closedByPullRequestsReferences</code> para o PR vinculado (A e C)</li>
+          <li><code>subIssuesSummary</code> / <code>parent</code> para sub-issues</li>
+          <li><code>projectItems</code> para Status e prioridade (só B)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  (function () {
+    let theme = "dark";
+    try { theme = localStorage.getItem("argon-mock-theme") || "dark"; } catch (e) {}
+    document.documentElement.setAttribute("data-theme", theme);
+    document.getElementById("theme").addEventListener("click", function () {
+      theme = theme === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", theme);
+      try { localStorage.setItem("argon-mock-theme", theme); } catch (e) {}
+    });
+  })();
+</script>
+</body>
+</html>

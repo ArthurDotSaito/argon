@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argon · Proposta B — Issues em espaço próprio</title>
+<link rel="stylesheet" href="shared/argon.css">
+<style>
+.window { position: relative; }
+.split { flex: 1; min-height: 0; display: flex; }
+.listwrap { flex: 1; min-width: 0; display: flex; flex-direction: column; container-type: inline-size; }
+.ctl { display: inline-flex; align-items: center; gap: 8px; margin-left: 4px; }
+.chip-filter.on { color: var(--primary); border-color: var(--primary); }
+.list-header .input input {
+  flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; color: var(--fg); font: inherit;
+}
+.list-header .input:focus-within { border-color: var(--primary); }
+.section-header b { display: inline-flex; align-items: center; gap: 6px; }
+.sdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+
+.irow {
+  height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 8px; border-left: 2px solid transparent;
+  cursor: pointer; scroll-margin-top: 30px; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+.irow:hover { background: var(--list-hover); }
+.irow.selected { background: var(--list-active); border-left-color: var(--primary); }
+.irow.unread .udot { background: var(--primary); }
+.irow.unread .title { font-weight: 600; }
+.irow .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.irow .ic { flex: none; display: inline-flex; align-items: center; }
+.irow .c-num { width: 44px; flex: none; }
+.irow .c { flex: none; display: flex; align-items: center; gap: 4px; }
+.c-labels { width: 170px; justify-content: flex-start; overflow: hidden; }
+.c-labels .label-chip { display: inline-block; line-height: 18px; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.c-pr { width: 78px; }
+.c-sub { width: 48px; gap: 5px; }
+.c-ms { width: 84px; }
+.c-ms .tag { max-width: 100%; }
+.c-asg { width: 40px; justify-content: flex-end; }
+.c-com { width: 34px; justify-content: flex-end; font-size: 12px; color: var(--muted-fg); }
+.c-age { width: 34px; justify-content: flex-end; }
+.sub-bar { width: 16px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; flex: none; }
+.sub-bar i { display: block; height: 100%; background: var(--success); }
+@container (max-width: 799px) { .c-ms { display: none !important; } }
+@container (max-width: 709px) { .c-sub { display: none !important; } }
+@container (max-width: 649px) { .c-labels { display: none !important; } }
+
+.preview {
+  width: 420px; flex: none; border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0;
+  background: var(--bg);
+}
+@media (max-width: 1380px) { .preview { width: 340px; } }
+.pv-top { height: 36px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); }
+.pv-top .crumb { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pv-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.pv-title { font-size: 16px; font-weight: 600; line-height: 1.3; }
+.pv-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; color: var(--muted-fg); }
+.pv-meta b { color: var(--fg); font-weight: 600; }
+.kv { display: grid; grid-template-columns: 92px 1fr; gap: 8px 8px; align-items: center; }
+.kv .k { color: var(--muted-fg); font-size: 12px; }
+.vrow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.vrow .item { display: inline-flex; align-items: center; gap: 6px; }
+.clk { cursor: pointer; }
+.clk:hover { border-color: var(--muted-fg); }
+.lnk { color: var(--primary); font-weight: 500; cursor: pointer; }
+.lnk:hover { text-decoration: underline; }
+.add-btn {
+  width: 18px; height: 18px; border: 1px dashed var(--border); border-radius: 999px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--muted-fg);
+}
+.add-btn:hover { color: var(--fg); border-color: var(--muted-fg); }
+.pbar { width: 90px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.pbar i { display: block; height: 100%; background: var(--success); }
+.pv-sec { font-size: 11px; font-weight: 600; color: var(--muted-fg); text-transform: uppercase; }
+.pv-md { padding: 0; }
+.pv-comments { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.pv .md, .pv-comments .md { padding: 8px 10px; }
+.pv-comments .md { line-height: 1.45; }
+.pv-foot { flex: none; border-top: 1px solid var(--border); padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--muted); }
+.pv-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.reply { display: flex; gap: 6px; }
+.reply input {
+  flex: 1; min-width: 0; height: 26px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg);
+  padding: 0 8px; font: inherit; outline: none;
+}
+.reply input:focus { border-color: var(--primary); }
+
+.board-wrap { flex: 1; min-width: 0; display: flex; }
+.board { flex: 1; min-width: 0; display: flex; gap: 10px; padding: 10px 12px; overflow-x: auto; overflow-y: hidden; }
+.bcol {
+  flex: 1 0 210px; min-width: 210px; display: flex; flex-direction: column; min-height: 0; background: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.bcol.over { border-color: var(--primary); background: var(--list-active); }
+.bcol-h { height: 30px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 12px; font-weight: 600; }
+.bcol-b { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.empty-col { padding: 10px 4px; font-size: 12px; text-align: center; }
+.card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column;
+  gap: 6px; cursor: pointer; flex: none;
+}
+.card:hover { background: var(--list-hover); }
+.card.selected { border-color: var(--primary); background: var(--list-active); }
+.card.dragging { opacity: 0.4; }
+.card-top { display: flex; align-items: center; gap: 6px; }
+.card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; }
+.card.unread .card-title { font-weight: 600; }
+.card-labels { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow: hidden; }
+.card-foot { display: flex; align-items: center; gap: 8px; }
+.card-foot .cm { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted-fg); }
+
+.menu { max-height: min(360px, 70vh); overflow-y: auto; }
+.menu .ck { width: 14px; display: inline-flex; flex: none; }
+.toast {
+  position: absolute; bottom: 34px; left: 50%; transform: translateX(-50%); z-index: 50; background: var(--popover);
+  border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); padding: 6px 12px; font-size: 12px;
+}
+.area-input {
+  display: block; width: 100%; min-height: 72px; resize: vertical; background: var(--bg); color: var(--fg); border: none; outline: none;
+  padding: 10px 12px; font: inherit;
+}
+.subrow { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+.subrow:last-child { border-bottom: none; }
+.sub-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+</style></head>
+<body>
+<div id="strip"></div>
+<div class="window" id="app"></div>
+<script src="shared/data.js"></script><script src="shared/chrome.js"></script>
+<script>
+  const A = Argon;
+  const icon = A.icon;
+  const app = document.getElementById("app");
+
+  const STATUSES = ["Triagem", "A fazer", "Em andamento", "Em review", "Concluído"];
+  const STATUS_COLOR = {
+    "Triagem": "var(--warning)", "A fazer": "var(--muted-fg)", "Em andamento": "var(--primary)",
+    "Em review": "var(--magenta)", "Concluído": "var(--success)",
+  };
+  const PRIO_COLOR = { P1: "var(--danger)", P2: "var(--warning)", P3: "var(--muted-fg)" };
+  const GROUP_LABELS = { repo: "Repo", milestone: "Milestone", status: "Status do projeto", type: "Tipo", none: "Nenhum" };
+  const SUB_TITLES = ["Levantar requisitos", "Desenhar a solução", "Implementar o caminho principal", "Cobrir com testes", "Validar em staging", "Documentar", "Comunicar a equipe"];
+  const PR_TITLES = { inbox: "Inbox", needs: "Needs you", your: "Your PRs", waiting: "Waiting on others", changes: "Changes requested", ready: "Ready to merge", done: "Already done" };
+  const PR_TESTS = {
+    inbox: () => true,
+    needs: (p) => !!p.needsYou,
+    your: (p) => p.author === A.ME && p.state === "open",
+    waiting: (p) => p.author === A.ME && p.state === "open" && p.review === "pending",
+    changes: () => false,
+    ready: (p) => p.state === "open" && p.review === "approved" && p.checks === "success",
+    done: (p) => p.state === "merged",
+  };
+
+  const VIEWS = [
+    { id: "assigned", icon: "circle-dot", label: "Atribuídas a você", accent: true, test: (i) => i.state === "open" && i.assignees.includes(A.ME) },
+    { id: "mentioned", icon: "at-sign", label: "Mencionado", test: (i) => i.state === "open" && i.why === "mentioned" },
+    { id: "created", icon: "pencil", label: "Criadas por você", test: (i) => i.state === "open" && i.author === A.ME },
+    { id: "triage", icon: "user-x", label: "Sem responsável", test: (i) => i.state === "open" && i.assignees.length === 0 },
+    { id: "closed", icon: "circle-check", label: "Fechadas recentemente", test: (i) => i.state === "closed" },
+  ];
+
+  const issues = A.ISSUES.map((i) => ({ ...i, labels: [...i.labels], assignees: [...i.assignees], linked: [...i.linked], extra: [] }));
+
+  const state = {
+    view: "assigned", mode: "list", group: "repo", labels: new Set(), query: "", selected: null, pvOpen: false,
+    tab: "issues", tabs: [], ptab: "conv", prView: "inbox", inboxSel: null, menu: null, drafts: {}, toast: null,
+    dragging: null, reveal: false,
+  };
+  let toastTimer = null;
+
+  const byNum = (n) => issues.find((i) => i.number === n);
+  const viewDef = (id) => VIEWS.find((v) => v.id === id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const chev = () => icon("chevron-down", "xs");
+
+  function matchQuery(i) {
+    const q = state.query.trim().toLowerCase();
+    if (!q) return true;
+    const hay = [i.title, i.repo, "#" + i.number, ...i.labels.map((k) => A.LABELS[k].name)].join(" ").toLowerCase();
+    return hay.includes(q);
+  }
+
+  function visible() {
+    const v = viewDef(state.view);
+    return issues
+      .filter((i) => v.test(i) && matchQuery(i) && (!state.labels.size || i.labels.some((l) => state.labels.has(l))))
+      .sort((a, b) => a.upd - b.upd);
+  }
+
+  function groupKey(i) {
+    if (state.group === "repo") return i.repo;
+    if (state.group === "milestone") return i.milestone || "Sem milestone";
+    if (state.group === "status") return i.status;
+    if (state.group === "type") return i.type;
+    return "";
+  }
+
+  function buildGroups(list) {
+    const map = new Map();
+    list.forEach((i) => {
+      const k = groupKey(i);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(i);
+    });
+    const keys = [...map.keys()].sort((a, b) => {
+      if (state.group === "status") return STATUSES.indexOf(a) - STATUSES.indexOf(b);
+      if (a === "Sem milestone") return 1;
+      if (b === "Sem milestone") return -1;
+      return a.localeCompare(b);
+    });
+    return keys.map((k) => ({ key: k, items: map.get(k) }));
+  }
+
+  const columns = (list) => STATUSES.map((s) => ({ key: s, items: list.filter((i) => i.status === s) }));
+  const flat = () => (state.mode === "board" ? columns(visible()) : buildGroups(visible())).flatMap((g) => g.items);
+
+  function ensureSel() {
+    const f = flat();
+    const has = f.some((i) => i.number === state.selected);
+    if (state.mode === "list") {
+      if (!has) state.selected = f.length ? f[0].number : null;
+    } else if (!has) {
+      state.pvOpen = false;
+    }
+  }
+
+  function mutate(fn) {
+    const listMode = state.mode === "list";
+    const before = listMode ? flat() : [];
+    const idx = before.findIndex((i) => i.number === state.selected);
+    fn();
+    if (listMode) {
+      const after = flat();
+      if (after.length && !after.some((i) => i.number === state.selected)) {
+        state.selected = after[Math.min(Math.max(idx, 0), after.length - 1)].number;
+      }
+    }
+  }
+
+  function showToast(msg) {
+    state.toast = msg;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { state.toast = null; render(); }, 2400);
+  }
+
+  function seedComments(i) {
+    if (i.number === 318) {
+      return A.THREAD_318.items.filter((x) => x.t === "comment").slice(-2).map((c) => ({ who: c.who, ago: c.ago, html: c.html, isNew: !!c.isNew }));
+    }
+    if (!i.comments) return [];
+    const other = i.assignees.find((a) => a !== i.author) || (i.author === "marina-lopes" ? "julia-m" : "marina-lopes");
+    const taken = i.assignees.length > 0;
+    const text = {
+      Bug: ["Reproduzi de novo hoje em produção; anexei o log da requisição.", taken ? "Peguei para investigar. O primeiro passo é isolar o caso com um teste." : "Parece caber no próximo ciclo. Alguém consegue pegar para triar?"],
+      Feature: ["Isso destrava o fluxo manual que a operação faz hoje. Posso detalhar os critérios de aceite.", taken ? "Concordo com o escopo. Começo pelo caminho principal e abro o PR cedo." : "Faz sentido. Falta definir prioridade e milestone."],
+      Tarefa: ["Escopo fechado: sem mudança de comportamento para o usuário.", taken ? "Vou quebrar em sub-tarefas e atualizar aqui." : "Precisa de alguém com acesso ao repo para executar."],
+    }[i.type];
+    const first = { who: i.author, ago: Math.min(i.created, i.upd + 180), html: `<p>${text[0]}</p>`, isNew: false };
+    const second = { who: other, ago: i.upd, html: `<p>${text[1]}</p>`, isNew: false };
+    return i.comments === 1 ? [first] : [first, second];
+  }
+
+  const recent = (i) => seedComments(i).concat(i.extra).slice(-2);
+
+  function describe(i) {
+    if (i.number === 318) return A.THREAD_318.body;
+    const intro = {
+      Bug: "reportado em produção e reproduzido em staging. A causa ainda não está confirmada; o que já foi testado está nos comentários.",
+      Feature: "pedido para reduzir trabalho manual da operação e deixar o comportamento explícito. Critério de aceite: testes no caminho principal e nota no changelog.",
+      Tarefa: "escopo fechado e sem mudança visível para o usuário final. Entrega esperada: alteração no código, documentação atualizada e PR vinculado.",
+    }[i.type];
+    return `<p><strong>${i.title}</strong> — ${intro}</p>`;
+  }
+
+  function commentHtml(c) {
+    return `<div class="comment ${c.isNew ? "new" : ""}"><div class="comment-head">${A.avatar(c.who, 18)}<b>${c.who}</b>comentou ${c.ago ? A.ago(c.ago) : "agora"}${c.isNew ? '<span class="badge-new">novo</span>' : ""}</div><div class="md">${c.html}</div></div>`;
+  }
+
+  function groupTitle(k) {
+    if (state.group === "repo") return `<span class="mono">${k}</span>`;
+    if (state.group === "milestone") return `<span class="muted" style="display:inline-flex">${icon("milestone", "xs")}</span>${k}`;
+    if (state.group === "status") return `<span class="sdot" style="background:${STATUS_COLOR[k]}"></span>${k}`;
+    const s = A.typeStyle(k);
+    return `<span style="color:${s.color};display:inline-flex">${icon(s.icon, "xs")}</span>${k}`;
+  }
+
+  function rowHtml(i, flags) {
+    const ts = A.typeStyle(i.type);
+    const rowNote = flags.row ? ' data-note="4"' : "";
+    flags.row = false;
+    let prNote = "";
+    if (i.linked.length && flags.pr) { prNote = ' data-note="7"'; flags.pr = false; }
+    const sub = i.sub
+      ? `<span class="sub-bar"><i style="width:${Math.round((i.sub.done / i.sub.total) * 100)}%"></i></span><span class="mono muted" style="font-size:11px">${i.sub.done}/${i.sub.total}</span>`
+      : "";
+    const ms = i.milestone ? `<span class="tag" title="${i.milestone}">${icon("milestone", "xs")}<span class="truncate">${i.milestone}</span></span>` : "";
+    return `<div class="irow ${i.unread ? "unread" : ""} ${i.number === state.selected ? "selected" : ""}" data-issue="${i.number}"${rowNote}>
+      <span class="udot"></span>
+      <span class="ic">${A.stateIcon(A.issueState(i))}</span>
+      <span class="ic" style="color:${ts.color}" title="${i.type}">${icon(ts.icon, "sm")}</span>
+      <span class="mono muted c-num">#${i.number}</span>
+      <span class="title" title="${i.title}">${i.title}</span>
+      <span class="c c-labels">${A.labelChips(i.labels, 2)}</span>
+      <span class="c c-pr"${prNote}>${i.linked.length ? A.prChip(i.linked[0]) : ""}</span>
+      <span class="c c-sub">${sub}</span>
+      <span class="c c-ms">${ms}</span>
+      <span class="c c-asg">${A.stack(i.assignees, 16)}</span>
+      <span class="c c-com">${icon("message-square", "xs")}${i.comments}</span>
+      <span class="c c-age mono muted" title="aberta ${A.ago(i.created)}">${A.age(i.created)}</span>
+    </div>`;
+  }
+
+  function cardHtml(i) {
+    return `<div class="card ${i.unread ? "unread" : ""} ${i.number === state.selected && state.pvOpen ? "selected" : ""}" draggable="true" data-card data-issue="${i.number}">
+      <div class="card-top"><span class="mono muted" style="font-size:11px">${A.repoShort(i.repo)} #${i.number}</span><span class="flex1"></span>${i.unread ? '<span class="udot" style="background:var(--primary)"></span>' : ""}</div>
+      <div class="card-title">${i.title}</div>
+      ${i.labels.length ? `<div class="card-labels">${A.labelChips(i.labels, 2)}</div>` : ""}
+      <div class="card-foot">${i.assignees.length ? A.stack(i.assignees, 16) : `<span class="muted" style="display:inline-flex" title="Sem responsável">${icon("user-x", "xs")}</span>`}<span class="flex1"></span>${i.linked.length ? A.prChip(i.linked[0]) : ""}<span class="cm">${icon("message-square", "xs")}${i.comments}</span></div>
+    </div>`;
+  }
+
+  function previewHtml(i, board) {
+    const [owner, repo] = i.repo.split("/");
+    const mine = i.assignees.includes(A.ME);
+    const closed = i.state === "closed";
+    const n = i.number;
+    const asg = i.assignees.length
+      ? `<span class="vrow">${i.assignees.map((a) => `<span class="item">${A.avatar(a, 18)}<span>${a}</span></span>`).join("")}</span>`
+      : `<span class="vrow"><span class="muted">ninguém —</span><button class="lnk" data-act="assign-me" data-num="${n}">Atribuir a mim</button></span>`;
+    const prio = i.priority
+      ? `<span class="tag" style="color:${PRIO_COLOR[i.priority]}" title="Prioridade">${icon("flag", "xs")}${i.priority}</span>`
+      : `<span class="muted">sem prioridade</span>`;
+    const pct = i.sub ? Math.round((i.sub.done / i.sub.total) * 100) : 0;
+    const comments = recent(i);
+    return `<aside class="preview pv" data-note="5">
+      <div class="pv-top">
+        <div class="crumb mono">${owner}<span class="sep">/</span>${repo}<span class="sep">/</span><b>#${n}</b></div>
+        <button class="btn ghost small" data-act="open-tab" data-num="${n}">${icon("arrow-up-right", "xs")}Abrir em aba</button>
+        <button class="btn ghost small">${icon("external-link", "xs")}GitHub</button>
+        ${board ? `<button class="btn ghost small only" data-act="close-pv" title="Fechar preview (Esc)">${icon("x", "xs")}</button>` : ""}
+      </div>
+      <div class="scroll" data-scroll="pv:${n}"><div class="pv-body">
+        <h2 class="pv-title">${i.title}</h2>
+        <div class="pv-meta">${A.pill(A.issueState(i))}${A.typeTag(i.type)}${A.avatar(i.author, 18)}<b>${i.author}</b><span>· aberta ${A.ago(i.created)}</span></div>
+        <div class="kv">
+          <span class="k">Responsáveis</span>${asg}
+          <span class="k">Labels</span><span class="vrow">${A.labelChips(i.labels)}<button class="add-btn" data-menu="lbl" data-num="${n}" title="Adicionar label">${icon("plus", "xs")}</button></span>
+          <span class="k">Milestone</span><span class="vrow clk" data-menu="ms" data-num="${n}">${i.milestone ? `<span class="tag">${icon("milestone", "xs")}${i.milestone}</span>` : '<span class="muted">sem milestone</span>'}</span>
+          <span class="k">Projeto</span><span class="vrow"><span class="tag clk" data-menu="status" data-num="${n}" style="color:var(--fg)" title="Status do projeto"><i class="sdot" style="background:${STATUS_COLOR[i.status]}"></i>${i.status}</span>${prio}</span>
+          <span class="k">PRs vinculados</span><span class="vrow">${i.linked.length ? i.linked.map((p) => A.prChip(p)).join("") : '<span class="muted">nenhum</span>'}</span>
+          <span class="k">Sub-issues</span>${i.sub ? `<span class="vrow"><span class="pbar"><i style="width:${pct}%"></i></span><span class="mono">${i.sub.done}/${i.sub.total}</span></span>` : '<span class="muted">nenhuma</span>'}
+        </div>
+        <div><div class="pv-sec">Descrição</div><div class="md pv-md" style="margin-top:6px">${describe(i)}</div></div>
+        <div><div class="pv-sec">Últimos comentários</div><div class="pv-comments">${comments.length ? comments.map(commentHtml).join("") : '<span class="muted">Sem comentários.</span>'}</div></div>
+      </div></div>
+      <div class="pv-foot">
+        <div class="pv-actions">
+          <button class="btn outline small" data-act="assign-me" data-num="${n}">${icon(mine ? "user-x" : "user-plus", "xs")}${mine ? "Desatribuir" : "Atribuir a mim"}</button>
+          <button class="btn outline small" data-menu="lbl" data-num="${n}" data-up="1">${icon("tag", "xs")}Labels ${chev()}</button>
+          <button class="btn outline small" data-menu="ms" data-num="${n}" data-up="1">${icon("milestone", "xs")}Milestone ${chev()}</button>
+          ${closed
+            ? `<button class="btn outline small" data-act="reopen" data-num="${n}">${icon("circle-dot", "xs")}Reabrir</button>`
+            : `<button class="btn outline small" data-menu="close" data-num="${n}" data-up="1">${icon("circle-check", "xs")}Fechar ${chev()}</button>`}
+        </div>
+        <div class="reply"><input data-keep="r${n}" placeholder="Responder…" value="${esc(state.drafts["r" + n] || "")}"><button class="btn primary small" data-act="send" data-num="${n}" data-src="r${n}">Enviar</button></div>
+      </div>
+    </aside>`;
+  }
+
+  function listHeader(title, count, withControls) {
+    if (!withControls) return `<div class="list-header"><span class="lh-title">${title}</span><span class="muted">${count}</span></div>`;
+    const board = state.mode === "board";
+    const nl = state.labels.size;
+    return `<div class="list-header">
+      <span class="lh-title">${title}</span><span class="muted">${count}</span>
+      <span class="seg" style="margin-left:8px">
+        <button data-mode="list" class="${board ? "" : "on"}">${icon("list", "xs")}Lista</button>
+        <button data-mode="board" class="${board ? "on" : ""}">${icon("square-kanban", "xs")}Quadro</button>
+      </span>
+      <span class="ctl" data-note="3">
+        ${board
+          ? `<span class="chip-filter" style="opacity:.55;cursor:default" title="O quadro agrupa por Status do projeto">Agrupar: Status ${chev()}</span>`
+          : `<span class="chip-filter" data-menu="group">Agrupar: ${GROUP_LABELS[state.group]} ${chev()}</span>`}
+        <span class="chip-filter ${nl ? "on" : ""}" data-menu="lblf">${icon("tag", "xs")}Labels${nl ? ` · ${nl}` : ""} ${chev()}</span>
+      </span>
+      <span class="flex1"></span>
+      <label class="input" style="width:260px">${icon("search", "xs")}<input data-keep="filter" placeholder="Filtrar por título, repo, label…" value="${esc(state.query)}"><span class="kbd">/</span></label>
+    </div>`;
+  }
+
+  function issuesPane() {
+    const v = viewDef(state.view);
+    const list = visible();
+    const sel = byNum(state.selected);
+    let body;
+    if (state.mode === "list") {
+      const flags = { row: true, pr: true };
+      let inner;
+      if (!list.length) {
+        inner = `<div class="empty">Nenhuma issue nesta visão${state.query || state.labels.size ? ". Ajuste o filtro." : "."}</div>`;
+      } else {
+        inner = buildGroups(list)
+          .map((g) => (state.group === "none" ? "" : A.sectionHeader(groupTitle(g.key), g.items.length)) + g.items.map((i) => rowHtml(i, flags)).join(""))
+          .join("");
+      }
+      body = `<div class="listwrap"><div class="scroll" data-scroll="list:${state.view}:${state.group}">${inner}</div></div>`
+        + (sel ? previewHtml(sel, false) : '<aside class="preview"><div class="empty">Selecione uma issue</div></aside>');
+    } else {
+      const cols = columns(list).map((c) => `<div class="bcol" data-col="${c.key}">
+          <div class="bcol-h"><span class="sdot" style="background:${STATUS_COLOR[c.key]}"></span>${c.key}<span class="muted" style="font-weight:400">${c.items.length}</span></div>
+          <div class="bcol-b" data-scroll="col:${c.key}">${c.items.map(cardHtml).join("") || '<div class="muted empty-col">Vazio</div>'}</div></div>`).join("");
+      body = `<div class="board-wrap" data-note="6"><div class="board" data-scroll="board">${cols}</div></div>`
+        + (state.pvOpen && sel ? previewHtml(sel, true) : "");
+    }
+    return `<div class="pane">${listHeader(v.label, list.length, true)}<div class="split">${body}</div></div>`;
+  }
+
+  function inboxPane() {
+    const test = PR_TESTS[state.prView];
+    const list = A.PRS.filter(test);
+    const rows = (arr) => arr.map((p) => A.prRow(p, { selected: p.number === state.inboxSel })).join("");
+    let inner;
+    if (!list.length) {
+      inner = '<div class="empty">Nada por aqui.</div>';
+    } else if (state.prView === "inbox") {
+      const needs = list.filter((p) => p.needsYou);
+      const rest = list.filter((p) => !p.needsYou);
+      inner = A.sectionHeader("Needs you", needs.length) + rows(needs) + A.sectionHeader("Acompanhando", rest.length) + rows(rest);
+    } else {
+      inner = A.sectionHeader(PR_TITLES[state.prView], list.length) + rows(list);
+    }
+    return `<div class="pane">${listHeader(PR_TITLES[state.prView], list.length, false)}<div class="scroll" data-scroll="inbox:${state.prView}">${inner}</div></div>`;
+  }
+
+  function issueTabPane(i) {
+    const n = i.number;
+    const mine = i.assignees.includes(A.ME);
+    const extra = (mine ? "" : `<button class="btn outline small" data-act="assign-me" data-num="${n}">${icon("user-plus", "xs")}Atribuir a mim</button>`)
+      + (i.state === "closed"
+        ? `<button class="btn outline small" data-act="reopen" data-num="${n}">${icon("circle-dot", "xs")}Reabrir</button>`
+        : `<button class="btn outline small" data-menu="close" data-num="${n}">${icon("circle-check", "xs")}Fechar ${chev()}</button>`);
+    const tabs = [["conv", "Conversa", i.comments], ["prs", "PRs vinculados", i.linked.length], ["sub", "Sub-issues", i.sub ? i.sub.total : 0]]
+      .map(([id, label, count]) => `<div class="ptab ${state.ptab === id ? "active" : ""}" data-ptab="${id}">${label}<span class="n">${count}</span></div>`)
+      .join("");
+    let body;
+    if (state.ptab === "prs") {
+      body = i.linked.length ? i.linked.map((p) => A.prRow(A.findPr(p), { selected: p === state.inboxSel })).join("") : '<div class="empty">Nenhum PR vinculado.</div>';
+    } else if (state.ptab === "sub") {
+      if (!i.sub) {
+        body = '<div class="empty">Esta issue não tem sub-issues.</div>';
+      } else {
+        const rows = SUB_TITLES.slice(0, i.sub.total).map((t, ix) => {
+          const done = ix < i.sub.done;
+          return `<div class="subrow">${done ? `<span style="color:var(--magenta);display:inline-flex">${icon("circle-check", "sm")}</span>` : `<span style="color:var(--success);display:inline-flex">${icon("circle-dot", "sm")}</span>`}<span class="flex1 truncate ${done ? "muted" : ""}">${t}</span><span class="mono muted">${ix + 1}/${i.sub.total}</span></div>`;
+        }).join("");
+        body = `<div class="thread"><div class="sub-head"><span class="pbar" style="width:140px"><i style="width:${Math.round((i.sub.done / i.sub.total) * 100)}%"></i></span><span class="muted">${i.sub.done} de ${i.sub.total} concluídas</span></div><div class="comment">${rows}</div></div>`;
+      }
+    } else if (n === 318) {
+      const extras = i.extra.map(commentHtml).join("");
+      body = A.thread318({ xrefNote: 0 }).replace('<div class="composer">', extras + '<div class="composer">');
+    } else {
+      const seed = seedComments(i).concat(i.extra);
+      const hidden = Math.max(0, i.comments - seed.length);
+      body = `<div class="thread">
+        <div class="comment"><div class="comment-head">${A.avatar(i.author, 18)}<b>${i.author}</b>abriu esta issue ${A.ago(i.created)}</div><div class="md">${describe(i)}</div></div>
+        ${hidden ? `<div class="event">${icon("ellipsis", "xs")}${hidden} comentários anteriores</div>` : ""}
+        ${seed.map(commentHtml).join("")}
+        <div class="composer"><textarea class="area-input" data-keep="c${n}" placeholder="Comentar… (markdown)">${esc(state.drafts["c" + n] || "")}</textarea><div class="foot">
+          ${i.state === "open" ? `<button class="btn ghost small" data-act="close-done" data-num="${n}">Fechar como concluída</button>` : ""}<button class="btn primary small" data-act="send" data-num="${n}" data-src="c${n}">Comentar</button></div></div>
+      </div>`;
+    }
+    return `<div class="pane"><div class="detail">
+      ${A.issueHeader(i, { linkedNote: 7, actions: A.issueActions(i, extra) })}
+      <div class="ptabs">${tabs}</div>
+      <div class="d-body" data-scroll="body:${n}:${state.ptab}">${body}</div>
+    </div></div>`;
+  }
+
+  function menuHtml() {
+    const m = state.menu;
+    if (!m) return "";
+    const ck = (on) => `<span class="ck">${on ? icon("check", "xs") : ""}</span>`;
+    const issue = m.num ? byNum(m.num) : null;
+    let items = "";
+    if (m.kind === "group") {
+      items = '<div class="mtitle">Agrupar por</div>' + Object.entries(GROUP_LABELS).map(([k, l]) => `<div class="mi" data-pick="group:${k}">${ck(state.group === k)}${l}</div>`).join("");
+    } else if (m.kind === "lblf") {
+      items = '<div class="mtitle">Filtrar por label</div>'
+        + Object.entries(A.LABELS).map(([k]) => `<div class="mi" data-pick="lblf:${k}">${ck(state.labels.has(k))}${A.labelChip(k)}</div>`).join("")
+        + (state.labels.size ? `<div class="msep"></div><div class="mi" data-pick="lblclr:x">${ck(false)}Limpar filtro</div>` : "");
+    } else if (m.kind === "lbl" && issue) {
+      items = `<div class="mtitle">Labels de #${issue.number}</div>` + Object.entries(A.LABELS).map(([k]) => `<div class="mi" data-pick="lbl:${k}">${ck(issue.labels.includes(k))}${A.labelChip(k)}</div>`).join("");
+    } else if (m.kind === "ms" && issue) {
+      const all = [...new Set(issues.map((x) => x.milestone).filter(Boolean))].sort();
+      items = `<div class="mtitle">Milestone de #${issue.number}</div>` + all.map((x) => `<div class="mi" data-pick="ms:${x}">${ck(issue.milestone === x)}${icon("milestone", "sm")}${x}</div>`).join("")
+        + `<div class="msep"></div><div class="mi" data-pick="ms:__none">${ck(!issue.milestone)}Sem milestone</div>`;
+    } else if (m.kind === "status" && issue) {
+      items = '<div class="mtitle">Status do projeto</div>' + STATUSES.map((s) => `<div class="mi" data-pick="status:${s}">${ck(issue.status === s)}<i class="sdot" style="background:${STATUS_COLOR[s]}"></i>${s}</div>`).join("");
+    } else if (m.kind === "close" && issue) {
+      items = `<div class="mi" data-pick="close:completed"><span style="color:var(--magenta);display:inline-flex">${icon("circle-check", "sm")}</span>Concluída</div>
+        <div class="mi" data-pick="close:not_planned"><span style="color:var(--muted-fg);display:inline-flex">${icon("circle-slash", "sm")}</span>Não planejada</div>`;
+    }
+    const pos = m.up ? `left:${m.left}px;bottom:${m.bottom}px` : `left:${m.left}px;top:${m.top}px`;
+    return `<div class="menu" style="${pos}">${items}</div>`;
+  }
+
+  function openMenu(btn) {
+    const r = btn.getBoundingClientRect();
+    const w = app.getBoundingClientRect();
+    state.menu = {
+      kind: btn.dataset.menu, num: btn.dataset.num ? +btn.dataset.num : null, up: btn.dataset.up === "1",
+      left: Math.max(4, Math.min(r.left - w.left, w.width - 250)), top: r.bottom - w.top + 4, bottom: w.bottom - r.top + 4,
+    };
+  }
+
+  function toggleSet(set, v) { if (set.has(v)) set.delete(v); else set.add(v); }
+
+  function doPick(str) {
+    const ix = str.indexOf(":");
+    const k = str.slice(0, ix);
+    const v = str.slice(ix + 1);
+    const num = state.menu ? state.menu.num : null;
+    const i = num ? byNum(num) : null;
+    if (k === "group") { state.group = v; state.menu = null; }
+    else if (k === "lblf") toggleSet(state.labels, v);
+    else if (k === "lblclr") { state.labels.clear(); state.menu = null; }
+    else if (k === "lbl" && i) {
+      mutate(() => { i.labels = i.labels.includes(v) ? i.labels.filter((x) => x !== v) : [...i.labels, v]; });
+      showToast("Labels atualizadas · gravado no GitHub (mock)");
+    } else if (k === "ms" && i) {
+      mutate(() => { i.milestone = v === "__none" ? null : v; });
+      state.menu = null;
+      showToast("Milestone atualizado · gravado no GitHub (mock)");
+    } else if (k === "status" && i) {
+      mutate(() => { i.status = v; });
+      state.menu = null;
+      showToast(`#${i.number} movida para ${v} · gravado no Project (mock)`);
+    } else if (k === "close" && i) {
+      closeIssue(i, v);
+      state.menu = null;
+    }
+  }
+
+  function closeIssue(i, reason) {
+    mutate(() => { i.state = "closed"; i.stateReason = reason; i.status = "Concluído"; });
+    showToast(`#${i.number} fechada como ${reason === "completed" ? "concluída" : "não planejada"} (mock)`);
+  }
+
+  function openTab(n) {
+    if (!state.tabs.includes(n)) state.tabs.push(n);
+    state.tab = "issue:" + n;
+    state.selected = n;
+    state.ptab = "conv";
+  }
+
+  function closeTab(id) {
+    const n = +id.split(":")[1];
+    state.tabs = state.tabs.filter((x) => x !== n);
+    if (state.tab === id) state.tab = "issues";
+  }
+
+  function goNav(id) {
+    if (id.startsWith("iv-")) {
+      state.view = id.slice(3);
+      state.tab = "issues";
+      state.query = "";
+      return true;
+    }
+    if (PR_TITLES[id]) {
+      state.prView = id;
+      state.tab = "inbox";
+      return true;
+    }
+    return false;
+  }
+
+  function send(n, key) {
+    const text = (state.drafts[key] || "").trim();
+    if (!text) return;
+    const i = byNum(n);
+    i.extra.push({ who: A.ME, ago: 0, html: `<p>${esc(text)}</p>`, isNew: false });
+    i.comments++;
+    state.drafts[key] = "";
+    showToast("Comentário publicado (mock)");
+  }
+
+  function move(d) {
+    const f = flat();
+    if (!f.length) return;
+    let idx = f.findIndex((i) => i.number === state.selected);
+    idx = idx < 0 ? (d > 0 ? 0 : f.length - 1) : Math.min(f.length - 1, Math.max(0, idx + d));
+    state.selected = f[idx].number;
+    if (state.mode === "board") state.pvOpen = true;
+    state.reveal = true;
+    render();
+  }
+
+  function snapshot() {
+    const scr = {};
+    app.querySelectorAll("[data-scroll]").forEach((el) => { scr[el.dataset.scroll] = [el.scrollTop, el.scrollLeft]; });
+    const ae = document.activeElement;
+    let foc = null;
+    if (ae && ae.dataset && ae.dataset.keep) foc = { k: ae.dataset.keep, s: ae.selectionStart, e: ae.selectionEnd };
+    return { scr, foc };
+  }
+
+  function restore(ui) {
+    app.querySelectorAll("[data-scroll]").forEach((el) => {
+      const s = ui.scr[el.dataset.scroll];
+      if (s) { el.scrollTop = s[0]; el.scrollLeft = s[1]; }
+    });
+    if (ui.foc) {
+      const el = app.querySelector(`[data-keep="${ui.foc.k}"]`);
+      if (el) {
+        el.focus();
+        try { el.setSelectionRange(ui.foc.s, ui.foc.e); } catch (e) {}
+      }
+    }
+    if (state.reveal) {
+      state.reveal = false;
+      const el = app.querySelector(".irow.selected, .card.selected");
+      if (el) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  function issuesGroup() {
+    return {
+      title: "Issues", isNew: true, note: 1,
+      items: VIEWS.map((v) => ({
+        id: "iv-" + v.id, icon: v.icon, label: v.label, count: issues.filter(v.test).length, accent: v.accent,
+        active: state.tab !== "inbox" && state.view === v.id,
+      })),
+    };
+  }
+
+  function render() {
+    ensureSel();
+    const ui = snapshot();
+    const pr = state.tab === "inbox" ? state.prView : null;
+    const groups = [A.GROUPS.inbox(pr), A.GROUPS.agents(), issuesGroup(), A.GROUPS.yourPrs(pr), A.GROUPS.reviewed(pr), A.GROUPS.orgs()];
+    const tabs = [
+      { id: "inbox", title: "Inbox", icon: "inbox", active: state.tab === "inbox", closable: false },
+      { id: "issues", title: "Issues", icon: "circle-dot", active: state.tab === "issues", closable: false, note: 2 },
+      ...state.tabs.map((n) => {
+        const i = byNum(n);
+        const s = A.issueState(i);
+        const t = i.title.length > 14 ? i.title.slice(0, 14).trimEnd() + "…" : i.title;
+        return { id: "issue:" + n, title: `#${n} ${t}`, icon: s.icon, iconColor: s.color, active: state.tab === "issue:" + n };
+      }),
+    ];
+    let pane;
+    if (state.tab === "inbox") pane = inboxPane();
+    else if (state.tab === "issues") pane = issuesPane();
+    else pane = issueTabPane(byNum(+state.tab.split(":")[1]));
+    const mine = issues.filter(viewDef("assigned").test).length;
+    app.innerHTML = A.titlebar({ search: "Buscar PRs, issues, repos, comandos…" })
+      + `<div class="workspace">${A.dockLeft(groups)}<main class="center">${A.tabbar(tabs)}${pane}</main></div>`
+      + A.statusbar({ extra: `<span class="sb-btn">${icon("circle-dot", "xs")} ${mine} issues atribuídas</span>` })
+      + menuHtml()
+      + (state.toast ? `<div class="toast">${state.toast}</div>` : "");
+    restore(ui);
+  }
+
+  app.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t.closest("input, textarea")) return;
+    const pick = t.closest("[data-pick]");
+    if (pick) { doPick(pick.dataset.pick); render(); return; }
+    if (t.closest(".menu")) return;
+    const hadMenu = state.menu;
+    state.menu = null;
+    const mb = t.closest("[data-menu]");
+    if (mb) {
+      const num = mb.dataset.num ? +mb.dataset.num : null;
+      const same = hadMenu && hadMenu.kind === mb.dataset.menu && hadMenu.num === num;
+      if (!same) openMenu(mb);
+      render();
+      return;
+    }
+    const x = t.closest(".tab .x");
+    if (x) { closeTab(x.closest("[data-tab]").dataset.tab); render(); return; }
+    const tab = t.closest("[data-tab]");
+    if (tab) {
+      state.tab = tab.dataset.tab;
+      if (state.tab.startsWith("issue:")) state.ptab = "conv";
+      render();
+      return;
+    }
+    const nav = t.closest("[data-nav]");
+    if (nav && goNav(nav.dataset.nav)) { render(); return; }
+    const mode = t.closest("[data-mode]");
+    if (mode) { state.mode = mode.dataset.mode; state.pvOpen = false; render(); return; }
+    const pt = t.closest("[data-ptab]");
+    if (pt) { state.ptab = pt.dataset.ptab; render(); return; }
+    const act = t.closest("[data-act]");
+    if (act) {
+      const n = +act.dataset.num;
+      const i = byNum(n);
+      const a = act.dataset.act;
+      if (a === "assign-me" && i) {
+        const mine = i.assignees.includes(A.ME);
+        mutate(() => { i.assignees = mine ? i.assignees.filter((x) => x !== A.ME) : [...i.assignees, A.ME]; });
+        showToast(mine ? `#${n} desatribuída (mock)` : `#${n} atribuída a você (mock)`);
+      } else if (a === "open-tab") openTab(n);
+      else if (a === "reopen" && i) {
+        mutate(() => { i.state = "open"; i.stateReason = undefined; i.status = "A fazer"; });
+        showToast(`#${n} reaberta (mock)`);
+      } else if (a === "close-done" && i) closeIssue(i, "completed");
+      else if (a === "send") send(n, act.dataset.src);
+      else if (a === "close-pv") state.pvOpen = false;
+      render();
+      return;
+    }
+    const it = t.closest("[data-issue]");
+    if (it) {
+      const n = +it.dataset.issue;
+      state.selected = n;
+      if (state.mode === "board") state.pvOpen = true;
+      if (e.detail >= 2) openTab(n);
+      render();
+      return;
+    }
+    const prRow = t.closest("[data-open]");
+    if (prRow && prRow.dataset.open.startsWith("pr:")) { state.inboxSel = +prRow.dataset.open.slice(3); render(); return; }
+    if (hadMenu) render();
+  });
+
+  app.addEventListener("input", (e) => {
+    const k = e.target.dataset && e.target.dataset.keep;
+    if (!k) return;
+    if (k === "filter") { state.query = e.target.value; render(); }
+    else state.drafts[k] = e.target.value;
+  });
+
+  app.addEventListener("dragstart", (e) => {
+    const c = e.target.closest && e.target.closest("[data-card]");
+    if (!c) return;
+    state.dragging = +c.dataset.issue;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(state.dragging));
+    c.classList.add("dragging");
+  });
+  app.addEventListener("dragover", (e) => {
+    const col = e.target.closest && e.target.closest("[data-col]");
+    if (!col || state.dragging == null) return;
+    e.preventDefault();
+    app.querySelectorAll(".bcol.over").forEach((c) => { if (c !== col) c.classList.remove("over"); });
+    col.classList.add("over");
+  });
+  app.addEventListener("drop", (e) => {
+    const col = e.target.closest && e.target.closest("[data-col]");
+    if (!col || state.dragging == null) return;
+    e.preventDefault();
+    const i = byNum(state.dragging);
+    state.dragging = null;
+    if (i.status !== col.dataset.col) {
+      i.status = col.dataset.col;
+      showToast(`#${i.number} movida para ${i.status} · gravado no Project (mock)`);
+    }
+    render();
+  });
+  app.addEventListener("dragend", () => {
+    state.dragging = null;
+    app.querySelectorAll(".over, .dragging").forEach((el) => el.classList.remove("over", "dragging"));
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
+    if (typing) {
+      if (e.key === "Escape") t.blur();
+      else if (e.key === "Enter" && !e.shiftKey && t.dataset.keep && t.dataset.keep[0] === "r") {
+        e.preventDefault();
+        send(+t.dataset.keep.slice(1), t.dataset.keep);
+        render();
+      }
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "Escape") {
+      if (state.menu) state.menu = null;
+      else if (state.tab.startsWith("issue:")) state.tab = "issues";
+      else if (state.tab === "issues" && state.mode === "board" && state.pvOpen) state.pvOpen = false;
+      else return;
+      render();
+      return;
+    }
+    if (state.tab !== "issues") return;
+    if (e.key === "/") {
+      e.preventDefault();
+      const f = app.querySelector('[data-keep="filter"]');
+      if (f) f.focus();
+      return;
+    }
+    if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Enter" && state.selected != null && (state.mode === "list" || state.pvOpen)) { openTab(state.selected); render(); }
+  });
+
+  A.mountStrip({
+    tag: "Proposta B",
+    title: "Issues em espaço próprio",
+    desc: "Aba e grupo próprios, lista densa com preview e quadro — feita para triagem.",
+    lead: "Issues não entram na inbox de PRs. Ganham uma área própria, pensada para triar e planejar: agrupar, rotular, atribuir e fechar sem sair da lista.",
+    notes: [
+      "Grupo ISSUES na sidebar, separado dos PRs. 'Sem responsável' é a fila de triagem das orgs rastreadas.",
+      "Issues ganham um item próprio no centro (aba 'Issues'), como 'Agentes' já tem.",
+      "Agrupar por repo, milestone, status ou tipo, e filtrar por label: em issue o que pesa é label, responsável e milestone, não CI nem diff.",
+      "Linha densa de uma linha (34px): cabem quase o dobro de itens da inbox de PRs.",
+      "Preview à direita para ler e triar sem abrir aba. j/k navega, Enter abre em aba.",
+      "Modo Quadro pelo campo Status do GitHub Projects. Mover o cartão grava no Project.",
+      "PR vinculado aparece como chip com estado e CI.",
+    ],
+    pros: [
+      "Lista feita para issue: labels, responsável, milestone e status na mesma linha.",
+      "Triagem rápida com preview e teclado, sem abrir aba por item.",
+      "Não aumenta o ruído da inbox de PRs.",
+      "Quadro serve quem já organiza o trabalho no GitHub Projects.",
+    ],
+    cons: [
+      "Vira um segundo lugar para checar: 'Needs you' continua só com PRs.",
+      "Mais tela para construir (tabela, preview, quadro) e mais escritas no GitHub (labels, milestone, status).",
+      "Status e prioridade vêm do GitHub Projects, que provavelmente exige o escopo read:project no gh (gh auth refresh -s read:project).",
+    ],
+  });
+  render();
+</script></body></html>

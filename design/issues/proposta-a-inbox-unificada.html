@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argon · Proposta A — Inbox unificada</title>
+<link rel="stylesheet" href="shared/argon.css">
+<style>
+  .ldot { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex: none; }
+  .ldot i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .row-sub .ldot + .ldot { margin-left: 4px; }
+  .tab.preview .truncate { font-style: italic; }
+  .anchor { position: relative; display: inline-flex; }
+  .menu.right { right: 0; top: 28px; }
+  .menu .agent-sub { font-size: 11px; color: var(--muted-fg); }
+  .pr-body-note { padding: 24px 16px; color: var(--muted-fg); }
+  .linked-list { padding: 12px 0; }
+  .linked-hint { padding: 0 16px 8px; color: var(--muted-fg); font-size: 12px; }
+  .closes-chip { cursor: pointer; }
+  .closes-chip:hover { border-color: var(--primary); }
+</style>
+</head>
+<body>
+<div id="strip"></div>
+<div class="window" id="app"></div>
+<script src="shared/data.js"></script>
+<script src="shared/chrome.js"></script>
+<script>
+  const A = Argon;
+  const ITEMS = [...A.PRS, ...A.ISSUES];
+  const keyOf = (it) => `${it.kind}:${it.number}`;
+  const find = (key) => ITEMS.find((it) => keyOf(it) === key);
+
+  const S = {
+    view: "inbox",
+    kind: "all",
+    selected: "issue:318",
+    tabs: [{ id: "inbox", pinned: true }, { id: "issue:318", pinned: true }],
+    active: "inbox",
+    ptab: "conv",
+    menu: null,
+  };
+
+  const PR_VIEWS = {
+    your: (it) => it.kind === "pr" && it.author === A.ME && it.state === "open",
+    waiting: (it) => it.kind === "pr" && it.number === 482,
+    changes: () => false,
+    ready: (it) => it.kind === "pr" && it.number === 490,
+    done: () => false,
+  };
+
+  const ISSUE_VIEWS = {
+    "is-assigned": (it) => it.kind === "issue" && it.state === "open" && it.assignees.includes(A.ME),
+    "is-mentioned": (it) => it.kind === "issue" && it.why === "mentioned",
+    "is-authored": (it) => it.kind === "issue" && it.author === A.ME,
+    "is-participating": (it) => it.kind === "issue" && it.why === "participating",
+  };
+
+  const TITLES = {
+    inbox: "Inbox", needs: "Needs you", your: "Your PRs", waiting: "Waiting on others", changes: "Changes requested",
+    ready: "Ready to merge", done: "Already done", "is-assigned": "Atribuídas a você", "is-mentioned": "Mencionado",
+    "is-authored": "Criadas por você", "is-participating": "Participando",
+  };
+
+  function needsYou(it) {
+    if (it.kind === "pr") return !!it.needsYou && it.state === "open";
+    return it.state === "open" && it.unread && (it.why === "assigned" || it.why === "mentioned");
+  }
+
+  function byKind(it) {
+    return S.kind === "all" || (S.kind === "pr" ? it.kind === "pr" : it.kind === "issue");
+  }
+
+  function inView(view) {
+    if (view === "inbox") return ITEMS.filter(byKind);
+    if (view === "needs") return ITEMS.filter(needsYou).filter(byKind);
+    if (PR_VIEWS[view]) return ITEMS.filter(PR_VIEWS[view]);
+    if (ISSUE_VIEWS[view]) return ITEMS.filter(ISSUE_VIEWS[view]);
+    return [];
+  }
+
+  const count = (view) => {
+    const saved = S.kind;
+    S.kind = "all";
+    const n = inView(view).length;
+    S.kind = saved;
+    return n;
+  };
+
+  function bucket(min) {
+    if (min < 840) return "Hoje";
+    if (min < 2280) return "Ontem";
+    if (min < 10080) return "Últimos 7 dias";
+    return "Mais antigos";
+  }
+
+  function sections(list) {
+    const sorted = [...list].sort((a, b) => a.upd - b.upd);
+    const out = [];
+    let rest = sorted;
+    if (S.view === "inbox") {
+      const needs = sorted.filter(needsYou);
+      if (needs.length) out.push(["Needs you", needs]);
+      rest = sorted.filter((it) => !needsYou(it));
+    }
+    for (const it of rest) {
+      const title = bucket(it.upd);
+      const last = out[out.length - 1];
+      if (last && last[0] === title) last[1].push(it);
+      else out.push([title, [it]]);
+    }
+    return out;
+  }
+
+  function labelDots(keys) {
+    return keys
+      .slice(0, 2)
+      .map((k) => {
+        const l = A.LABELS[k];
+        return `<span class="ldot"><i style="background:#${l.color}"></i>${l.name}</span>`;
+      })
+      .join("") + (keys.length > 2 ? `<span class="muted">+${keys.length - 2}</span>` : "");
+  }
+
+  let firstIssueNoted = false;
+  let firstPrNoted = false;
+
+  function issueRow(i) {
+    const t = A.typeStyle(i.type);
+    const right = i.linked.length
+      ? A.prChip(i.linked[0])
+      : i.sub
+        ? `<span class="tag">${A.icon("list-tree", "xs")}${i.sub.done}/${i.sub.total}</span>`
+        : "";
+    const note = !firstIssueNoted && i.number === 318;
+    if (note) firstIssueNoted = true;
+    return `<div class="row ${i.unread ? "unread" : ""} ${S.selected === keyOf(i) ? "selected" : ""}" data-row="${keyOf(i)}">
+      <div class="row-main">
+        <span class="udot"></span>${A.stateIcon(A.issueState(i))}${A.avatar(i.author, 18)}
+        <span class="title">${i.title}</span>
+        <span class="col col-ci" style="color:${t.color}" title="${i.type}">${A.icon(t.icon, "xs")}</span>
+        <span class="col col-rev">${A.stack(i.assignees, 16)}</span>
+        <span class="col col-diff"><span ${note ? 'data-note="5"' : ""} style="display:inline-flex">${right}</span></span>
+        <span class="col col-com">${A.icon("message-square", "xs")}${i.comments}</span>
+        <span class="col col-age mono muted">${A.age(i.upd)}</span>
+      </div>
+      <div class="row-sub">
+        <span class="mono">${i.repo} #${i.number}</span><span class="sep">·</span>
+        ${labelDots(i.labels)}<span class="sep">·</span>
+        <span class="truncate flex1"><span ${note ? 'data-note="6"' : ""}>${i.reason}</span></span>
+      </div>
+    </div>`;
+  }
+
+  function prRow(p) {
+    const html = A.prRow(p, { selected: S.selected === keyOf(p) }).replace('data-open="pr:', `data-row="pr:`);
+    return html;
+  }
+
+  function listPane() {
+    firstIssueNoted = false;
+    firstPrNoted = false;
+    const list = inView(S.view);
+    const showKind = S.view === "inbox" || S.view === "needs";
+    const seg = showKind
+      ? `<div class="seg" data-note="4">
+          <button data-kind="all" class="${S.kind === "all" ? "on" : ""}">Tudo</button>
+          <button data-kind="pr" class="${S.kind === "pr" ? "on" : ""}">${A.icon("git-pull-request", "xs")}PRs</button>
+          <button data-kind="issue" class="${S.kind === "issue" ? "on" : ""}">${A.icon("circle-dot", "xs")}Issues</button>
+        </div>`
+      : "";
+    const body = list.length
+      ? sections(list)
+          .map(([title, group], ix) =>
+            A.sectionHeader(title, group.length)
+              .replace("<b>", ix === 0 && S.view === "inbox" && S.kind === "all" ? '<b data-note="1">' : "<b>") +
+            group.map((it) => (it.kind === "pr" ? prRow(it) : issueRow(it))).join("")
+          )
+          .join("")
+      : `<div class="empty">${ISSUE_VIEWS[S.view] ? "Nenhuma issue nesta visão." : "Nenhum PR nesta visão."}</div>`;
+    return `<div class="list-header">
+        <span class="lh-title">${TITLES[S.view]}</span><span class="muted">${list.length}</span>
+        ${seg}
+        <span style="flex:1"></span>
+        <div class="input" style="width:280px">${A.icon("search", "xs")}<span class="ph">Filtrar por título, repo, autor, label…</span><span class="kbd">/</span></div>
+      </div>
+      <div class="scroll" id="list">${body}</div>`;
+  }
+
+  function closeMenu() {
+    return S.menu === "close"
+      ? `<div class="menu right">
+          <div class="mi" data-close="completed">${A.icon("circle-check", "sm", "color:var(--magenta)")}Fechar como concluída</div>
+          <div class="mi" data-close="not_planned">${A.icon("circle-slash", "sm", "color:var(--muted-fg)")}Fechar como não planejada</div>
+        </div>`
+      : "";
+  }
+
+  function aiMenu() {
+    return S.menu === "ai"
+      ? `<div class="menu right" style="min-width:280px">
+          <div class="mtitle">Planejar a solução com um agente</div>
+          <div class="mi">${A.icon("bot", "sm")}<div><div>Claude Code</div><div class="agent-sub">Opus 5.5 · nativo</div></div><span class="hint">padrão</span></div>
+          <div class="mi">${A.icon("bot", "sm")}<div><div>Codex</div><div class="agent-sub">app-server</div></div></div>
+          <div class="mi">${A.icon("bot", "sm")}<div><div>OpenCode</div><div class="agent-sub">serve</div></div></div>
+          <div class="mi">${A.icon("bot", "sm")}<div><div>Command Code</div><div class="agent-sub">ACP</div></div></div>
+          <div class="msep"></div>
+          <div class="mtitle" style="text-transform:none;font-weight:400;line-height:1.5">O agente lê a issue e o código e devolve um plano de solução, sem editar arquivos. Abre em Supervisionado: o texto da issue é tratado como não confiável.</div>
+        </div>`
+      : "";
+  }
+
+  function issueTab(issue) {
+    const mine = issue.assignees.includes(A.ME);
+    const open = issue.state === "open";
+    const extra = `
+      ${open && !mine ? `<button class="btn outline small" data-act="assign">${A.icon("user-plus", "xs")}Atribuir a mim</button>` : ""}
+      ${open ? `<span class="anchor"><button class="btn outline small" data-menu="close">${A.icon("circle-check", "xs")}Fechar${A.icon("chevron-down", "xs")}</button>${closeMenu()}</span>` : ""}
+      ${open ? `<span class="anchor"><button class="btn primary small" data-menu="ai">${A.icon("sparkles", "xs")}Agent Plan</button>${aiMenu()}</span>` : ""}`;
+    const head = A.issueHeader(issue, {
+      actions: A.issueActions(issue, extra),
+      actionsNote: "8",
+      statsNote: "7",
+    });
+    const tabs = [
+      ["conv", "message-square", "Conversa", issue.comments],
+      ["linked", "git-pull-request", "PRs vinculados", issue.linked.length],
+    ];
+    if (issue.sub) tabs.push(["sub", "list-tree", "Sub-issues", `${issue.sub.done}/${issue.sub.total}`]);
+    const ptabs = `<div class="ptabs">${tabs
+      .map(([id, icon, title, n]) => `<div class="ptab ${S.ptab === id ? "active" : ""}" data-ptab="${id}">${A.icon(icon, "sm")}${title}<span class="n">${n}</span></div>`)
+      .join("")}</div>`;
+    let body;
+    if (S.ptab === "linked") {
+      body = issue.linked.length
+        ? `<div class="linked-list"><div class="linked-hint">PRs que fecham esta issue quando entrarem (Fixes #${issue.number}).</div>${issue.linked.map((n) => prRow(A.findPr(n))).join("")}</div>`
+        : `<div class="empty">Nenhum PR vinculado ainda.</div>`;
+    } else if (S.ptab === "sub") {
+      body = `<div class="empty">${issue.sub.done} de ${issue.sub.total} sub-issues concluídas.</div>`;
+    } else if (issue.number === 318) {
+      body = A.thread318({ xrefNote: "9" });
+    } else {
+      body = `<div class="thread">
+        <div class="comment"><div class="comment-head">${A.avatar(issue.author, 18)}<b>${issue.author}</b>abriu esta issue ${A.ago(issue.created)}</div>
+          <div class="md"><p>${issue.title}. Descrição de exemplo para o mock: contexto, passos para reproduzir e o resultado esperado.</p></div></div>
+        <div class="composer"><div class="area">Comentar… (markdown)</div><div class="foot"><button class="btn primary small">Comentar</button></div></div>
+      </div>`;
+    }
+    return `<div class="detail">${head}${ptabs}<div class="d-body">${body}</div></div>`;
+  }
+
+  function prTab(pr) {
+    const [owner, repo] = pr.repo.split("/");
+    const closes = pr.closes
+      .map((n) => `<span class="tag closes-chip" data-row="issue:${n}" title="Abrir a issue">${A.icon("circle-dot", "xs", "color:var(--success)")}Fecha #${n}</span>`)
+      .join("");
+    return `<div class="detail"><div class="d-head">
+        <div class="d-top"><div class="crumb mono">${owner}<span class="sep">/</span>${repo}<span class="sep">/</span><b>#${pr.number}</b></div>
+          <div class="d-actions"><button class="btn ghost small">${A.icon("external-link", "xs")}Abrir no GitHub</button>
+          <button class="btn ghost small only">${A.icon("refresh-cw", "xs")}</button>
+          <button class="btn outline small">${A.icon("file-diff", "xs")}Revisar</button>
+          <button class="btn primary small">${A.icon("sparkles", "xs")}Agent Review</button></div></div>
+        <div class="d-title"><h1>${pr.title}</h1><span class="num">#${pr.number}</span></div>
+        <div class="d-meta">${A.pill(A.prState(pr))}${A.avatar(pr.author, 18)}<b>${pr.author}</b><span>· aberto ${A.ago(pr.upd + 1400)}</span><span>·</span>
+          <span class="branch mono">${A.icon("git-branch", "xs")}${pr.base}</span><span>←</span><span class="branch mono">${A.icon("git-branch", "xs")}${pr.head}</span></div>
+        <div class="d-stats"><span class="item">${A.checksGlyph(pr.checks)}CI</span><span class="item">${A.diffStat(pr.add, pr.del)}</span>
+          <span class="item">${A.icon("users", "xs")}${pr.reviewers.join(", ") || "sem reviewers"}</span>${closes}</div>
+      </div>
+      <div class="ptabs"><div class="ptab active">${A.icon("message-square", "sm")}Conversa</div><div class="ptab">${A.icon("git-commit-horizontal", "sm")}Commits</div>
+        <div class="ptab">${A.icon("play", "sm")}Actions</div><div class="ptab">${A.icon("file-diff", "sm")}Review</div></div>
+      <div class="pr-body-note">Aba de PR como já existe hoje. Única novidade: o chip "Fecha #n" volta para a issue.</div></div>`;
+  }
+
+  function tabTitle(id) {
+    if (id === "inbox") return "Inbox";
+    const it = find(id);
+    const head = it.title.length > 16 ? it.title.slice(0, 16).trimEnd() + "…" : it.title;
+    return `#${it.number} ${head}`;
+  }
+
+  function tabs() {
+    return S.tabs.map((t) => {
+      if (t.id === "inbox") return { id: "inbox", icon: "inbox", title: "Inbox", active: S.active === "inbox", closable: false };
+      const it = find(t.id);
+      const st = A.stateOf(it);
+      return { id: t.id, icon: st.icon, iconColor: st.color, title: tabTitle(t.id), active: S.active === t.id };
+    });
+  }
+
+  function groups() {
+    const inbox = A.GROUPS.inbox(S.view, { inbox: count("inbox"), needs: count("needs") });
+    inbox.items[1].note = "2";
+    const yours = A.GROUPS.yourPrs(S.view);
+    const reviewed = A.GROUPS.reviewed(S.view);
+    const issues = {
+      title: "Issues",
+      isNew: true,
+      note: "3",
+      items: [
+        { id: "is-assigned", icon: "circle-dot", label: "Atribuídas a você", count: count("is-assigned"), active: S.view === "is-assigned" },
+        { id: "is-mentioned", icon: "at-sign", label: "Mencionado", count: count("is-mentioned"), active: S.view === "is-mentioned" },
+        { id: "is-authored", icon: "pencil", label: "Criadas por você", count: count("is-authored"), active: S.view === "is-authored" },
+        { id: "is-participating", icon: "message-square", label: "Participando", count: count("is-participating"), active: S.view === "is-participating" },
+      ],
+    };
+    return [inbox, A.GROUPS.agents(), yours, issues, reviewed, A.GROUPS.orgs()];
+  }
+
+  function center() {
+    if (S.active === "inbox") return listPane();
+    const it = find(S.active);
+    return it.kind === "pr" ? prTab(it) : issueTab(it);
+  }
+
+  function render() {
+    const tabsHtml = A.tabbar(tabs());
+    document.getElementById("app").innerHTML =
+      A.titlebar({ search: "Buscar PRs, issues, repos, comandos…" }) +
+      `<div class="workspace">${A.dockLeft(groups())}<main class="center">${tabsHtml}<div class="pane">${center()}</div></main></div>` +
+      A.statusbar({ needs: `${count("needs")} needs you` });
+    document.querySelectorAll(".tab").forEach((el) => {
+      const t = S.tabs.find((tab) => tab.id === el.dataset.tab);
+      if (t && !t.pinned) el.classList.add("preview");
+    });
+    const sel = document.querySelector(".row.selected");
+    if (sel && S.active === "inbox") sel.scrollIntoView({ block: "nearest" });
+  }
+
+  function open(key, pin) {
+    S.selected = key;
+    const existing = S.tabs.find((t) => t.id === key);
+    if (existing) {
+      if (pin) existing.pinned = true;
+    } else {
+      const preview = S.tabs.findIndex((t) => !t.pinned);
+      const tab = { id: key, pinned: !!pin };
+      if (preview >= 0) S.tabs[preview] = tab;
+      else S.tabs.push(tab);
+    }
+    S.active = key;
+    S.ptab = "conv";
+    S.menu = null;
+    render();
+  }
+
+  const app = document.getElementById("app");
+
+  app.addEventListener("click", (event) => {
+    const target = event.target;
+    const x = target.closest(".tab .x");
+    if (x) {
+      const id = x.closest(".tab").dataset.tab;
+      S.tabs = S.tabs.filter((t) => t.id !== id);
+      if (S.active === id) S.active = "inbox";
+      render();
+      return;
+    }
+    const nav = target.closest("[data-nav]");
+    if (nav && (TITLES[nav.dataset.nav])) {
+      S.view = nav.dataset.nav;
+      S.active = "inbox";
+      render();
+      return;
+    }
+    const kind = target.closest("[data-kind]");
+    if (kind) {
+      S.kind = kind.dataset.kind;
+      render();
+      return;
+    }
+    const row = target.closest("[data-row]");
+    if (row) {
+      open(row.dataset.row, event.detail >= 2);
+      return;
+    }
+    const openPr = target.closest("[data-open]");
+    if (openPr) {
+      open(openPr.dataset.open, true);
+      return;
+    }
+    const tab = target.closest("[data-tab]");
+    if (tab) {
+      S.active = tab.dataset.tab;
+      S.ptab = "conv";
+      S.menu = null;
+      render();
+      return;
+    }
+    const ptab = target.closest("[data-ptab]");
+    if (ptab) {
+      S.ptab = ptab.dataset.ptab;
+      render();
+      return;
+    }
+    const menu = target.closest("[data-menu]");
+    if (menu) {
+      S.menu = S.menu === menu.dataset.menu ? null : menu.dataset.menu;
+      render();
+      return;
+    }
+    const close = target.closest("[data-close]");
+    if (close) {
+      const issue = find(S.active);
+      issue.state = "closed";
+      issue.stateReason = close.dataset.close;
+      S.menu = null;
+      render();
+      return;
+    }
+    const act = target.closest("[data-act]");
+    if (act && act.dataset.act === "assign") {
+      find(S.active).assignees.push(A.ME);
+      render();
+      return;
+    }
+    if (S.menu && !target.closest(".menu")) {
+      S.menu = null;
+      render();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (S.active !== "inbox") {
+      if (event.key === "Escape") {
+        S.active = "inbox";
+        S.menu = null;
+        render();
+      }
+      return;
+    }
+    const keys = [...document.querySelectorAll("#list [data-row]")].map((el) => el.dataset.row);
+    const ix = keys.indexOf(S.selected);
+    if (event.key === "j" || event.key === "ArrowDown") S.selected = keys[Math.min(keys.length - 1, ix + 1)] || keys[0];
+    else if (event.key === "k" || event.key === "ArrowUp") S.selected = keys[Math.max(0, ix - 1)] || keys[0];
+    else if (event.key === "Enter" && S.selected) return open(S.selected, true);
+    else return;
+    event.preventDefault();
+    render();
+  });
+
+  A.ICONS["git-commit-horizontal"] = '<circle cx="12" cy="12" r="3"/><line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>';
+
+  A.mountStrip({
+    tag: "Proposta A",
+    title: "Inbox unificada",
+    desc: "Issues entram na mesma inbox dos PRs, com as mesmas seções e o mesmo desenho de linha.",
+    lead: "O menor passo a partir do que existe: issue vira mais um tipo de item da caixa de entrada. Quem já usa o Argon não aprende nada novo.",
+    notes: [
+      "Issues entram na mesma inbox e nas mesmas seções (Needs you, Hoje, Ontem…).",
+      "'Needs you' passa a contar issues atribuídas a você com atividade nova e menções novas a você. Issues que você abriu ficam de fora.",
+      "Grupo ISSUES na sidebar, no mesmo molde de 'Seus PRs': atribuídas, mencionado, criadas por você, participando.",
+      "Filtro Tudo / PRs / Issues no topo da lista.",
+      "A linha de issue mantém o desenho da linha de PR. As colunas de CI, reviewers e diff viram tipo, responsáveis e PR vinculado (com estado e CI).",
+      "A segunda linha troca a branch por labels e explica por que a issue está ali: atribuída, mencionado, nova sem responsável.",
+      "A aba da issue segue o cabeçalho do PR: crumb, pill de estado, tipo, responsáveis, PR vinculado, milestone e labels.",
+      "Ações de issue: Atribuir a mim, Fechar (concluída ou não planejada) e 'Agent Plan', que abre uma sessão de agente para planejar a solução. No PR, 'Revisar com IA' passa a se chamar 'Agent Review'.",
+      "O PR vinculado aparece na conversa com CI e review atuais. Na aba do PR, o chip 'Fecha #318' volta para a issue.",
+    ],
+    pros: [
+      "Menor custo: reusa inbox, seções, linha, abas e sync. A busca do GitHub já usa type: ISSUE; falta pedir os campos de Issue.",
+      "Um lugar só para checar: 'Needs you' cobre PR e issue.",
+      "Coerente com a ideia do Argon de GitHub como caixa de e-mail.",
+    ],
+    cons: [
+      "A linha de duas linhas é larga para issue; em repos com muitas issues a inbox fica cheia.",
+      "Não ajuda a triar nem planejar (sem agrupar por label ou milestone, sem quadro).",
+      "Precisa decidir quais issues entram: só as que envolvem você, ou também as novas das orgs rastreadas.",
+    ],
+  });
+  render();
+</script>
+</body>
+</html>
