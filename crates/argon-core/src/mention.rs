@@ -37,7 +37,7 @@ fn is_before_blocker(c: char) -> bool {
 }
 
 fn is_after_blocker(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '-' | '_')
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '/')
 }
 
 #[cfg(test)]
@@ -145,6 +145,12 @@ mod tests {
             ("later valid mention after a bad one", "x@me and @me", true),
             ("empty text", "", false),
             ("non ascii neighbours", "olá @me!", true),
+            (
+                "team mention of an org with the same name",
+                "cc @me/devs",
+                false,
+            ),
+            ("inside inline code", "run `@me`", true),
         ];
 
         for (name, text, expected) in cases {
