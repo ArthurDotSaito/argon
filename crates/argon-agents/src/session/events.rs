@@ -84,6 +84,9 @@ pub enum AgentEvent {
         findings: Vec<SavedFinding>,
         skipped: Vec<String>,
     },
+    PlanDraft {
+        markdown: String,
+    },
     ModelsAvailable(Vec<ModelInfo>),
     Error(String),
     Resync {

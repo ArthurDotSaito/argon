@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, PermissionMode, PrKey};
+use argon_core::{AgentKind, PermissionMode, PrKey, SessionKind};
 use argon_store::{NewAgentSession, Store};
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -15,11 +15,20 @@ fn writer() -> SessionWriter {
 }
 
 async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
-    let writer = writer();
+    shared_of(writer(), capacity, SessionKind::Review, None).await
+}
+
+async fn shared_of(
+    writer: SessionWriter,
+    capacity: usize,
+    kind: SessionKind,
+    base_sha: Option<&str>,
+) -> (Shared, SessionWriter) {
+    let subject = PrKey::new("github.com", "PR_1");
     writer
         .create_session(NewAgentSession {
             id: "s1".into(),
-            pr: PrKey::new("github.com", "PR_1"),
+            pr: subject.clone(),
             agent: AgentKind::ClaudeCode,
             model: "sonnet".into(),
             template: "review-padrao".into(),
@@ -29,8 +38,8 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             permission_mode: "supervised".into(),
             nonce: NONCE.into(),
             allowed_files: vec!["src/lib.rs".into()],
-            kind: argon_core::SessionKind::Review,
-            base_sha: None,
+            kind,
+            base_sha: base_sha.map(str::to_owned),
         })
         .await
         .unwrap();
@@ -38,6 +47,9 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
     let shared = Shared::new(
         SharedConfig {
             id: "s1".into(),
+            subject,
+            kind,
+            base_sha: base_sha.map(str::to_owned),
             cwd: PathBuf::from("repo"),
             nonce: NONCE.into(),
             allowed_files: vec!["src/lib.rs".into()],
@@ -141,6 +153,114 @@ async fn identical_finding_keeps_its_id_on_second_turn() {
         ids.push(findings[0].id);
     }
     assert_eq!(ids[0], ids[1]);
+}
+
+struct PlanSession {
+    dir: PathBuf,
+    shared: Shared,
+    writer: SessionWriter,
+}
+
+impl PlanSession {
+    async fn start(name: &str) -> PlanSession {
+        let dir = std::env::temp_dir().join(format!("argon-driver-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let writer =
+            SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
+        let (shared, writer) = shared_of(writer, 64, SessionKind::Plan, Some("abc123")).await;
+        shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
+        PlanSession {
+            dir,
+            shared,
+            writer,
+        }
+    }
+
+    async fn turn(&self, message: &str) -> Vec<AgentEvent> {
+        self.shared.begin_turn("planeje");
+        self.shared.emit_all(map_update(&chunk(message)));
+        self.shared.end_turn("end_turn").await;
+        self.writer
+            .events_since("s1", 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect()
+    }
+
+    fn drafts(&self) -> Vec<argon_store::PlanDraft> {
+        Store::open(&self.dir.join("argon.db"))
+            .unwrap()
+            .plans_for_session("s1")
+            .unwrap()
+    }
+
+    fn finish(self) {
+        let PlanSession {
+            dir,
+            shared,
+            writer,
+        } = self;
+        drop((shared, writer));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[tokio::test]
+async fn plan_turn_records_the_draft_and_then_emits_it() {
+    let session = PlanSession::start("plan-recorded").await;
+
+    let events = session
+        .turn(&format!(
+            "Pronto.\n```argon-plan-{NONCE}\n## Passos\n\n1. Ler\n```"
+        ))
+        .await;
+
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::PlanDraft {
+            markdown: "## Passos\n\n1. Ler".into()
+        })
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Findings { .. }))
+    );
+    let drafts = session.drafts();
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(drafts[0].host, "github.com");
+    assert_eq!(drafts[0].issue_id, "PR_1");
+    assert_eq!(drafts[0].session_id, "s1");
+    assert_eq!(drafts[0].body, "## Passos\n\n1. Ler");
+    assert_eq!(drafts[0].base_sha, "abc123");
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    session.finish();
+}
+
+#[tokio::test]
+async fn plan_turn_without_block_reports_an_error_and_records_nothing() {
+    let session = PlanSession::start("plan-missing").await;
+
+    let events = session.turn(&findings_message("t")).await;
+
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Error(
+            "O agente não devolveu um plano no formato esperado.".into()
+        ))
+    );
+    assert!(session.drafts().is_empty());
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    session.finish();
 }
 
 #[tokio::test]

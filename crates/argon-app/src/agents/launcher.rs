@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use argon_agents::{AgentSessionHandle, AgentSpec, SessionContext, WorktreeManager, start_session};
-use argon_core::{PermissionMode, PrKey, RenderedPrompt};
+use argon_core::{PermissionMode, PrKey, RenderedPrompt, SessionKind};
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
@@ -157,6 +157,8 @@ async fn start(request: &LaunchRequest, cwd: PathBuf) -> Result<AgentSessionHand
         cwd,
         model: request.model.clone(),
         permission_mode: request.permission_mode,
+        kind: SessionKind::Review,
+        base_sha: None,
     };
     start_session(&request.spec, ctx, writer)
         .await

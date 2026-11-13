@@ -7,7 +7,7 @@ use argon_agents::{
     Support, Transport, WorktreeManager, agent_spec, agent_spec_for, list_models, lists_models,
     new_session_id, start_session_with, support_for,
 };
-use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey};
+use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey, SessionKind};
 use argon_github::{GithubClient, discover_accounts, token_for};
 use argon_store::Store;
 use futures::StreamExt;
@@ -295,6 +295,8 @@ async fn startup_probe(
         cwd,
         model: String::new(),
         permission_mode: PermissionMode::Supervised,
+        kind: SessionKind::Review,
+        base_sha: None,
     };
     let started = Instant::now();
     let result = start_session_with(&spec, ctx, writer, options(args)).await;
@@ -377,6 +379,8 @@ async fn run() -> Result<(), BoxError> {
                 .map(|agent| agent.permission_mode())
                 .unwrap_or_default()
         }),
+        kind: SessionKind::Review,
+        base_sha: None,
     };
     let prompt = args.prompt.clone().unwrap_or(rendered.text);
 

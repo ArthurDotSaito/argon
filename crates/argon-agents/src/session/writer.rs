@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use argon_core::{Finding, PermissionMode};
-use argon_store::{NewAgentSession, SessionStatus, SessionWrite, Store, StoredFinding};
+use argon_core::{Finding, PermissionMode, PrKey};
+use argon_store::{NewAgentSession, PlanDraft, SessionStatus, SessionWrite, Store, StoredFinding};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 use super::events::AgentEvent;
@@ -45,6 +45,13 @@ pub(crate) enum Op {
         session: String,
         findings: Vec<Finding>,
         reply: Reply<Vec<StoredFinding>>,
+    },
+    RecordPlan {
+        session: String,
+        subject: PrKey,
+        markdown: String,
+        base_sha: String,
+        reply: Reply<PlanDraft>,
     },
     EventsSince {
         session: String,
@@ -165,6 +172,22 @@ impl Worker {
             } => {
                 self.count();
                 let _ = reply.send(text(self.store.save_findings(&session, &findings)));
+            }
+            Op::RecordPlan {
+                session,
+                subject,
+                markdown,
+                base_sha,
+                reply,
+            } => {
+                self.count();
+                let _ = reply.send(text(self.store.record_plan(
+                    &subject.host,
+                    &subject.id.0,
+                    &session,
+                    &markdown,
+                    &base_sha,
+                )));
             }
             Op::EventsSince {
                 session,
@@ -303,6 +326,27 @@ impl SessionWriter {
         self.ask(|reply| Op::SaveFindings {
             session,
             findings,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn record_plan(
+        &self,
+        session: &str,
+        subject: &PrKey,
+        markdown: &str,
+        base_sha: Option<&str>,
+    ) -> Result<PlanDraft, String> {
+        let session = session.to_owned();
+        let subject = subject.clone();
+        let markdown = markdown.to_owned();
+        let base_sha = base_sha.unwrap_or_default().to_owned();
+        self.ask(|reply| Op::RecordPlan {
+            session,
+            subject,
+            markdown,
+            base_sha,
             reply,
         })
         .await

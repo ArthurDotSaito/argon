@@ -120,6 +120,9 @@ pub(super) async fn launch(
     let shared = Arc::new(Shared::new(
         SharedConfig {
             id: ctx.id.clone(),
+            subject: ctx.pr.clone(),
+            kind: ctx.kind,
+            base_sha: ctx.base_sha.clone(),
             cwd: ctx.cwd.clone(),
             nonce: ctx.nonce.clone(),
             allowed_files: ctx.allowed_files.clone(),
@@ -178,8 +181,8 @@ pub(super) async fn launch(
                 permission_mode: permission_mode.as_str().to_owned(),
                 nonce: ctx.nonce.clone(),
                 allowed_files: ctx.allowed_files.clone(),
-                kind: argon_core::SessionKind::Review,
-                base_sha: None,
+                kind: ctx.kind,
+                base_sha: ctx.base_sha.clone(),
             })
             .await
             .map(|()| 0),
@@ -228,7 +231,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use argon_core::{AgentKind, Config, PrKey};
+    use argon_core::{AgentKind, Config, PrKey, SessionKind};
     use argon_store::Store;
 
     use super::*;
@@ -260,10 +263,25 @@ mod tests {
             cwd,
             model: String::new(),
             permission_mode: PermissionMode::Supervised,
+            kind: SessionKind::Review,
+            base_sha: None,
         }
     }
 
-    async fn launch_dying(name: &str) -> (PathBuf, SessionWriter, AgentSessionHandle) {
+    fn plan_context(id: &str, cwd: PathBuf) -> SessionContext {
+        SessionContext {
+            pr: PrKey::new("github.com", "I_7"),
+            template_id: "plan-padrao".to_owned(),
+            kind: SessionKind::Plan,
+            base_sha: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+            ..context(id, cwd)
+        }
+    }
+
+    async fn launch_dying(
+        name: &str,
+        build: fn(&str, PathBuf) -> SessionContext,
+    ) -> (PathBuf, SessionWriter, AgentSessionHandle) {
         let dir =
             std::env::temp_dir().join(format!("argon-bootstrap-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -274,7 +292,7 @@ mod tests {
         spec.transport = Transport::ClaudeStream;
         let (_, agent) = launch(
             &spec,
-            context("s1", dir.clone()),
+            build("s1", dir.clone()),
             writer.clone(),
             None,
             SessionOptions::default(),
@@ -288,7 +306,7 @@ mod tests {
 
     #[tokio::test]
     async fn early_failure_releases_the_writer_error_forwarder() {
-        let (dir, _writer, agent) = launch_dying("forwarder").await;
+        let (dir, _writer, agent) = launch_dying("forwarder", context).await;
 
         for _ in 0..500 {
             if Arc::strong_count(&agent.shared) == 1 {
@@ -303,13 +321,15 @@ mod tests {
 
     #[tokio::test]
     async fn driver_dying_before_activation_fails_the_session() {
-        let (dir, writer, agent) = launch_dying("activate").await;
+        let (dir, writer, agent) = launch_dying("activate", context).await;
         let db = dir.join("argon.db");
 
         assert!(agent.is_finished());
         assert_eq!(agent.status(), SessionStatus::Failed);
         let row = Store::open(&db).unwrap().session("s1").unwrap().unwrap();
         assert_eq!(row.status, SessionStatus::Failed);
+        assert_eq!(row.kind, SessionKind::Review);
+        assert_eq!(row.base_sha, None);
         let events = writer.events_since("s1", 0).await.unwrap();
         assert!(
             matches!(
@@ -320,6 +340,24 @@ mod tests {
             "{events:?}"
         );
         drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn new_plan_session_persists_its_kind_and_base_sha() {
+        let (dir, writer, agent) = launch_dying("plan-kind", plan_context).await;
+        let expected = plan_context("s1", dir.clone());
+
+        let row = Store::open(&dir.join("argon.db"))
+            .unwrap()
+            .session("s1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.kind, SessionKind::Plan);
+        assert_eq!(row.base_sha, expected.base_sha);
+        assert_eq!(row.pr, expected.pr);
+        drop((writer, agent));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

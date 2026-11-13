@@ -193,6 +193,28 @@ fn permission_events_round_trip_through_json() {
 }
 
 #[test]
+fn plan_draft_round_trips_under_its_own_tag() {
+    let event = AgentEvent::PlanDraft {
+        markdown: "## Passos\n\n1. Ler".into(),
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(
+        value,
+        json!({"type": "plan_draft", "data": {"markdown": "## Passos\n\n1. Ler"}})
+    );
+    assert_eq!(serde_json::from_value::<AgentEvent>(value).unwrap(), event);
+}
+
+#[test]
+fn rows_stored_before_plan_drafts_still_deserialize_as_agent_todo_plans() {
+    let row = r#"{"type":"plan","data":["Ler o diff","Escrever achados"]}"#;
+    assert_eq!(
+        serde_json::from_str::<AgentEvent>(row).unwrap(),
+        AgentEvent::Plan(vec!["Ler o diff".into(), "Escrever achados".into()])
+    );
+}
+
+#[test]
 fn rows_stored_before_the_permission_events_still_deserialize() {
     let old_rows = [
         r#"{"type":"message_chunk","data":"oi"}"#,

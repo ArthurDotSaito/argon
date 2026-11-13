@@ -34,6 +34,21 @@ fn resume_target(row: &SessionRow) -> Result<(String, PathBuf), &'static str> {
     Ok((acp_session, worktree))
 }
 
+fn session_context(row: &SessionRow, worktree: PathBuf) -> SessionContext {
+    SessionContext {
+        id: row.id.clone(),
+        pr: row.pr.clone(),
+        template_id: row.template.clone(),
+        nonce: row.nonce.clone(),
+        allowed_files: row.allowed_files.clone(),
+        cwd: worktree,
+        model: row.model.clone(),
+        permission_mode: PermissionMode::parse(&row.permission_mode).unwrap_or_default(),
+        kind: row.kind,
+        base_sha: row.base_sha.clone(),
+    }
+}
+
 async fn still_resumable(rows: &StoreHandle, id: &str) -> bool {
     let id = id.to_owned();
     match flatten(rows.call(move |store| store.session(&id)).await) {
@@ -64,16 +79,7 @@ async fn resume(
     let writer = tokio::task::spawn_blocking(move || store.writer())
         .await
         .map_err(|error| error.to_string())??;
-    let ctx = SessionContext {
-        id: row.id.clone(),
-        pr: row.pr.clone(),
-        template_id: row.template.clone(),
-        nonce: row.nonce.clone(),
-        allowed_files: row.allowed_files.clone(),
-        cwd: worktree.clone(),
-        model: row.model.clone(),
-        permission_mode: PermissionMode::parse(&row.permission_mode).unwrap_or_default(),
-    };
+    let ctx = session_context(&row, worktree.clone());
     let (_, handle) = resume_session(&spec, transport, &acp_session, ctx, writer)
         .await
         .map_err(|error| error.to_string())?;
@@ -177,7 +183,7 @@ impl AgentSessions {
 
 #[cfg(test)]
 mod tests {
-    use argon_core::{AgentKind, PrKey};
+    use argon_core::{AgentKind, PrKey, SessionKind};
 
     use super::*;
 
@@ -199,7 +205,7 @@ mod tests {
             updated_at: chrono::Utc::now(),
             model_label: None,
             failure_reason: None,
-            kind: argon_core::SessionKind::Review,
+            kind: SessionKind::Review,
             base_sha: None,
         }
     }
@@ -224,5 +230,27 @@ mod tests {
         let mut no_worktree = row(SessionStatus::Completed);
         no_worktree.worktree_path = None;
         assert_eq!(resume_target(&no_worktree), Err(labels::WORKTREE_GONE));
+    }
+
+    #[test]
+    fn resumed_review_session_keeps_review_kind_without_base_sha() {
+        let ctx = session_context(&row(SessionStatus::Completed), PathBuf::from("wt"));
+        assert_eq!(ctx.kind, SessionKind::Review);
+        assert_eq!(ctx.base_sha, None);
+        assert_eq!(ctx.cwd, PathBuf::from("wt"));
+    }
+
+    #[test]
+    fn resumed_plan_session_restores_kind_and_base_sha() {
+        let mut plan = row(SessionStatus::Completed);
+        plan.pr = PrKey::new("github.com", "I_9");
+        plan.kind = SessionKind::Plan;
+        plan.base_sha = Some("abc123".into());
+
+        let ctx = session_context(&plan, PathBuf::from("wt"));
+
+        assert_eq!(ctx.kind, SessionKind::Plan);
+        assert_eq!(ctx.base_sha.as_deref(), Some("abc123"));
+        assert_eq!(ctx.pr, PrKey::new("github.com", "I_9"));
     }
 }

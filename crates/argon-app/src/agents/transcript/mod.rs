@@ -222,7 +222,9 @@ impl Transcript {
                 });
             }
             AgentEvent::Error(message) => self.items.push(Item::Error(message.clone())),
-            AgentEvent::ModelsAvailable(_) | AgentEvent::Resync { .. } => {}
+            AgentEvent::PlanDraft { .. }
+            | AgentEvent::ModelsAvailable(_)
+            | AgentEvent::Resync { .. } => {}
         }
     }
 

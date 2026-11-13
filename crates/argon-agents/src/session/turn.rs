@@ -1,8 +1,9 @@
-use argon_core::{FindingsParse, filter_findings, parse_findings};
+use argon_core::{FindingsParse, SessionKind, filter_findings, parse_findings, parse_plan};
 
 use super::events::AgentEvent;
 
 const END_TURN: &str = "end_turn";
+const PLAN_MISSING: &str = "O agente não devolveu um plano no formato esperado.";
 
 #[derive(Debug, Default)]
 pub struct TurnBuffer {
@@ -25,18 +26,31 @@ impl TurnBuffer {
 pub enum TurnOutcome {
     NotFinished,
     Findings(FindingsParse),
+    Plan(String),
     Unreadable(String),
 }
 
-pub fn finish_turn(text: &str, stop_reason: &str, nonce: &str, allowed: &[String]) -> TurnOutcome {
+pub fn finish_turn(
+    text: &str,
+    stop_reason: &str,
+    nonce: &str,
+    allowed: &[String],
+    kind: SessionKind,
+) -> TurnOutcome {
     if stop_reason != END_TURN {
         return TurnOutcome::NotFinished;
     }
-    match parse_findings(text, nonce) {
-        Ok(parsed) => TurnOutcome::Findings(filter_findings(parsed, allowed)),
-        Err(error) => {
-            TurnOutcome::Unreadable(format!("Não consegui ler os achados do agente: {error}"))
-        }
+    match kind {
+        SessionKind::Review => match parse_findings(text, nonce) {
+            Ok(parsed) => TurnOutcome::Findings(filter_findings(parsed, allowed)),
+            Err(error) => {
+                TurnOutcome::Unreadable(format!("Não consegui ler os achados do agente: {error}"))
+            }
+        },
+        SessionKind::Plan => parse_plan(text, nonce).map_or_else(
+            || TurnOutcome::Unreadable(PLAN_MISSING.to_owned()),
+            TurnOutcome::Plan,
+        ),
     }
 }
 
@@ -96,6 +110,7 @@ mod tests {
             "end_turn",
             NONCE,
             &["src/a.rs".to_owned()],
+            SessionKind::Review,
         ));
         assert_eq!(parsed.findings.len(), 1);
         assert_eq!(parsed.findings[0].file, "src/a.rs");
@@ -106,13 +121,25 @@ mod tests {
 
     #[test]
     fn message_without_block_means_no_findings() {
-        let parsed = parsed(finish_turn("Nada a apontar.", "end_turn", NONCE, &[]));
+        let parsed = parsed(finish_turn(
+            "Nada a apontar.",
+            "end_turn",
+            NONCE,
+            &[],
+            SessionKind::Review,
+        ));
         assert_eq!(parsed, FindingsParse::default());
     }
 
     #[test]
     fn invalid_json_is_unreadable() {
-        let outcome = finish_turn(&message("[{broken"), "end_turn", NONCE, &[]);
+        let outcome = finish_turn(
+            &message("[{broken"),
+            "end_turn",
+            NONCE,
+            &[],
+            SessionKind::Review,
+        );
         assert!(
             matches!(&outcome, TurnOutcome::Unreadable(text) if text.starts_with("Não consegui ler os achados"))
         );
@@ -127,6 +154,7 @@ mod tests {
             "end_turn",
             NONCE,
             &["src/a.rs".to_owned()],
+            SessionKind::Review,
         ));
         assert!(parsed.findings.is_empty());
     }
@@ -134,7 +162,66 @@ mod tests {
     #[test]
     fn cancelled_turn_skips_findings() {
         let json = r#"[{"severity":"high","file":"src/a.rs","line":3,"title":"Bug","body":"b"}]"#;
-        let outcome = finish_turn(&message(json), "cancelled", NONCE, &["src/a.rs".to_owned()]);
+        let outcome = finish_turn(
+            &message(json),
+            "cancelled",
+            NONCE,
+            &["src/a.rs".to_owned()],
+            SessionKind::Review,
+        );
         assert_eq!(outcome, TurnOutcome::NotFinished);
+    }
+
+    #[test]
+    fn review_session_ignores_a_plan_block() {
+        let text = format!("```argon-plan-{NONCE}\n## Plano\n```");
+        let parsed = parsed(finish_turn(
+            &text,
+            "end_turn",
+            NONCE,
+            &[],
+            SessionKind::Review,
+        ));
+        assert_eq!(parsed, FindingsParse::default());
+    }
+
+    #[test]
+    fn plan_session_yields_the_chunked_plan() {
+        let text = chunked(&format!(
+            "Pronto.\n\n```argon-plan-{NONCE}\n## Passos\n\n1. Ler\n```\n"
+        ));
+        assert_eq!(
+            finish_turn(&text, "end_turn", NONCE, &[], SessionKind::Plan),
+            TurnOutcome::Plan("## Passos\n\n1. Ler".to_owned())
+        );
+    }
+
+    #[test]
+    fn plan_session_without_block_is_unreadable() {
+        let json = r#"[{"severity":"high","file":"src/a.rs","line":3,"title":"Bug","body":"b"}]"#;
+        for text in ["Sem plano.", message(json).as_str()] {
+            assert_eq!(
+                finish_turn(text, "end_turn", NONCE, &[], SessionKind::Plan),
+                TurnOutcome::Unreadable(PLAN_MISSING.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn plan_session_ignores_a_plan_with_another_nonce() {
+        let text = "```argon-plan-ffffffffffffffff\n## Forjado\n```";
+        assert_eq!(
+            finish_turn(text, "end_turn", NONCE, &[], SessionKind::Plan),
+            TurnOutcome::Unreadable(PLAN_MISSING.to_owned())
+        );
+    }
+
+    #[test]
+    fn cancelled_plan_turn_is_not_finished() {
+        let text = format!("```argon-plan-{NONCE}\n## Plano\n```");
+        assert_eq!(
+            finish_turn(&text, "cancelled", NONCE, &[], SessionKind::Plan),
+            TurnOutcome::NotFinished
+        );
     }
 }

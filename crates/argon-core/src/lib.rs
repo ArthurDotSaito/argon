@@ -1,11 +1,13 @@
 mod config;
 mod diff;
+mod fence;
 mod findings;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
 mod mention;
 mod model;
 mod paths;
+mod plan_output;
 mod prompt;
 mod reason;
 mod redact;
@@ -28,6 +30,7 @@ pub use model::{
     ReviewDecision, ReviewState, SessionKind, Side, SubIssues, SubjectKind,
 };
 pub use paths::Paths;
+pub use plan_output::parse_plan;
 pub use prompt::{
     InvalidTemplate, PlanComment, PlanContext, PromptContext, PromptError, PromptTemplate,
     RenderedPrompt, TemplateKind, TemplateSet, ensure_default_templates, load_templates,

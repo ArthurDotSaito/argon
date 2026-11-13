@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, Config, PrKey};
+use argon_core::{AgentKind, Config, PrKey, SessionKind};
 use argon_store::{NewAgentSession, SessionStatus, Store};
 
 use super::*;
@@ -415,6 +415,8 @@ fn fake_run(dir: &Path, mode: &str, shared: &Arc<Shared>, tail: Arc<StderrTail>)
             cwd: dir.to_path_buf(),
             model: String::new(),
             permission_mode: PermissionMode::Supervised,
+            kind: SessionKind::Review,
+            base_sha: None,
         },
         load: None,
         options: SessionOptions::default(),

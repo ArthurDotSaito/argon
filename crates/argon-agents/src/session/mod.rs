@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use argon_core::{PermissionMode, PrKey};
+use argon_core::{PermissionMode, PrKey, SessionKind};
 use argon_store::SessionStatus;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -101,6 +101,8 @@ pub struct SessionContext {
     pub cwd: PathBuf,
     pub model: String,
     pub permission_mode: PermissionMode,
+    pub kind: SessionKind,
+    pub base_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

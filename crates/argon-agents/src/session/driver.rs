@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use argon_core::PermissionMode;
+use argon_core::{FindingsParse, PermissionMode, PrKey, SessionKind};
 use argon_store::SessionStatus;
 use tokio::sync::{broadcast, watch};
 
@@ -52,6 +52,9 @@ struct State {
 
 pub(super) struct SharedConfig {
     pub id: String,
+    pub subject: PrKey,
+    pub kind: SessionKind,
+    pub base_sha: Option<String>,
     pub cwd: PathBuf,
     pub nonce: String,
     pub allowed_files: Vec<String>,
@@ -105,6 +108,9 @@ impl Shared {
         Shared::new(
             SharedConfig {
                 id: id.to_owned(),
+                subject: PrKey::new("github.com", "PR_1"),
+                kind: SessionKind::Review,
+                base_sha: None,
                 cwd,
                 nonce: String::new(),
                 allowed_files: Vec::new(),
@@ -314,39 +320,14 @@ impl Shared {
                 stop_reason,
                 &self.config.nonce,
                 &self.config.allowed_files,
+                self.config.kind,
             )
         };
         match outcome {
             TurnOutcome::NotFinished => {}
             TurnOutcome::Unreadable(message) => self.emit(AgentEvent::Error(message)),
-            TurnOutcome::Findings(parsed) => {
-                let saved = if parsed.findings.is_empty() {
-                    Ok(Vec::new())
-                } else {
-                    self.config
-                        .writer
-                        .save_findings(&self.config.id, parsed.findings)
-                        .await
-                };
-                match saved {
-                    Ok(stored) => self.emit(AgentEvent::Findings {
-                        findings: stored
-                            .into_iter()
-                            .map(|stored| SavedFinding {
-                                id: stored.id,
-                                finding: stored.finding,
-                            })
-                            .collect(),
-                        skipped: parsed.skipped,
-                    }),
-                    Err(error) => {
-                        tracing::error!(%error, "failed to save findings");
-                        self.emit(AgentEvent::Error(format!(
-                            "não consegui gravar os achados: {error}"
-                        )));
-                    }
-                }
-            }
+            TurnOutcome::Findings(parsed) => self.save_findings(parsed).await,
+            TurnOutcome::Plan(markdown) => self.record_plan(markdown).await,
         }
         let mut state = self.lock();
         state.in_turn = false;
@@ -354,6 +335,57 @@ impl Shared {
         self.status_locked(&mut state, SessionStatus::Completed);
         drop(state);
         self.release();
+    }
+
+    async fn save_findings(&self, parsed: FindingsParse) {
+        let saved = if parsed.findings.is_empty() {
+            Ok(Vec::new())
+        } else {
+            self.config
+                .writer
+                .save_findings(&self.config.id, parsed.findings)
+                .await
+        };
+        match saved {
+            Ok(stored) => self.emit(AgentEvent::Findings {
+                findings: stored
+                    .into_iter()
+                    .map(|stored| SavedFinding {
+                        id: stored.id,
+                        finding: stored.finding,
+                    })
+                    .collect(),
+                skipped: parsed.skipped,
+            }),
+            Err(error) => {
+                tracing::error!(%error, "failed to save findings");
+                self.emit(AgentEvent::Error(format!(
+                    "não consegui gravar os achados: {error}"
+                )));
+            }
+        }
+    }
+
+    async fn record_plan(&self, markdown: String) {
+        let recorded = self
+            .config
+            .writer
+            .record_plan(
+                &self.config.id,
+                &self.config.subject,
+                &markdown,
+                self.config.base_sha.as_deref(),
+            )
+            .await;
+        match recorded {
+            Ok(_) => self.emit(AgentEvent::PlanDraft { markdown }),
+            Err(error) => {
+                tracing::error!(%error, "failed to save plan draft");
+                self.emit(AgentEvent::Error(format!(
+                    "não consegui gravar o plano: {error}"
+                )));
+            }
+        }
     }
 
     fn fail_locked(&self, state: &mut State, message: String) {

@@ -112,3 +112,28 @@ async fn findings_round_trip_with_ids() {
     let second = writer.save_findings("s1", vec![finding]).await.unwrap();
     assert_eq!(first[0].id, second[0].id);
 }
+
+#[tokio::test]
+async fn plan_is_recorded_under_the_issue_key_and_base_sha() {
+    let writer = writer();
+    writer.create_session(session("s1")).await.unwrap();
+    let issue = PrKey::new("ghe.example.com", "I_42");
+
+    let first = writer
+        .record_plan("s1", &issue, "## v1", Some("abc123"))
+        .await
+        .unwrap();
+    let second = writer
+        .record_plan("s1", &issue, "## v2", None)
+        .await
+        .unwrap();
+
+    assert_eq!(first.host, "ghe.example.com");
+    assert_eq!(first.issue_id, "I_42");
+    assert_eq!(first.session_id, "s1");
+    assert_eq!(first.body, "## v1");
+    assert_eq!(first.base_sha, "abc123");
+    assert_eq!(second.id, first.id);
+    assert_eq!(second.body, "## v2");
+    assert_eq!(second.base_sha, "");
+}
