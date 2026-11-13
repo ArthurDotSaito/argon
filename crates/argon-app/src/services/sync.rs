@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::DEFAULT_HOST;
+use argon_core::{DEFAULT_HOST, Issue, is_mention_candidate};
 use argon_github::{
-    Account, GithubClient, GithubError, OrgFetch, Viewer, discover_accounts, token_for,
+    Account, GithubClient, GithubError, IssueOrgFetch, OrgFetch, Viewer, discover_accounts,
+    token_for,
 };
 use argon_store::Store;
 use chrono::{DateTime, Local, Utc};
@@ -47,9 +48,32 @@ enum Step {
 
 enum AccountOutcome {
     Synced,
+    SyncedThenRateLimited(DateTime<Utc>),
     Failed,
     RateLimited(DateTime<Utc>),
     Expired,
+}
+
+enum IssueError {
+    Github(GithubError),
+    Store(String),
+}
+
+impl From<GithubError> for IssueError {
+    fn from(error: GithubError) -> Self {
+        Self::Github(error)
+    }
+}
+
+struct IssueSync {
+    orgs_with_more: Vec<String>,
+    mention_error: Option<IssueError>,
+}
+
+#[derive(Default)]
+struct MentionCheck {
+    candidates: usize,
+    found: usize,
 }
 
 pub(super) struct SyncWorker {
@@ -186,7 +210,7 @@ impl SyncLoop {
             outcomes.push(match step {
                 Step::Important(kept) => {
                     let orgs = orgs_for_host(&config.orgs.tracked, &session.account.host);
-                    self.sync_orgs(session, orgs, kept, window).await
+                    self.sync_host(session, orgs, kept, window).await
                 }
                 Step::Done(outcome) => outcome,
             });
@@ -196,7 +220,12 @@ impl SyncLoop {
 
         let synced = outcomes
             .iter()
-            .filter(|outcome| matches!(outcome, AccountOutcome::Synced))
+            .filter(|outcome| {
+                matches!(
+                    outcome,
+                    AccountOutcome::Synced | AccountOutcome::SyncedThenRateLimited(_)
+                )
+            })
             .count();
         let failures = outcomes.len() - synced;
         if synced > 0 {
@@ -212,7 +241,9 @@ impl SyncLoop {
 
     fn apply_outcomes(&mut self, outcomes: &[AccountOutcome]) {
         for (session, outcome) in self.sessions.iter().zip(outcomes) {
-            if let AccountOutcome::RateLimited(reset_at) = outcome {
+            if let AccountOutcome::RateLimited(reset_at)
+            | AccountOutcome::SyncedThenRateLimited(reset_at) = outcome
+            {
                 self.blocked.insert(session.account.host.clone(), *reset_at);
             }
         }
@@ -252,26 +283,47 @@ impl SyncLoop {
         Step::Important(kept)
     }
 
-    async fn sync_orgs(
+    async fn sync_host(
         &self,
         session: &Session,
         orgs: Vec<String>,
-        mut kept: HashSet<String>,
+        kept: HashSet<String>,
         window: i64,
     ) -> AccountOutcome {
+        let host = &session.account.host;
+        let pages = self.worker.shared.org_depths(host, orgs);
+        let pr_more = match self.sync_orgs(session, &pages, kept, window).await {
+            Ok(orgs_with_more) => orgs_with_more,
+            Err(outcome) => return outcome,
+        };
+        let (issue_more, issue_error) = match self.sync_issues(session, &pages, window).await {
+            Ok(synced) => (synced.orgs_with_more, synced.mention_error),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        self.worker
+            .shared
+            .set_orgs_with_more(host, &combine_orgs_with_more(&pr_more, &issue_more));
+        issue_error.map_or(AccountOutcome::Synced, |error| {
+            self.report_issues(host, error)
+        })
+    }
+
+    async fn sync_orgs(
+        &self,
+        session: &Session,
+        pages: &[(String, usize)],
+        mut kept: HashSet<String>,
+        window: i64,
+    ) -> Result<Vec<String>, AccountOutcome> {
         let account = &session.account;
-        let pages = self.worker.shared.org_depths(&account.host, orgs);
         let fetched = Instant::now();
         let OrgFetch {
             prs,
             orgs_with_more,
-        } = match session.client.fetch_orgs(&pages, &kept, window).await {
+        } = match session.client.fetch_orgs(pages, &kept, window).await {
             Ok(fetch) => fetch,
-            Err(error) => return self.report(&account.host, error),
+            Err(error) => return Err(self.report(&account.host, error)),
         };
-        self.worker
-            .shared
-            .set_orgs_with_more(&account.host, &orgs_with_more);
         kept.extend(prs.iter().map(|pr| pr.id.0.clone()));
         let org_prs = prs.len();
         let total = kept.len();
@@ -283,7 +335,7 @@ impl SyncLoop {
             })
             .await;
         if !saved {
-            return AccountOutcome::Failed;
+            return Err(AccountOutcome::Failed);
         }
         info!(
             host = %account.host,
@@ -294,7 +346,116 @@ impl SyncLoop {
             elapsed_ms = elapsed_ms(fetched),
             "inbox synced"
         );
-        AccountOutcome::Synced
+        self.emit(SyncEvent::Partial);
+        Ok(orgs_with_more)
+    }
+
+    async fn sync_issues(
+        &self,
+        session: &Session,
+        pages: &[(String, usize)],
+        window: i64,
+    ) -> Result<IssueSync, IssueError> {
+        let account = &session.account;
+        let fetched = Instant::now();
+        let mut issues = session.client.fetch_important_issues(window).await?;
+        let important = issues.len();
+        let known: HashSet<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
+        let IssueOrgFetch {
+            issues: org_issues,
+            orgs_with_more,
+        } = session
+            .client
+            .fetch_org_issues(pages, &known, window)
+            .await?;
+        let org = org_issues.len();
+        issues.extend(org_issues);
+        let mentions = self.check_mentions(session, &mut issues).await;
+        let checked = mentions.as_ref().ok();
+        let candidates = checked.map_or(0, |check| check.candidates);
+        let new_mentions = checked.map_or(0, |check| check.found);
+        let total = issues.len();
+        let baseline = self.store_issues(&account.host, issues).await?;
+        info!(
+            host = %account.host,
+            login = %account.login,
+            important_issues = important,
+            org_issues = org,
+            issues = total,
+            mention_candidates = candidates,
+            new_mentions,
+            orgs_with_more = orgs_with_more.len(),
+            baseline,
+            elapsed_ms = elapsed_ms(fetched),
+            "issues synced"
+        );
+        Ok(IssueSync {
+            orgs_with_more,
+            mention_error: mentions.err(),
+        })
+    }
+
+    async fn check_mentions(
+        &self,
+        session: &Session,
+        issues: &mut [Issue],
+    ) -> Result<MentionCheck, IssueError> {
+        let account = &session.account;
+        let host = account.host.clone();
+        let last_seen = flatten(
+            self.worker
+                .store
+                .call(move |store| store.last_seen_map(&host))
+                .await,
+        )
+        .map_err(IssueError::Store)?;
+        let candidates: Vec<String> = issues
+            .iter()
+            .filter(|issue| {
+                let seen = last_seen.get(&issue.id.0).copied();
+                is_mention_candidate(issue, &account.login, seen)
+            })
+            .map(|issue| issue.id.0.clone())
+            .collect();
+        if candidates.is_empty() {
+            return Ok(MentionCheck::default());
+        }
+        let latest = session
+            .client
+            .latest_mentions(&candidates, &account.login, &last_seen)
+            .await?;
+        for issue in issues.iter_mut() {
+            if let Some(at) = latest.get(&issue.id.0) {
+                issue.last_mention_at = Some(*at);
+            }
+        }
+        Ok(MentionCheck {
+            candidates: candidates.len(),
+            found: latest.len(),
+        })
+    }
+
+    async fn store_issues(&self, host: &str, issues: Vec<Issue>) -> Result<bool, IssueError> {
+        let host = host.to_string();
+        let stored = self
+            .worker
+            .store
+            .call(move |store| -> argon_store::Result<bool> {
+                let baseline = !store.has_issues(&host)?;
+                let kept: HashSet<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
+                store.upsert_issues(&host, &issues)?;
+                store.prune_issues(&host, &kept)?;
+                if baseline {
+                    let seen: Vec<(String, DateTime<Utc>)> = issues
+                        .iter()
+                        .map(|issue| (issue.id.0.clone(), issue.updated_at))
+                        .collect();
+                    store.mark_seen_all(&host, &seen)?;
+                }
+                Ok(baseline)
+            })
+            .await;
+        flatten(stored).map_err(IssueError::Store)
     }
 
     async fn store_prs(
@@ -316,14 +477,22 @@ impl SyncLoop {
         let counted = self
             .worker
             .store
-            .call(|store| store.list_prs().map(|prs| prs.len()))
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|counted| counted.map_err(|error| error.to_string()));
-        match counted {
-            Ok(count) => {
+            .call(|store| {
+                let issues = store.list_issues().map(|issues| issues.len());
+                store.list_prs().map(|prs| (prs.len(), issues))
+            })
+            .await;
+        match flatten(counted) {
+            Ok((prs, issues)) => {
+                let issues = issues.unwrap_or_else(|error| {
+                    warn!(%error, "failed to count stored issues");
+                    0
+                });
+                let count = prs + issues;
                 info!(
                     count,
+                    prs,
+                    issues,
                     failures,
                     elapsed_ms = elapsed_ms(started),
                     "sync cycle finished"
@@ -485,6 +654,36 @@ impl SyncLoop {
             }
         }
     }
+
+    fn report_issues(&self, host: &str, error: IssueError) -> AccountOutcome {
+        let detail = match error {
+            IssueError::Github(
+                error @ (GithubError::AuthMissing { .. } | GithubError::RateLimited { .. }),
+            ) => {
+                return match self.report(host, error) {
+                    AccountOutcome::RateLimited(reset_at) => {
+                        AccountOutcome::SyncedThenRateLimited(reset_at)
+                    }
+                    outcome => outcome,
+                };
+            }
+            IssueError::Github(error) => error.to_string(),
+            IssueError::Store(error) => format!("banco local: {error}"),
+        };
+        warn!(host, error = %detail, "issue sync failed");
+        self.fail(host, format!("Falha ao sincronizar issues: {detail}"));
+        AccountOutcome::Synced
+    }
+}
+
+fn combine_orgs_with_more(pr: &[String], issue: &[String]) -> Vec<String> {
+    let mut combined: Vec<String> = Vec::with_capacity(pr.len() + issue.len());
+    for org in pr.iter().chain(issue) {
+        if !combined.iter().any(|known| known.eq_ignore_ascii_case(org)) {
+            combined.push(org.clone());
+        }
+    }
+    combined
 }
 
 fn build_runtime() -> std::io::Result<Runtime> {
@@ -512,4 +711,51 @@ fn rate_limit_message(reset_at: DateTime<Utc>) -> String {
 
 fn elapsed_ms(since: Instant) -> u64 {
     u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Case = (
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+
+    fn orgs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn combine_orgs_with_more_unites_pr_and_issue_orgs() {
+        let cases: [Case; 7] = [
+            ("both empty", &[], &[], &[]),
+            ("only pull requests", &["vela"], &[], &["vela"]),
+            ("only issues", &[], &["atlas"], &["atlas"]),
+            ("disjoint", &["vela"], &["atlas"], &["vela", "atlas"]),
+            (
+                "overlap keeps first appearance order",
+                &["vela", "nimbus"],
+                &["atlas", "nimbus"],
+                &["vela", "nimbus", "atlas"],
+            ),
+            ("same org in another case", &["Vela"], &["vela"], &["Vela"]),
+            (
+                "duplicate within one side",
+                &["vela", "vela"],
+                &["vela"],
+                &["vela"],
+            ),
+        ];
+
+        for (name, pr, issue, expected) in cases {
+            assert_eq!(
+                combine_orgs_with_more(&orgs(pr), &orgs(issue)),
+                orgs(expected),
+                "{name}"
+            );
+        }
+    }
 }
