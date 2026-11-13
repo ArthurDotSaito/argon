@@ -2,17 +2,21 @@ use std::collections::{HashMap, HashSet};
 
 use argon_core::{Involvement, PullRequest, SubjectKind};
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::Store;
 use crate::error::Result;
 use crate::local::LocalState;
 
+const MAX_CACHE_AGE_MS: i64 = 15 * 60 * 1000;
+const HYDRATION_VERSION_KEY: &str = "hydration_version";
+
 const VOLATILE_PR: &str = "CASE WHEN json_valid(data)
-        THEN json_extract(data, '$.state') = 'Open'
-            AND (json_extract(data, '$.checks') = 'Pending'
-                OR json_extract(data, '$.mergeable') = 'Unknown')
-        ELSE 0 END";
+        THEN json_extract(data, '$.state') IS 'Open'
+            AND (json_extract(data, '$.checks') IS 'Pending'
+                OR json_extract(data, '$.mergeable') IS 'Unknown')
+        ELSE 1 END";
+const VOLATILE_ISSUE: &str = "NOT json_valid(data)";
 
 fn table_of(kind: SubjectKind) -> &'static str {
     match kind {
@@ -29,14 +33,16 @@ impl Store {
     ) -> Result<HashMap<String, DateTime<Utc>>> {
         let volatile = match kind {
             SubjectKind::Pr => VOLATILE_PR,
-            SubjectKind::Issue => "0",
+            SubjectKind::Issue => VOLATILE_ISSUE,
         };
+        let oldest_fresh = Utc::now().timestamp_millis() - MAX_CACHE_AGE_MS;
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT id, updated_at FROM {} WHERE host = ?1 AND NOT ({volatile})",
+            "SELECT id, updated_at FROM {}
+             WHERE host = ?1 AND synced_at >= ?2 AND NOT ({volatile})",
             table_of(kind)
         ))?;
         let rows = stmt
-            .query_map([host], |row| {
+            .query_map(params![host, oldest_fresh], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -44,6 +50,39 @@ impl Store {
             .into_iter()
             .filter_map(|(id, at)| Some((id, DateTime::from_timestamp_millis(at)?)))
             .collect())
+    }
+
+    pub fn mark_stale(&mut self, host: &str, kind: SubjectKind, ids: &[String]) -> Result<()> {
+        self.conn.execute(
+            &format!(
+                "UPDATE {} SET synced_at = 0
+                 WHERE host = ?1 AND id IN (SELECT value FROM json_each(?2))",
+                table_of(kind)
+            ),
+            params![host, serde_json::to_string(ids)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn hydration_version(&self, host: &str) -> Result<Option<u32>> {
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM sync_state WHERE host = ?1 AND key = ?2",
+                params![host, HYDRATION_VERSION_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(stored.and_then(|value| value.parse().ok()))
+    }
+
+    pub fn set_hydration_version(&mut self, host: &str, version: u32) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO sync_state (host, key, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT(host, key) DO UPDATE SET value = excluded.value",
+            params![host, HYDRATION_VERSION_KEY, version.to_string()],
+        )?;
+        Ok(())
     }
 
     pub fn update_involvement(
@@ -123,6 +162,10 @@ mod tests {
         ChecksState, DEFAULT_HOST, Involvement, Mergeable, PrKey, PrState, PullRequest, SubjectKind,
     };
 
+    use chrono::Utc;
+    use rusqlite::params;
+
+    use super::MAX_CACHE_AGE_MS;
     use crate::Store;
 
     const GHE: &str = "ghe.acme.io";
@@ -390,6 +433,187 @@ mod tests {
             .collect();
         ids.sort();
         assert_eq!(ids, ["closed", "settled"]);
+    }
+
+    fn set_synced_at(store: &Store, table: &str, id: &str, synced_at: i64) {
+        store
+            .conn
+            .execute(
+                &format!("UPDATE {table} SET synced_at = ?1 WHERE id = ?2"),
+                params![synced_at, id],
+            )
+            .unwrap();
+    }
+
+    fn synced_at_of(store: &Store, table: &str, id: &str) -> i64 {
+        store
+            .conn
+            .query_row(
+                &format!("SELECT synced_at FROM {table} WHERE id = ?1"),
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn mapped_ids(store: &Store, kind: SubjectKind) -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .updated_at_map(DEFAULT_HOST, kind)
+            .unwrap()
+            .into_keys()
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    fn settled(id: &str) -> PullRequest {
+        PullRequest {
+            checks: Some(ChecksState::Success),
+            mergeable: Mergeable::Mergeable,
+            ..pr_on(DEFAULT_HOST, id, days_ago(1))
+        }
+    }
+
+    #[test]
+    fn updated_at_map_keeps_open_prs_without_checks_when_mergeable_is_known() {
+        let mut store = Store::open_in_memory().unwrap();
+        let no_ci = PullRequest {
+            checks: None,
+            ..settled("no_ci")
+        };
+        sync(&mut store, DEFAULT_HOST, &[no_ci]);
+        assert_eq!(mapped_ids(&store, SubjectKind::Pr), ["no_ci"]);
+    }
+
+    #[test]
+    fn updated_at_map_drops_rows_older_than_the_max_cache_age() {
+        let mut store = Store::open_in_memory().unwrap();
+        sync(
+            &mut store,
+            DEFAULT_HOST,
+            &[settled("fresh"), settled("aging"), settled("old")],
+        );
+        store
+            .upsert_issues(
+                DEFAULT_HOST,
+                &[
+                    issue_on(DEFAULT_HOST, "issue_fresh", days_ago(1)),
+                    issue_on(DEFAULT_HOST, "issue_old", days_ago(1)),
+                ],
+            )
+            .unwrap();
+        let now = Utc::now().timestamp_millis();
+        set_synced_at(
+            &store,
+            "pull_requests",
+            "aging",
+            now - MAX_CACHE_AGE_MS + 60_000,
+        );
+        set_synced_at(
+            &store,
+            "pull_requests",
+            "old",
+            now - MAX_CACHE_AGE_MS - 60_000,
+        );
+        set_synced_at(
+            &store,
+            "issues",
+            "issue_old",
+            now - MAX_CACHE_AGE_MS - 60_000,
+        );
+
+        assert_eq!(mapped_ids(&store, SubjectKind::Pr), ["aging", "fresh"]);
+        assert_eq!(mapped_ids(&store, SubjectKind::Issue), ["issue_fresh"]);
+    }
+
+    #[test]
+    fn updated_at_map_drops_rows_with_invalid_json_so_they_heal_themselves() {
+        let mut store = Store::open_in_memory().unwrap();
+        sync(&mut store, DEFAULT_HOST, &[settled("ok")]);
+        store
+            .upsert_issues(DEFAULT_HOST, &[issue_on(DEFAULT_HOST, "ok", days_ago(1))])
+            .unwrap();
+        let now = Utc::now().timestamp_millis();
+        for table in ["pull_requests", "issues"] {
+            store
+                .conn
+                .execute(
+                    &format!(
+                        "INSERT INTO {table} (host, id, repo, number, data, updated_at, synced_at)
+                         VALUES (?1, 'broken', 'acme/api', 1, '{{not json', 0, ?2)"
+                    ),
+                    params![DEFAULT_HOST, now],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(mapped_ids(&store, SubjectKind::Pr), ["ok"]);
+        assert_eq!(mapped_ids(&store, SubjectKind::Issue), ["ok"]);
+    }
+
+    #[test]
+    fn mark_stale_takes_only_the_named_rows_of_that_host_and_kind_out_of_the_map() {
+        let mut store = Store::open_in_memory().unwrap();
+        sync(&mut store, DEFAULT_HOST, &[settled("a"), settled("b")]);
+        store
+            .upsert_issues(
+                DEFAULT_HOST,
+                &[
+                    issue_on(DEFAULT_HOST, "a", days_ago(1)),
+                    issue_on(DEFAULT_HOST, "b", days_ago(1)),
+                ],
+            )
+            .unwrap();
+        store
+            .upsert_issues(GHE, &[issue_on(GHE, "a", days_ago(1))])
+            .unwrap();
+        let before = store.list_issues().unwrap();
+
+        store
+            .mark_stale(DEFAULT_HOST, SubjectKind::Issue, &["a".to_string()])
+            .unwrap();
+
+        assert_eq!(mapped_ids(&store, SubjectKind::Issue), ["b"]);
+        assert_eq!(mapped_ids(&store, SubjectKind::Pr), ["a", "b"]);
+        assert_eq!(
+            store.updated_at_map(GHE, SubjectKind::Issue).unwrap().len(),
+            1
+        );
+        assert_eq!(store.list_issues().unwrap(), before);
+    }
+
+    #[test]
+    fn update_involvement_does_not_refresh_synced_at_but_upsert_does() {
+        let mut store = Store::open_in_memory().unwrap();
+        sync(&mut store, DEFAULT_HOST, &[settled("a")]);
+        set_synced_at(&store, "pull_requests", "a", 1_000);
+
+        store
+            .update_involvement(
+                DEFAULT_HOST,
+                SubjectKind::Pr,
+                &[("a".to_string(), requested())],
+            )
+            .unwrap();
+        assert_eq!(synced_at_of(&store, "pull_requests", "a"), 1_000);
+        assert!(mapped_ids(&store, SubjectKind::Pr).is_empty());
+
+        sync(&mut store, DEFAULT_HOST, &[settled("a")]);
+        assert!(synced_at_of(&store, "pull_requests", "a") > 1_000);
+        assert_eq!(mapped_ids(&store, SubjectKind::Pr), ["a"]);
+    }
+
+    #[test]
+    fn hydration_version_is_absent_until_set_and_tracked_per_host() {
+        let mut store = Store::open_in_memory().unwrap();
+        assert_eq!(store.hydration_version(DEFAULT_HOST).unwrap(), None);
+
+        store.set_hydration_version(DEFAULT_HOST, 1).unwrap();
+        assert_eq!(store.hydration_version(DEFAULT_HOST).unwrap(), Some(1));
+        assert_eq!(store.hydration_version(GHE).unwrap(), None);
+
+        store.set_hydration_version(DEFAULT_HOST, 2).unwrap();
+        assert_eq!(store.hydration_version(DEFAULT_HOST).unwrap(), Some(2));
     }
 
     #[test]

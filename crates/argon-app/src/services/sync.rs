@@ -23,6 +23,7 @@ const RUNTIME_THREAD_NAME: &str = "argon-tokio";
 const RUNTIME_WORKERS: usize = 2;
 const LOCAL_STORE_HOST: &str = "argon.db";
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
+const HYDRATION_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncEvent {
@@ -73,6 +74,8 @@ struct IssueSync {
 struct MentionCheck {
     candidates: usize,
     found: usize,
+    retry: Vec<String>,
+    error: Option<IssueError>,
 }
 
 pub(super) struct SyncWorker {
@@ -294,14 +297,24 @@ impl SyncLoop {
     ) -> AccountOutcome {
         let host = &session.account.host;
         let pages = self.worker.shared.org_depths(host, orgs);
-        let pr_more = match self.sync_orgs(session, &pages, kept, window).await {
+        let outdated = self.cache_outdated(host).await;
+        let pr_more = match self
+            .sync_orgs(session, &pages, kept, window, outdated)
+            .await
+        {
             Ok(orgs_with_more) => orgs_with_more,
             Err(outcome) => return outcome,
         };
-        let (issue_more, issue_error) = match self.sync_issues(session, &pages, window).await {
-            Ok(synced) => (synced.orgs_with_more, synced.mention_error),
-            Err(error) => (Vec::new(), Some(error)),
-        };
+        let (issue_more, issue_error) =
+            match self.sync_issues(session, &pages, window, outdated).await {
+                Ok(synced) => {
+                    if outdated {
+                        self.record_hydration_version(host).await;
+                    }
+                    (synced.orgs_with_more, synced.mention_error)
+                }
+                Err(error) => (Vec::new(), Some(error)),
+            };
         self.worker
             .shared
             .set_orgs_with_more(host, &combine_orgs_with_more(&pr_more, &issue_more));
@@ -316,10 +329,13 @@ impl SyncLoop {
         pages: &[(String, usize)],
         mut kept: HashSet<String>,
         window: i64,
+        hydrate_all: bool,
     ) -> Result<Vec<String>, AccountOutcome> {
         let account = &session.account;
         let fetched = Instant::now();
-        let stored = self.stored_updated_at(&account.host, SubjectKind::Pr).await;
+        let stored = self
+            .stored_updated_at(&account.host, SubjectKind::Pr, hydrate_all)
+            .await;
         let OrgFetch {
             fetched:
                 Fetched {
@@ -368,11 +384,13 @@ impl SyncLoop {
         session: &Session,
         pages: &[(String, usize)],
         window: i64,
+        outdated: bool,
     ) -> Result<IssueSync, IssueError> {
         let account = &session.account;
         let fetched = Instant::now();
+        let hydrate_all = outdated || !self.issue_baseline_done(&account.host).await;
         let stored = self
-            .stored_updated_at(&account.host, SubjectKind::Issue)
+            .stored_updated_at(&account.host, SubjectKind::Issue, hydrate_all)
             .await;
         let Fetched {
             items: mut issues,
@@ -397,14 +415,16 @@ impl SyncLoop {
         kept.extend(org_kept);
         unchanged.extend(org_unchanged);
         issues.extend(org_issues);
-        let mentions = self.check_mentions(session, &mut issues, window).await;
-        let checked = mentions.as_ref().ok();
-        let candidates = checked.map_or(0, |check| check.candidates);
-        let new_mentions = checked.map_or(0, |check| check.found);
+        let MentionCheck {
+            candidates,
+            found: new_mentions,
+            retry,
+            error: mention_error,
+        } = self.check_mentions(session, &mut issues, window).await;
         let hydrated = issues.len();
         let total = kept.len();
         let baseline = self
-            .store_issues(&account.host, issues, unchanged, kept)
+            .store_issues(&account.host, issues, unchanged, kept, retry)
             .await?;
         info!(
             host = %account.host,
@@ -420,7 +440,7 @@ impl SyncLoop {
         );
         Ok(IssueSync {
             orgs_with_more,
-            mention_error: mentions.err(),
+            mention_error,
         })
     }
 
@@ -429,7 +449,7 @@ impl SyncLoop {
         session: &Session,
         issues: &mut [Issue],
         window: i64,
-    ) -> Result<MentionCheck, IssueError> {
+    ) -> MentionCheck {
         let account = &session.account;
         let host = account.host.clone();
         let loaded = flatten(
@@ -441,11 +461,14 @@ impl SyncLoop {
         let last_seen = match loaded {
             Ok(last_seen) => last_seen,
             Err(error) => {
-                let every: HashSet<String> =
-                    issues.iter().map(|issue| issue.id.0.clone()).collect();
+                let every: Vec<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
                 self.keep_stored_mentions(&account.host, issues, &every)
                     .await;
-                return Err(IssueError::Store(error));
+                return MentionCheck {
+                    retry: every,
+                    error: Some(IssueError::Store(error)),
+                    ..MentionCheck::default()
+                };
             }
         };
         let candidates: Vec<String> = issues
@@ -457,7 +480,7 @@ impl SyncLoop {
             .map(|issue| issue.id.0.clone())
             .collect();
         if candidates.is_empty() {
-            return Ok(MentionCheck::default());
+            return MentionCheck::default();
         }
         let window_start = Utc::now() - ChronoDuration::days(window);
         let since = mention_floors(&candidates, &last_seen, window_start);
@@ -468,21 +491,26 @@ impl SyncLoop {
         {
             Ok(latest) => {
                 apply_mentions(issues, &latest);
-                Ok(MentionCheck {
+                MentionCheck {
                     candidates: candidates.len(),
                     found: latest.len(),
-                })
+                    ..MentionCheck::default()
+                }
             }
             Err(error) => {
-                let candidates: HashSet<String> = candidates.into_iter().collect();
                 self.keep_stored_mentions(&account.host, issues, &candidates)
                     .await;
-                Err(error.into())
+                MentionCheck {
+                    candidates: candidates.len(),
+                    retry: candidates,
+                    error: Some(error.into()),
+                    ..MentionCheck::default()
+                }
             }
         }
     }
 
-    async fn keep_stored_mentions(&self, host: &str, issues: &mut [Issue], ids: &HashSet<String>) {
+    async fn keep_stored_mentions(&self, host: &str, issues: &mut [Issue], ids: &[String]) {
         let owned = host.to_string();
         let stored = self
             .worker
@@ -504,6 +532,7 @@ impl SyncLoop {
         issues: Vec<Issue>,
         unchanged: Vec<(String, Involvement)>,
         kept: HashSet<String>,
+        retry: Vec<String>,
     ) -> Result<bool, IssueError> {
         let host = host.to_string();
         let stored = self
@@ -513,6 +542,7 @@ impl SyncLoop {
                 let baseline = !store.issue_baseline_done(&host)?;
                 store.upsert_issues(&host, &issues)?;
                 store.update_involvement(&host, SubjectKind::Issue, &unchanged)?;
+                store.mark_stale(&host, SubjectKind::Issue, &retry)?;
                 store.prune_issues(&host, &kept)?;
                 if baseline {
                     let seen: Vec<(String, DateTime<Utc>)> = issues
@@ -528,11 +558,50 @@ impl SyncLoop {
         flatten(stored).map_err(IssueError::Store)
     }
 
+    async fn cache_outdated(&self, host: &str) -> bool {
+        let owned = host.to_string();
+        let stored = self
+            .worker
+            .store
+            .call(move |store| store.hydration_version(&owned))
+            .await;
+        hydration_outdated(flatten(stored).unwrap_or_else(|error| {
+            warn!(host, %error, "failed to read hydration version");
+            None
+        }))
+    }
+
+    async fn record_hydration_version(&self, host: &str) {
+        let owned = host.to_string();
+        let saved = self
+            .worker
+            .store
+            .call(move |store| store.set_hydration_version(&owned, HYDRATION_VERSION))
+            .await;
+        if let Err(error) = flatten(saved) {
+            warn!(host, %error, "failed to record hydration version");
+        }
+    }
+
+    async fn issue_baseline_done(&self, host: &str) -> bool {
+        let owned = host.to_string();
+        let done = self
+            .worker
+            .store
+            .call(move |store| store.issue_baseline_done(&owned))
+            .await;
+        flatten(done).unwrap_or(false)
+    }
+
     async fn stored_updated_at(
         &self,
         host: &str,
         kind: SubjectKind,
+        hydrate_all: bool,
     ) -> HashMap<String, DateTime<Utc>> {
+        if hydrate_all {
+            return HashMap::new();
+        }
         let owned = host.to_string();
         let loaded = self
             .worker
@@ -763,6 +832,10 @@ impl SyncLoop {
     }
 }
 
+fn hydration_outdated(stored: Option<u32>) -> bool {
+    stored != Some(HYDRATION_VERSION)
+}
+
 fn mention_floors(
     candidates: &[String],
     last_seen: &HashMap<String, DateTime<Utc>>,
@@ -835,6 +908,14 @@ mod tests {
 
     fn strings(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn hydration_is_outdated_unless_the_stored_version_matches() {
+        assert!(hydration_outdated(None));
+        assert!(hydration_outdated(Some(HYDRATION_VERSION + 1)));
+        assert!(hydration_outdated(Some(0)));
+        assert!(!hydration_outdated(Some(HYDRATION_VERSION)));
     }
 
     #[test]

@@ -162,6 +162,15 @@ pub fn ids_to_hydrate(
     (stale, all)
 }
 
+fn forget_unreturned(kept: &mut HashSet<String>, requested: &[String], returned: &HashSet<&str>) {
+    for id in requested
+        .iter()
+        .filter(|id| !returned.contains(id.as_str()))
+    {
+        kept.remove(id);
+    }
+}
+
 fn plan_hydration(
     found: Vec<Found>,
     known_updated: &HashMap<String, DateTime<Utc>>,
@@ -254,12 +263,7 @@ impl GithubClient {
         let requested: Vec<String> = pending.iter().map(|(id, _)| id.clone()).collect();
         let items = self.hydrate_all::<P>(pending).await?;
         let returned: HashSet<&str> = items.iter().map(|item| item.id()).collect();
-        for id in requested
-            .iter()
-            .filter(|id| !returned.contains(id.as_str()))
-        {
-            kept.remove(id);
-        }
+        forget_unreturned(&mut kept, &requested, &returned);
         Ok(Fetched {
             items,
             kept,
@@ -687,6 +691,22 @@ mod tests {
             ]
         );
         assert_eq!(plan.kept.len(), 3);
+    }
+
+    #[test]
+    fn forget_unreturned_drops_requested_ids_that_did_not_come_back() {
+        let mut kept: HashSet<String> = ["came_back", "vanished", "unchanged"]
+            .map(String::from)
+            .into();
+        let requested = vec!["came_back".to_string(), "vanished".to_string()];
+        let returned = HashSet::from(["came_back"]);
+
+        forget_unreturned(&mut kept, &requested, &returned);
+
+        assert_eq!(
+            kept,
+            HashSet::from(["came_back", "unchanged"].map(String::from))
+        );
     }
 
     #[test]
