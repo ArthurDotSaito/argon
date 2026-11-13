@@ -35,6 +35,10 @@ pub fn view_title(view: InboxView) -> &'static str {
         InboxView::ChangesRequested => "Changes requested",
         InboxView::ReadyToMerge => "Ready to merge",
         InboxView::AlreadyDone => "Already done",
+        InboxView::IssuesAssigned => "Atribuídas a você",
+        InboxView::IssuesMentioned => "Mencionado",
+        InboxView::IssuesAuthored => "Criadas por você",
+        InboxView::IssuesParticipating => "Participando",
     }
 }
 

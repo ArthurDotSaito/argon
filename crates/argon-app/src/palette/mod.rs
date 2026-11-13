@@ -64,7 +64,8 @@ impl Palette {
             .read(cx)
             .items()
             .iter()
-            .map(|item| PrEntry::new(&item.pr))
+            .filter_map(|item| item.subject.as_pr())
+            .map(PrEntry::new)
             .collect();
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));

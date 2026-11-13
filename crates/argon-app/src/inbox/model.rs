@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use argon_core::{PrKey, PullRequest, ViewSet};
+use argon_core::{PrKey, PullRequest, SubjectKind, ViewSet};
 use argon_store::Store;
 use chrono::{Local, Utc};
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task};
 
 use super::InboxView;
+use super::filter::{self, KindFilter};
 use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, load_items};
 use super::labels;
 use super::sections::{InboxRow, Sections};
@@ -13,7 +14,15 @@ use crate::services::{Services, SyncEvent, flatten};
 use crate::sync_status::SyncStatus;
 
 pub enum InboxEvent {
-    OpenPr { key: PrKey, preview: bool },
+    OpenPr {
+        key: PrKey,
+        preview: bool,
+    },
+    #[expect(dead_code)]
+    OpenIssue {
+        key: PrKey,
+        preview: bool,
+    },
     ShowList,
 }
 
@@ -30,6 +39,7 @@ pub struct InboxModel {
     accounts: Vec<AccountEntry>,
     view: InboxView,
     org: Option<OrgKey>,
+    kind: KindFilter,
     query: String,
     sections: Sections,
     selected: usize,
@@ -68,6 +78,7 @@ impl InboxModel {
             accounts: Vec::new(),
             view: InboxView::Inbox,
             org: None,
+            kind: KindFilter::All,
             query: String::new(),
             sections: Sections::default(),
             selected: 0,
@@ -164,7 +175,7 @@ impl InboxModel {
 
     pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
         let ix = *self.index.get(key)?;
-        self.items.get(ix).map(|item| &item.pr)
+        self.items.get(ix)?.subject.as_pr()
     }
 
     pub fn is_loading_more(&self) -> bool {
@@ -235,6 +246,20 @@ impl InboxModel {
         cx.notify();
     }
 
+    #[expect(dead_code)]
+    pub fn kind_filter(&self) -> KindFilter {
+        self.kind
+    }
+
+    #[expect(dead_code)]
+    pub fn set_kind_filter(&mut self, filter: KindFilter, cx: &mut Context<Self>) {
+        if self.kind != filter {
+            self.kind = filter;
+            self.refilter(true);
+            cx.notify();
+        }
+    }
+
     pub fn clear_org(&mut self, cx: &mut Context<Self>) {
         if self.org.take().is_some() {
             self.refilter(true);
@@ -276,7 +301,7 @@ impl InboxModel {
         self.open(self.selected, preview, cx);
     }
 
-    pub fn open_pr(&mut self, key: &PrKey, preview: bool, cx: &mut Context<Self>) {
+    pub fn open_subject(&mut self, key: &PrKey, preview: bool, cx: &mut Context<Self>) {
         if let Some(position) = self.position_of(key) {
             self.open(position, preview, cx);
         }
@@ -295,13 +320,16 @@ impl InboxModel {
         };
         self.selected = position;
         let item = &mut self.items[ix];
-        let key = item.pr.key();
+        let (key, kind) = (item.subject.key(), item.subject.kind());
         if item.unread {
             item.unread = false;
-            let (seen, updated_at) = (key.clone(), item.pr.updated_at);
+            let (seen, updated_at) = (key.clone(), item.subject.updated_at());
             self.persist(move |store| store.mark_seen(&seen, updated_at), cx);
         }
-        cx.emit(InboxEvent::OpenPr { key, preview });
+        cx.emit(match kind {
+            SubjectKind::Pr => InboxEvent::OpenPr { key, preview },
+            SubjectKind::Issue => InboxEvent::OpenIssue { key, preview },
+        });
         cx.notify();
     }
 
@@ -312,9 +340,9 @@ impl InboxModel {
         let neighbour = [self.selected + 1, self.selected.wrapping_sub(1)]
             .into_iter()
             .find_map(|position| self.item_at(position))
-            .map(|item| item.pr.key());
+            .map(|item| item.subject.key());
         let item = self.items.remove(ix);
-        let (key, updated_at) = (item.pr.key(), item.pr.updated_at);
+        let (key, updated_at) = (item.subject.key(), item.subject.updated_at());
         self.reindex();
         self.recount();
         self.rebuild(neighbour, false);
@@ -328,7 +356,7 @@ impl InboxModel {
         };
         let item = &mut self.items[ix];
         item.unread = !item.unread;
-        let (key, updated_at) = (item.pr.key(), item.pr.updated_at);
+        let (key, updated_at) = (item.subject.key(), item.subject.updated_at());
         if item.unread {
             self.persist(move |store| store.mark_unread(&key), cx);
         } else {
@@ -452,7 +480,7 @@ impl InboxModel {
             .items
             .iter()
             .enumerate()
-            .map(|(ix, item)| (item.pr.key(), ix))
+            .map(|(ix, item)| (item.subject.key(), ix))
             .collect();
     }
 
@@ -474,7 +502,7 @@ impl InboxModel {
     }
 
     fn refilter(&mut self, reset_scroll: bool) {
-        let kept = self.item_at(self.selected).map(|item| item.pr.key());
+        let kept = self.item_at(self.selected).map(|item| item.subject.key());
         self.rebuild(kept, reset_scroll);
     }
 
@@ -485,6 +513,7 @@ impl InboxModel {
             .iter()
             .enumerate()
             .filter(|(_, item)| item.views.contains(set))
+            .filter(|(_, item)| filter::passes(item.subject.kind(), self.kind, self.view))
             .filter(|(_, item)| self.org.as_ref().is_none_or(|org| item.belongs_to(org)))
             .filter(|(_, item)| item.matches(&self.query))
             .map(|(ix, _)| ix)

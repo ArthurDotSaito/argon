@@ -207,6 +207,10 @@ fn view_icon(view: InboxView) -> IconName {
         InboxView::ChangesRequested => IconName::FileDiff,
         InboxView::ReadyToMerge => IconName::GitMerge,
         InboxView::AlreadyDone => IconName::CheckCheck,
+        InboxView::IssuesAssigned => IconName::CircleDot,
+        InboxView::IssuesMentioned => IconName::AtSign,
+        InboxView::IssuesAuthored => IconName::Pencil,
+        InboxView::IssuesParticipating => IconName::MessageSquare,
     }
 }
 

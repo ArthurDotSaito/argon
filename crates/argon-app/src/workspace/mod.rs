@@ -189,6 +189,7 @@ impl Workspace {
             InboxEvent::OpenPr { key, preview } => {
                 self.open_item(CenterItem::Pr(key.clone()), *preview, window, cx);
             }
+            InboxEvent::OpenIssue { .. } => {}
             InboxEvent::ShowList => self.open_item(CenterItem::Inbox, false, window, cx),
         }
     }

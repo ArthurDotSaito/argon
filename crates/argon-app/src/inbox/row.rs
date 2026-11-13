@@ -1,4 +1,4 @@
-use argon_core::{ChecksState, PullRequest};
+use argon_core::{ChecksState, Issue, IssueState, PullRequest};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
@@ -10,7 +10,7 @@ use gpui_kit::{
     Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
-use super::items::InboxItem;
+use super::items::{InboxItem, Subject};
 use super::labels;
 use crate::theme::density;
 use crate::ui::{self, avatar, state_icon};
@@ -81,59 +81,18 @@ pub fn load_more(
         )
 }
 
-pub fn pr_row(
+pub fn item_row(
     position: usize,
     item: &InboxItem,
     selected: bool,
     now: DateTime<Utc>,
     cx: &App,
 ) -> Stateful<Div> {
+    let (summary, details) = match &item.subject {
+        Subject::Pr(pr) => pr_lines(item, pr, now, cx),
+        Subject::Issue(issue) => issue_lines(item, issue, now, cx),
+    };
     let theme = cx.theme();
-    let pr = &item.pr;
-    let summary = h_flex()
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .items_center()
-        .child(unread_dot(item.unread, cx))
-        .child(state_icon(pr, cx))
-        .child(avatar(&pr.author, AVATAR_SIZE))
-        .child(title(item, cx))
-        .child(checks(pr.checks, cx))
-        .child(reviewers(pr, cx))
-        .child(diff_stat(pr, cx))
-        .child(comments(pr.comments, cx))
-        .child(
-            mono(ui::age_label(now, pr.updated_at), cx)
-                .w(px(AGE_WIDTH))
-                .flex()
-                .justify_end(),
-        );
-    let details = h_flex()
-        .w_full()
-        .min_w_0()
-        .pl(px(REASON_INDENT))
-        .gap_1p5()
-        .items_center()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(mono(labels::repo_ref(&pr.repo, pr.number), cx))
-        .child(SEPARATOR)
-        .child(
-            mono(pr.head.clone(), cx)
-                .flex_shrink(1.)
-                .min_w_0()
-                .max_w(px(BRANCH_MAX_WIDTH)),
-        )
-        .child(SEPARATOR)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(labels::reason_line(&item.reason, now, pr.updated_at)),
-        );
-
     div()
         .id(("inbox-row", position))
         .w_full()
@@ -160,6 +119,85 @@ pub fn pr_row(
         .child(details)
 }
 
+fn pr_lines(item: &InboxItem, pr: &PullRequest, now: DateTime<Utc>, cx: &App) -> (Div, Div) {
+    let summary = summary_line()
+        .child(unread_dot(item.unread, cx))
+        .child(state_icon(pr, cx))
+        .child(avatar(&pr.author, AVATAR_SIZE))
+        .child(title(item, cx))
+        .child(checks(pr.checks, cx))
+        .child(reviewers(pr, cx))
+        .child(diff_stat(pr, cx))
+        .child(comments(pr.comments, cx))
+        .child(age(now, pr.updated_at, cx));
+    let details = details_line(cx)
+        .child(mono(labels::repo_ref(&pr.repo, pr.number), cx))
+        .child(SEPARATOR)
+        .child(
+            mono(pr.head.clone(), cx)
+                .flex_shrink(1.)
+                .min_w_0()
+                .max_w(px(BRANCH_MAX_WIDTH)),
+        )
+        .child(SEPARATOR)
+        .child(reason(item, now, pr.updated_at));
+    (summary, details)
+}
+
+fn issue_lines(item: &InboxItem, issue: &Issue, now: DateTime<Utc>, cx: &App) -> (Div, Div) {
+    let theme = cx.theme();
+    let state_color = match issue.state {
+        IssueState::Open => theme.success,
+        IssueState::Closed => theme.muted_foreground,
+    };
+    let summary = summary_line()
+        .child(unread_dot(item.unread, cx))
+        .child(
+            Icon::new(IconName::CircleDot)
+                .small()
+                .text_color(state_color),
+        )
+        .child(avatar(&issue.author, AVATAR_SIZE))
+        .child(title(item, cx))
+        .child(comments(issue.comments, cx))
+        .child(age(now, issue.updated_at, cx));
+    let details = details_line(cx)
+        .child(mono(labels::repo_ref(&issue.repo, issue.number), cx))
+        .child(SEPARATOR)
+        .child(reason(item, now, issue.updated_at));
+    (summary, details)
+}
+
+fn summary_line() -> Div {
+    h_flex().w_full().min_w_0().gap_2().items_center()
+}
+
+fn details_line(cx: &App) -> Div {
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .pl(px(REASON_INDENT))
+        .gap_1p5()
+        .items_center()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+}
+
+fn age(now: DateTime<Utc>, updated_at: DateTime<Utc>, cx: &App) -> Div {
+    mono(ui::age_label(now, updated_at), cx)
+        .w(px(AGE_WIDTH))
+        .flex()
+        .justify_end()
+}
+
+fn reason(item: &InboxItem, now: DateTime<Utc>, updated_at: DateTime<Utc>) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .child(labels::reason_line(&item.reason, now, updated_at))
+}
+
 fn unread_dot(unread: bool, cx: &App) -> Div {
     div()
         .size(px(UNREAD_DOT))
@@ -175,7 +213,7 @@ fn title(item: &InboxItem, cx: &App) -> Div {
         .truncate()
         .text_color(cx.theme().foreground)
         .when(item.unread, |this| this.font_semibold())
-        .child(item.pr.title.clone())
+        .child(item.subject.title().to_string())
 }
 
 fn mono(text: impl Into<SharedString>, cx: &App) -> Div {

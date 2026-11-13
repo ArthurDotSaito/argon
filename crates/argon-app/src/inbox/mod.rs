@@ -1,3 +1,4 @@
+mod filter;
 mod inbox_view;
 mod items;
 mod labels;
@@ -32,10 +33,14 @@ pub enum InboxView {
     ChangesRequested,
     ReadyToMerge,
     AlreadyDone,
+    IssuesAssigned,
+    IssuesMentioned,
+    IssuesAuthored,
+    IssuesParticipating,
 }
 
 impl InboxView {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 11] = [
         Self::Inbox,
         Self::NeedsYou,
         Self::YourPrs,
@@ -43,6 +48,10 @@ impl InboxView {
         Self::ChangesRequested,
         Self::ReadyToMerge,
         Self::AlreadyDone,
+        Self::IssuesAssigned,
+        Self::IssuesMentioned,
+        Self::IssuesAuthored,
+        Self::IssuesParticipating,
     ];
 
     pub fn view_set(self) -> ViewSet {
@@ -54,6 +63,10 @@ impl InboxView {
             Self::ChangesRequested => ViewSet::CHANGES_REQUESTED,
             Self::ReadyToMerge => ViewSet::READY_TO_MERGE,
             Self::AlreadyDone => ViewSet::ALREADY_DONE,
+            Self::IssuesAssigned => ViewSet::ISSUES_ASSIGNED,
+            Self::IssuesMentioned => ViewSet::ISSUES_MENTIONED,
+            Self::IssuesAuthored => ViewSet::ISSUES_AUTHORED,
+            Self::IssuesParticipating => ViewSet::ISSUES_PARTICIPATING,
         }
     }
 

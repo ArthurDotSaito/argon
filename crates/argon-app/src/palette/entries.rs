@@ -82,6 +82,10 @@ fn go_to(view: InboxView) -> CommandSpec {
         InboxView::ChangesRequested => "Ir para Changes requested",
         InboxView::ReadyToMerge => "Ir para Ready to merge",
         InboxView::AlreadyDone => "Ir para Already done",
+        InboxView::IssuesAssigned => "Ir para Atribuídas a você",
+        InboxView::IssuesMentioned => "Ir para Mencionado",
+        InboxView::IssuesAuthored => "Ir para Criadas por você",
+        InboxView::IssuesParticipating => "Ir para Participando",
     };
     CommandSpec::new(title, IconName::ArrowRight, GoToView(view))
 }

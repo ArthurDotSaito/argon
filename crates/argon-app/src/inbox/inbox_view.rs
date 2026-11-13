@@ -159,14 +159,14 @@ impl InboxPane {
             .model
             .read(cx)
             .item_at(position)
-            .map(|item| item.pr.key())
+            .map(|item| item.subject.key())
         else {
             return;
         };
         let model = self.model.downgrade();
         self.pending_click = Some(cx.spawn(async move |_, cx| {
             cx.background_executor().timer(SINGLE_CLICK_DELAY).await;
-            _ = model.update(cx, |model, cx| model.open_pr(&id, true, cx));
+            _ = model.update(cx, |model, cx| model.open_subject(&id, true, cx));
         }));
     }
 
@@ -323,13 +323,13 @@ fn render_list_row(
         Some(InboxRow::Header { title, count }) => {
             row::header(title.clone(), *count, cx).into_any_element()
         }
-        Some(InboxRow::Pr { position }) => {
+        Some(InboxRow::Item { position }) => {
             let position = *position;
             let Some(item) = model.item_at(position) else {
                 return div().into_any_element();
             };
             let pane = pane.clone();
-            row::pr_row(position, item, model.is_selected(position), Utc::now(), cx)
+            row::item_row(position, item, model.is_selected(position), Utc::now(), cx)
                 .on_click(move |event: &ClickEvent, window, cx| {
                     _ = pane.update(cx, |pane, cx| {
                         pane.on_row_click(position, event.click_count(), window, cx)
