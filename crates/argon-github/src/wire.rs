@@ -171,6 +171,8 @@ pub(crate) struct IdsData {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct IdsConnection {
+    #[serde(default)]
+    pub(crate) issue_count: u32,
     pub(crate) page_info: PageInfo,
     pub(crate) nodes: Vec<Option<IdNode>>,
 }

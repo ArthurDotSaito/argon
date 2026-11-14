@@ -1,5 +1,6 @@
 query InboxIds($query: String!, $after: String, $first: Int!) {
   search(query: $query, type: ISSUE, first: $first, after: $after) {
+    issueCount
     pageInfo {
       hasNextPage
       endCursor

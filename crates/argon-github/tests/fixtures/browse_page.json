@@ -1,0 +1,13 @@
+{
+  "data": {
+    "search": {
+      "issueCount": 31,
+      "pageInfo": { "hasNextPage": true, "endCursor": "Y3Vyc29yOjI=" },
+      "nodes": [
+        { "id": "I_kwDOOrbita0130", "updatedAt": "2026-11-03T16:45:00Z" },
+        { "id": "I_kwDOOrbita0101", "updatedAt": "2026-11-02T10:15:00Z" }
+      ]
+    },
+    "rateLimit": { "remaining": 4970, "resetAt": "2026-11-02T14:00:00Z" }
+  }
+}

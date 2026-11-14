@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::client::GithubClient;
 use crate::convert::{into_issues, into_pull_requests};
 use crate::error::{GithubError, Result};
-use crate::wire::{HydrateData, IdsData, IssueHydrateData, RateLimit};
+use crate::wire::{HydrateData, IdsConnection, IdsData, IssueHydrateData, RateLimit};
 
 const IDS_QUERY: &str = include_str!("../queries/inbox_ids.graphql");
 const HYDRATE_QUERY: &str = concat!(
@@ -142,6 +142,36 @@ pub struct OrgFetch<T> {
     pub orgs_with_more: Vec<String>,
 }
 
+pub struct IssuePage {
+    pub issues: Vec<Issue>,
+    pub next: Option<String>,
+    pub total: u32,
+}
+
+struct PageIds {
+    ids: Vec<String>,
+    next: Option<String>,
+    total: u32,
+}
+
+fn page_ids(search: IdsConnection) -> PageIds {
+    let next = search
+        .page_info
+        .has_next_page
+        .then_some(search.page_info.end_cursor)
+        .flatten();
+    PageIds {
+        ids: search
+            .nodes
+            .into_iter()
+            .flatten()
+            .filter_map(|node| node.id)
+            .collect(),
+        next,
+        total: search.issue_count,
+    }
+}
+
 struct Plan {
     pending: Vec<(String, Involvement)>,
     unchanged: Vec<(String, Involvement)>,
@@ -251,6 +281,29 @@ impl GithubClient {
         Ok(OrgFetch {
             fetched,
             orgs_with_more,
+        })
+    }
+
+    pub async fn browse_issues(
+        &self,
+        query: &str,
+        after: Option<&str>,
+        first: usize,
+    ) -> Result<IssuePage> {
+        let variables = json!({ "query": query, "after": after, "first": first });
+        let data: IdsData = self.graphql("browse_issues", IDS_QUERY, variables).await?;
+        check_rate_limit(&data.rate_limit)?;
+        let page = page_ids(data.search);
+        let pending = page
+            .ids
+            .into_iter()
+            .map(|id| (id, Involvement::default()))
+            .collect();
+        let issues = self.hydrate_all::<IssueHydrateData>(pending).await?;
+        Ok(IssuePage {
+            issues,
+            next: page.next,
+            total: page.total,
         })
     }
 
@@ -850,6 +903,41 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["I_kwDOOrbita0101", "I_kwDOOrbita0087"]);
         assert!(!data.search.page_info.has_next_page);
+    }
+
+    fn parsed_page(json: &str) -> PageIds {
+        let envelope: Envelope<IdsData> = serde_json::from_str(json).unwrap();
+        page_ids(envelope.into_data(Utc::now()).unwrap().data.search)
+    }
+
+    #[test]
+    fn ids_query_asks_for_the_total_count() {
+        assert!(IDS_QUERY.contains("issueCount"));
+    }
+
+    #[test]
+    fn browse_page_with_more_results_keeps_the_cursor_and_total() {
+        let page = parsed_page(include_str!("../tests/fixtures/browse_page.json"));
+        assert_eq!(page.ids, vec!["I_kwDOOrbita0130", "I_kwDOOrbita0101"]);
+        assert_eq!(page.next.as_deref(), Some("Y3Vyc29yOjI="));
+        assert_eq!(page.total, 31);
+    }
+
+    #[test]
+    fn last_browse_page_has_no_cursor_and_skips_empty_nodes() {
+        let page = parsed_page(include_str!("../tests/fixtures/search_page_issues.json"));
+        assert_eq!(page.ids, vec!["I_kwDOOrbita0101", "I_kwDOOrbita0087"]);
+        assert_eq!(page.next, None);
+        assert_eq!(page.total, 2);
+    }
+
+    #[test]
+    fn page_without_a_next_page_ignores_a_stale_cursor() {
+        let page = parsed_page(
+            r#"{"data":{"search":{"issueCount":1,"pageInfo":{"hasNextPage":false,"endCursor":"Y3Vyc29yOjE="},"nodes":[{"id":"I_1","updatedAt":"2026-11-02T10:15:00Z"}]},"rateLimit":{"remaining":4970,"resetAt":"2026-11-02T14:00:00Z"}}}"#,
+        );
+        assert_eq!(page.next, None);
+        assert_eq!(page.total, 1);
     }
 
     #[test]
