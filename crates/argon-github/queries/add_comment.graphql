@@ -1,5 +1,10 @@
 mutation AddComment($input: AddCommentInput!) {
   addComment(input: $input) {
-    clientMutationId
+    commentEdge {
+      node {
+        id
+        url
+      }
+    }
   }
 }

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use serde_json::{Value, json};
 
 use crate::codex::protocol::next_cursor;
@@ -111,10 +111,12 @@ pub(super) fn auto_allowed(
     ask: &PermissionAsk,
     cwd: &Path,
     mode: PermissionMode,
+    kind: SessionKind,
     grants: &HashSet<String>,
 ) -> bool {
-    match decide_permission(ask, cwd, mode) {
+    match decide_permission(ask, cwd, mode, kind) {
         PermissionDecision::Allow { .. } => true,
+        PermissionDecision::Deny { .. } => false,
         PermissionDecision::Ask(_) => grants.contains(&ask.kind) && session_grant_applies(ask, cwd),
     }
 }

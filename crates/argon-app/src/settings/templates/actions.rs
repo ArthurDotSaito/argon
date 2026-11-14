@@ -1,4 +1,4 @@
-use argon_core::ReviewCfg;
+use argon_core::{PromptTemplate, ReviewCfg};
 use gpui_kit::{AppContext as _, Context, Task, Window};
 
 use super::TemplatesSection;
@@ -58,7 +58,11 @@ impl TemplatesSection {
 
     pub(super) fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.fresh_id(labels::NEW_TEMPLATE_NAME);
-        let source = compose(labels::NEW_TEMPLATE_NAME, None, labels::NEW_TEMPLATE_BODY);
+        let source = compose(&PromptTemplate {
+            name: labels::NEW_TEMPLATE_NAME.into(),
+            body: labels::NEW_TEMPLATE_BODY.into(),
+            ..PromptTemplate::default()
+        });
         self.write(id, source, window, cx);
     }
 
@@ -68,7 +72,7 @@ impl TemplatesSection {
         };
         let name = labels::copy_of(draft.name.trim());
         let id = self.fresh_id(&name);
-        let source = compose(&name, draft.description.as_deref(), &draft.body);
+        let source = compose(&PromptTemplate { name, ..draft });
         self.write(id, source, window, cx);
     }
 
@@ -84,8 +88,9 @@ impl TemplatesSection {
                 return;
             }
         };
-        let source = compose(&name, draft.description.as_deref(), &draft.body);
-        self.write(draft.id, source, window, cx);
+        let id = draft.id.clone();
+        let source = compose(&PromptTemplate { name, ..draft });
+        self.write(id, source, window, cx);
     }
 
     pub(super) fn request_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -118,6 +123,10 @@ impl TemplatesSection {
         if self.config.review.default_template == id {
             let fallback = ReviewCfg::default().default_template;
             config_watch::update(cx, |config| config.review.default_template = fallback);
+        }
+        if self.config.review.default_plan_template == id {
+            let fallback = ReviewCfg::default().default_plan_template;
+            config_watch::update(cx, |config| config.review.default_plan_template = fallback);
         }
         self.selected = None;
         let job = cx.background_spawn(async move {

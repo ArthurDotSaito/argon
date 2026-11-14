@@ -18,7 +18,7 @@ use crate::http::LocalApi;
 use crate::registry::{AgentSpec, ModelInfo};
 use crate::session::{
     AgentEvent, Command, DriverFuture, DriverRun, PermissionAnswer, PermissionAsk, PermissionReply,
-    Ready, Result, SessionError, Shared, StderrTail, session_grant_applies,
+    Ready, Result, SessionError, Shared, StderrTail,
 };
 
 #[path = "driver_state.rs"]
@@ -26,8 +26,9 @@ mod state;
 
 use state::{
     Close, Family, Intake, Reconnect, Route, Turns, check_model, created_session, decision,
-    event_session, grants_session, initial_model, is_active, is_not_found, is_path_safe, model_ref,
-    needs_restart, permission_intake, same_directory, session_path, within, without_child_plans,
+    event_session, grant_shortcut_applies, grants_session, initial_model, is_active, is_not_found,
+    is_path_safe, model_ref, needs_restart, permission_intake, same_directory, session_path,
+    within, without_child_plans,
 };
 
 const EVENTS_PATH: &str = "/api/event";
@@ -404,7 +405,7 @@ impl Session {
     }
 
     async fn ask(&mut self, route: Route, ask: PermissionAsk) {
-        if self.grants.contains(&ask.kind) && session_grant_applies(&ask, &self.cwd) {
+        if grant_shortcut_applies(&self.grants, &ask, &self.cwd, self.shared.kind()) {
             self.reply(&route, ALLOW_ONCE).await;
             return;
         }

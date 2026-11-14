@@ -10,7 +10,7 @@ use super::template::{TEMPLATE_EXTENSION, io_error};
 #[cfg(test)]
 mod tests;
 
-pub(super) const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
+pub(super) const DEFAULT_TEMPLATES: [(&str, &str); 4] = [
     (
         "review-padrao",
         include_str!("../../templates/review-padrao.md"),
@@ -20,9 +20,13 @@ pub(super) const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
         "performance",
         include_str!("../../templates/performance.md"),
     ),
+    (
+        "plan-padrao",
+        include_str!("../../templates/plan-padrao.md"),
+    ),
 ];
 
-const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 3] = [
+const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 4] = [
     (
         "review-padrao",
         &[
@@ -48,6 +52,7 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 3] = [
             "33f5c35ae93f4f038331cc44c510742725246a0e226a02d8f0690b2b86a9873f",
         ],
     ),
+    ("plan-padrao", &[]),
 ];
 
 fn content_hash(content: &str) -> String {

@@ -1,12 +1,16 @@
 mod config;
 mod diff;
+mod fence;
 mod findings;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fixtures;
+mod mention;
 mod model;
 mod paths;
+mod plan_output;
 mod prompt;
 mod reason;
+mod redact;
 mod review;
 mod time;
 mod views;
@@ -19,19 +23,24 @@ pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patc
 pub use findings::{
     Finding, FindingsError, FindingsParse, Severity, filter_findings, parse_findings,
 };
+pub use mention::{is_mention_candidate, mentions_login};
 pub use model::{
-    ChecksState, DEFAULT_HOST, Involvement, LatestReview, Mergeable, PrId, PrKey, PrState,
-    PullRequest, ReviewDecision, ReviewState, Side,
+    ChecksState, DEFAULT_HOST, Involvement, Issue, IssueLabel, IssueRef, IssueState,
+    IssueStateReason, LatestReview, LinkedPr, Mergeable, PrId, PrKey, PrState, PullRequest,
+    ReviewDecision, ReviewState, SessionKind, Side, SubIssues, SubjectKind,
 };
 pub use paths::Paths;
+pub use plan_output::parse_plan;
 pub use prompt::{
-    InvalidTemplate, PromptContext, PromptError, PromptTemplate, RenderedPrompt, TemplateSet,
-    ensure_default_templates, load_templates, render_prompt, scan_templates,
+    InvalidTemplate, PlanComment, PlanContext, PromptContext, PromptError, PromptTemplate,
+    RenderedPrompt, TemplateKind, TemplateSet, ensure_default_templates, load_templates,
+    render_plan_prompt, render_prompt, scan_templates,
 };
-pub use reason::{Reason, reason};
+pub use reason::{Reason, issue_reason, reason};
+pub use redact::{redact_line, redact_text};
 pub use review::{
     DraftComment, DraftReview, DraftSource, DraftThreadInput, ReviewError, ReviewEvent,
     ReviewSubmission, build_submission, single_comment_submission,
 };
 pub use time::{DateBucket, date_bucket};
-pub use views::{ViewSet, classify, is_ready};
+pub use views::{ViewSet, classify, classify_issue, is_ready};

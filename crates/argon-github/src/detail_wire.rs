@@ -3,7 +3,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use crate::wire::{Actor, WirePr, WireReviewState, WireReviewer, WireRollup, null_as_default};
+use crate::wire::{
+    Actor, WireIssue, WireIssueState, WirePr, WireRepository, WireReviewState, WireReviewer,
+    WireRollup, null_as_default,
+};
 
 pub(crate) struct Lenient<T>(Option<T>);
 
@@ -93,6 +96,76 @@ pub(crate) struct WireDetail {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct IssueDetailData {
+    pub(crate) node: Option<WireIssueNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "__typename")]
+pub(crate) enum WireIssueNode {
+    Issue(Box<WireIssueDetail>),
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireIssueDetail {
+    #[serde(flatten)]
+    pub(crate) issue: WireIssue,
+    pub(crate) body: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) timeline_items: PagedConnection<WireTimelineItem>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) linked_pull_requests: PagedConnection<WirePr>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) sub_issues: PagedConnection<WireSubIssue>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireSubIssue {
+    pub(crate) number: u64,
+    pub(crate) title: String,
+    pub(crate) state: WireIssueState,
+    pub(crate) repository: WireRepository,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireMentionsData {
+    pub(crate) nodes: Vec<Option<Lenient<WireMentionIssue>>>,
+}
+
+impl WireMentionsData {
+    pub(crate) fn into_issues(self) -> Vec<WireMentionIssue> {
+        self.nodes
+            .into_iter()
+            .flatten()
+            .filter_map(|node| node.0)
+            .collect()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireMentionIssue {
+    pub(crate) id: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) author: Option<Actor>,
+    pub(crate) body: Option<String>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) timeline_items: PagedConnection<WireMentionComment>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireMentionComment {
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) author: Option<Actor>,
+    pub(crate) body: String,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct WireLabel {
     pub(crate) name: String,
     pub(crate) color: String,
@@ -170,8 +243,67 @@ pub(crate) enum WireTimelineItem {
     MergedEvent(WireActorEvent),
     ClosedEvent(WireActorEvent),
     ReadyForReviewEvent(WireActorEvent),
+    AssignedEvent(WireAssignEvent),
+    UnassignedEvent(WireAssignEvent),
+    UnlabeledEvent(WireLabeledEvent),
+    ReopenedEvent(WireActorEvent),
+    CrossReferencedEvent(WireCrossReferencedEvent),
+    ConnectedEvent(WireConnectedEvent),
+    MilestonedEvent(WireMilestonedEvent),
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireAssignEvent {
+    pub(crate) actor: Option<Actor>,
+    pub(crate) assignee: Option<WireAssignee>,
+    pub(crate) created_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireAssignee {
+    pub(crate) login: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireCrossReferencedEvent {
+    pub(crate) actor: Option<Actor>,
+    pub(crate) source: WireReferenced,
+    pub(crate) created_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireConnectedEvent {
+    pub(crate) actor: Option<Actor>,
+    pub(crate) subject: WireReferenced,
+    pub(crate) created_at: DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "__typename")]
+pub(crate) enum WireReferenced {
+    Issue(WireReferencedItem),
+    PullRequest(WireReferencedItem),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireReferencedItem {
+    pub(crate) number: u64,
+    pub(crate) repository: WireRepository,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireMilestonedEvent {
+    pub(crate) actor: Option<Actor>,
+    pub(crate) milestone_title: String,
+    pub(crate) created_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +313,8 @@ pub(crate) struct WireIssueComment {
     pub(crate) author: Option<Actor>,
     pub(crate) body: String,
     pub(crate) created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
 }
 
 #[derive(Deserialize)]

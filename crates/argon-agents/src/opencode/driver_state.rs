@@ -3,11 +3,14 @@ use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
+use argon_core::SessionKind;
 use serde_json::Value;
 
 use crate::opencode::protocol::split_model;
 use crate::registry::ModelInfo;
-use crate::session::{AgentEvent, PermissionAnswer, Result, SessionError};
+use crate::session::{
+    AgentEvent, PermissionAnswer, PermissionAsk, Result, SessionError, session_grant_applies,
+};
 use crate::util::json_text;
 
 const END_TURN: &str = "end_turn";
@@ -168,6 +171,15 @@ pub(super) fn decision(answer: &PermissionAnswer) -> &str {
         PermissionAnswer::Selected(option) => option,
         PermissionAnswer::Cancelled => REJECT,
     }
+}
+
+pub(super) fn grant_shortcut_applies(
+    grants: &HashSet<String>,
+    ask: &PermissionAsk,
+    cwd: &Path,
+    kind: SessionKind,
+) -> bool {
+    kind != SessionKind::Plan && grants.contains(&ask.kind) && session_grant_applies(ask, cwd)
 }
 
 pub(super) fn grants_session(answer: &PermissionAnswer) -> bool {

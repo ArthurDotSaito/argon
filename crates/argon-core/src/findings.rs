@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::fence::last_fenced_block;
 use crate::model::Side;
 
 const FINDINGS_INFO_PREFIX: &str = "argon-findings-";
-const MIN_FENCE_LEN: usize = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FindingsError {
@@ -100,51 +100,9 @@ impl TryFrom<RawFinding> for Finding {
     }
 }
 
-struct OpenFence {
-    len: usize,
-    is_findings: bool,
-    lines: Vec<String>,
-}
-
-fn backtick_run(line: &str) -> usize {
-    line.chars().take_while(|&c| c == '`').count()
-}
-
-fn last_findings_block(message: &str, info: &str) -> Option<String> {
-    let mut open: Option<OpenFence> = None;
-    let mut last: Option<String> = None;
-    for line in message.lines() {
-        let trimmed = line.trim();
-        let run = backtick_run(trimmed);
-        match open.take() {
-            None if run >= MIN_FENCE_LEN && !trimmed[run..].contains('`') => {
-                open = Some(OpenFence {
-                    len: run,
-                    is_findings: trimmed[run..].trim() == info,
-                    lines: Vec::new(),
-                });
-            }
-            None => {}
-            Some(fence) if run >= fence.len && run == trimmed.len() => {
-                if fence.is_findings {
-                    last = Some(fence.lines.join("\n"));
-                }
-            }
-            Some(mut fence) => {
-                fence.lines.push(line.to_owned());
-                open = Some(fence);
-            }
-        }
-    }
-    if let Some(fence) = open.filter(|fence| fence.is_findings) {
-        last = Some(fence.lines.join("\n"));
-    }
-    last
-}
-
 pub fn parse_findings(message: &str, nonce: &str) -> Result<FindingsParse, FindingsError> {
     let info = format!("{FINDINGS_INFO_PREFIX}{nonce}");
-    let Some(block) = last_findings_block(message, &info) else {
+    let Some(block) = last_fenced_block(message, &info) else {
         return Ok(FindingsParse::default());
     };
     let items: Vec<serde_json::Value> = serde_json::from_str(&block)?;

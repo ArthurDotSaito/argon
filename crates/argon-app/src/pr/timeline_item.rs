@@ -27,7 +27,13 @@ pub fn timestamp(item: &TimelineItem) -> DateTime<Utc> {
         | TimelineItem::HeadRefForcePushed { at, .. }
         | TimelineItem::Merged { at, .. }
         | TimelineItem::Closed { at, .. }
-        | TimelineItem::ReadyForReview { at, .. } => *at,
+        | TimelineItem::ReadyForReview { at, .. }
+        | TimelineItem::Assigned { at, .. }
+        | TimelineItem::Unassigned { at, .. }
+        | TimelineItem::Unlabeled { at, .. }
+        | TimelineItem::Reopened { at, .. }
+        | TimelineItem::CrossReferenced { at, .. }
+        | TimelineItem::Milestoned { at, .. } => *at,
     }
 }
 
@@ -98,9 +104,9 @@ pub fn timeline_item(
     pr_labels: &[Label],
     now: DateTime<Utc>,
     cx: &App,
-) -> AnyElement {
+) -> Option<AnyElement> {
     let theme = cx.theme();
-    match item {
+    let element = match item {
         TimelineItem::Comment {
             author, created_at, ..
         } => card(
@@ -224,7 +230,14 @@ pub fn timeline_item(
             now,
             cx,
         ),
-    }
+        TimelineItem::Assigned { .. }
+        | TimelineItem::Unassigned { .. }
+        | TimelineItem::Unlabeled { .. }
+        | TimelineItem::Reopened { .. }
+        | TimelineItem::CrossReferenced { .. }
+        | TimelineItem::Milestoned { .. } => return None,
+    };
+    Some(element)
 }
 
 pub fn card(author: &str, body: Div) -> Div {
@@ -291,7 +304,7 @@ pub fn card_text(content: impl IntoElement) -> Div {
         .child(content)
 }
 
-fn event(
+pub fn event(
     icon: IconName,
     color: Hsla,
     text: impl IntoElement,

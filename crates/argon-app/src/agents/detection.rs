@@ -267,8 +267,7 @@ mod tests {
         let template = |id: &str| PromptTemplate {
             id: id.into(),
             name: id.into(),
-            description: None,
-            body: String::new(),
+            ..PromptTemplate::default()
         };
         let templates = [template("review-padrao"), template("seguranca")];
         assert_eq!(

@@ -13,7 +13,7 @@ use gpui_kit::{
     ParentElement as _, Render, Styled as _, Subscription, Window, div,
 };
 
-pub use self::agents::SessionPlacement;
+pub use self::agents::{SessionPlacement, subject_item};
 pub use self::docks::DockPosition;
 use self::palette_slot::PaletteSlot;
 use crate::actions::{CheckForUpdates, GoToAgents, GoToView, OpenSettings, StartReview, SyncNow};
@@ -189,6 +189,9 @@ impl Workspace {
             InboxEvent::OpenPr { key, preview } => {
                 self.open_item(CenterItem::Pr(key.clone()), *preview, window, cx);
             }
+            InboxEvent::OpenIssue { key, preview } => {
+                self.open_item(CenterItem::Issue(key.clone()), *preview, window, cx);
+            }
             InboxEvent::ShowList => self.open_item(CenterItem::Inbox, false, window, cx),
         }
     }
@@ -235,6 +238,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_check_for_updates))
             .on_action(cx.listener(Self::on_start_review))
             .on_action(cx.listener(Self::on_review_with_ai))
+            .on_action(cx.listener(Self::on_plan_with_agent))
             .child(title_bar)
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
             .child(status_bar)

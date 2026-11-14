@@ -182,6 +182,47 @@ const SESSION_TRANSPORT: &str =
 const SESSION_PERMISSION_MODE: &str =
     "ALTER TABLE agent_sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'supervised';";
 
+const ISSUE_TABLES: &str = "
+CREATE TABLE issues (
+    host TEXT NOT NULL,
+    id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    synced_at INTEGER NOT NULL,
+    PRIMARY KEY (host, id)
+);
+CREATE TABLE sync_state (
+    host TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (host, key)
+);
+";
+
+const SESSION_KIND_AND_PLAN_DRAFTS: &str = "
+ALTER TABLE agent_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'review';
+ALTER TABLE agent_sessions ADD COLUMN base_sha TEXT NULL;
+CREATE TABLE plan_drafts (
+    id INTEGER PRIMARY KEY,
+    host TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    base_sha TEXT NOT NULL,
+    agent_body TEXT NULL,
+    edited INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    published_at INTEGER NULL,
+    comment_id TEXT NULL,
+    comment_url TEXT NULL
+);
+CREATE INDEX idx_plan_drafts_issue ON plan_drafts(host, issue_id);
+CREATE INDEX idx_plan_drafts_session ON plan_drafts(session_id);
+";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
@@ -190,6 +231,8 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(SESSION_LIFECYCLE),
     M::up(SESSION_TRANSPORT),
     M::up(SESSION_PERMISSION_MODE),
+    M::up(ISSUE_TABLES),
+    M::up(SESSION_KIND_AND_PLAN_DRAFTS),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -203,7 +246,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use argon_core::fixtures::{days_ago, pr_on};
+    use argon_core::fixtures::{days_ago, issue_on, pr_on};
     use argon_core::{DEFAULT_HOST, PrKey};
     use rusqlite::params;
 
@@ -419,5 +462,109 @@ mod tests {
         let session = store.session("s1").unwrap().unwrap();
         assert_eq!(session.permission_mode, "supervised");
         assert_eq!(session.transport, "acp");
+    }
+
+    fn pr_json_before_issues(pr: &argon_core::PullRequest) -> String {
+        let mut json = serde_json::to_value(pr).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("closing_issues");
+        object.insert(
+            "involvement".into(),
+            serde_json::json!({
+                "requested": true,
+                "assigned": false,
+                "authored": false,
+                "reviewed": false,
+            }),
+        );
+        json.to_string()
+    }
+
+    #[test]
+    fn migration_eight_adds_issue_tables_and_keeps_pull_requests() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 7).unwrap();
+        let tables = names(&conn, "table");
+        assert!(!tables.contains(&"issues".to_string()));
+        assert!(!tables.contains(&"sync_state".to_string()));
+
+        let pr = pr_on(DEFAULT_HOST, "PR_old", days_ago(2));
+        conn.execute(
+            "INSERT INTO pull_requests (host, id, repo, number, data, updated_at, synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            params![
+                DEFAULT_HOST,
+                "PR_old",
+                pr.repo,
+                482,
+                pr_json_before_issues(&pr),
+                pr.updated_at.timestamp_millis()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pr_local (host, pr_id, last_seen_updated_at) VALUES (?1, 'PR_old', ?2)",
+            params![DEFAULT_HOST, days_ago(3).timestamp_millis()],
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let tables = names(&conn, "table");
+        assert!(tables.contains(&"issues".to_string()));
+        assert!(tables.contains(&"sync_state".to_string()));
+        let mut store = Store { conn };
+        assert!(store.list_issues().unwrap().is_empty());
+        assert!(!store.issue_baseline_done(DEFAULT_HOST).unwrap());
+
+        let listed = store.list_prs().unwrap();
+        assert_eq!(listed.len(), 1);
+        let mut expected = pr;
+        expected.involvement.requested = true;
+        assert_eq!(listed[0].0, expected);
+        assert_eq!(listed[0].1.last_seen, Some(days_ago(3)));
+        assert!(listed[0].1.unread);
+
+        let issue = issue_on(DEFAULT_HOST, "ISSUE_1", days_ago(1));
+        store
+            .upsert_issues(DEFAULT_HOST, std::slice::from_ref(&issue))
+            .unwrap();
+        assert_eq!(store.list_issues().unwrap()[0].0, issue);
+        assert_eq!(store.list_prs().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migration_nine_defaults_existing_sessions_to_review_and_adds_plan_drafts() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 8).unwrap();
+        assert!(!names(&conn, "table").contains(&"plan_drafts".to_string()));
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(names(&conn, "table").contains(&"plan_drafts".to_string()));
+        let indexes = names(&conn, "index");
+        assert!(indexes.contains(&"idx_plan_drafts_issue".to_string()));
+        assert!(indexes.contains(&"idx_plan_drafts_session".to_string()));
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM agent_sessions WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "review");
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert_eq!(session.kind, argon_core::SessionKind::Review);
+        assert_eq!(session.base_sha, None);
+        assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
     }
 }

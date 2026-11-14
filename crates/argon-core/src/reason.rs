@@ -1,6 +1,7 @@
-use crate::model::{ChecksState, Mergeable, PullRequest, ReviewState};
+use crate::model::{ChecksState, Issue, Mergeable, PrState, PullRequest, ReviewState};
 use crate::views::{
-    already_done, changes_requested, is_mine, is_ready, needs_you, waiting_on_others,
+    already_done, changes_requested, is_issue_mine, is_issue_open, is_mine, is_open_and_assigned,
+    is_ready, needs_you, waiting_on_others,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,7 +14,44 @@ pub enum Reason {
     ApprovedByYouWaitingAuthor,
     CiFailed,
     Conflict,
+    IssueAssigned,
+    Mentioned,
+    IssueAuthored,
+    Participating,
+    NewInOrg(String),
+    ClosedBy(u64),
     Tracking,
+}
+
+pub fn issue_reason(issue: &Issue, me: &str) -> Reason {
+    if !is_issue_open(issue)
+        && let Some(linked) = issue
+            .linked_prs
+            .iter()
+            .find(|linked| linked.state == PrState::Merged)
+    {
+        return Reason::ClosedBy(linked.number);
+    }
+    if is_open_and_assigned(issue, me) {
+        return Reason::IssueAssigned;
+    }
+    if issue.involvement.mentioned {
+        return Reason::Mentioned;
+    }
+    if is_issue_mine(issue, me) {
+        return Reason::IssueAuthored;
+    }
+    if issue.involvement.commented {
+        return Reason::Participating;
+    }
+    if is_issue_open(issue) && issue.assignees.is_empty() {
+        return Reason::NewInOrg(org_of(&issue.repo).to_string());
+    }
+    Reason::Tracking
+}
+
+fn org_of(repo: &str) -> &str {
+    repo.split_once('/').map_or(repo, |(owner, _)| owner)
 }
 
 pub fn reason(pr: &PullRequest, me: &str) -> Reason {
@@ -58,8 +96,167 @@ fn latest_changes_requester(pr: &PullRequest) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{ME, assigned, days_ago, mine, pr, requested, review};
-    use crate::model::{PrState, ReviewDecision};
+    use crate::fixtures::{ME, assigned, days_ago, issue, mine, my_issue, pr, requested, review};
+    use crate::model::{Involvement, IssueState, LinkedPr, PrState, ReviewDecision};
+
+    fn involved(mentioned: bool, commented: bool) -> Involvement {
+        Involvement {
+            mentioned,
+            commented,
+            ..Involvement::default()
+        }
+    }
+
+    fn linked(number: u64, state: PrState) -> LinkedPr {
+        LinkedPr {
+            repo: "acme/widgets".into(),
+            number,
+            state,
+            is_draft: false,
+        }
+    }
+
+    fn closed(issue: Issue) -> Issue {
+        Issue {
+            state: IssueState::Closed,
+            closed_at: Some(days_ago(1)),
+            ..issue
+        }
+    }
+
+    #[test]
+    fn issue_reason_picks_first_matching_rule() {
+        let cases: Vec<(&str, Issue, Reason)> = vec![
+            (
+                "closed with a merged linked pr",
+                closed(Issue {
+                    linked_prs: vec![linked(7, PrState::Closed), linked(9, PrState::Merged)],
+                    ..issue()
+                }),
+                Reason::ClosedBy(9),
+            ),
+            (
+                "closed by a merged pr wins over assignment",
+                closed(Issue {
+                    assignees: vec![ME.into()],
+                    linked_prs: vec![linked(9, PrState::Merged)],
+                    ..issue()
+                }),
+                Reason::ClosedBy(9),
+            ),
+            (
+                "open issue with a merged linked pr is not closed by it",
+                Issue {
+                    linked_prs: vec![linked(9, PrState::Merged)],
+                    assignees: vec!["bob".into()],
+                    ..issue()
+                },
+                Reason::Tracking,
+            ),
+            (
+                "closed with only an unmerged linked pr",
+                closed(Issue {
+                    linked_prs: vec![linked(9, PrState::Closed)],
+                    ..issue()
+                }),
+                Reason::Tracking,
+            ),
+            (
+                "assigned to me",
+                Issue {
+                    assignees: vec!["Me".into()],
+                    ..issue()
+                },
+                Reason::IssueAssigned,
+            ),
+            (
+                "assigned wins over mention",
+                Issue {
+                    assignees: vec![ME.into()],
+                    involvement: involved(true, true),
+                    ..issue()
+                },
+                Reason::IssueAssigned,
+            ),
+            (
+                "closed issue assigned to me is only tracking",
+                closed(Issue {
+                    assignees: vec![ME.into()],
+                    ..issue()
+                }),
+                Reason::Tracking,
+            ),
+            (
+                "mentioned",
+                Issue {
+                    assignees: vec!["bob".into()],
+                    involvement: involved(true, false),
+                    ..issue()
+                },
+                Reason::Mentioned,
+            ),
+            (
+                "mentioned wins over authored",
+                Issue {
+                    involvement: involved(true, false),
+                    ..my_issue()
+                },
+                Reason::Mentioned,
+            ),
+            (
+                "authored by me",
+                Issue {
+                    assignees: vec!["bob".into()],
+                    ..my_issue()
+                },
+                Reason::IssueAuthored,
+            ),
+            (
+                "authored wins over unassigned",
+                my_issue(),
+                Reason::IssueAuthored,
+            ),
+            (
+                "commented",
+                Issue {
+                    assignees: vec!["bob".into()],
+                    involvement: involved(false, true),
+                    ..issue()
+                },
+                Reason::Participating,
+            ),
+            (
+                "commented wins over unassigned",
+                Issue {
+                    involvement: involved(false, true),
+                    ..issue()
+                },
+                Reason::Participating,
+            ),
+            (
+                "open and unassigned names the org",
+                issue(),
+                Reason::NewInOrg("acme".into()),
+            ),
+            (
+                "closed and unassigned is only tracking",
+                closed(issue()),
+                Reason::Tracking,
+            ),
+            (
+                "assigned to someone else",
+                Issue {
+                    assignees: vec!["bob".into()],
+                    ..issue()
+                },
+                Reason::Tracking,
+            ),
+        ];
+
+        for (name, issue, expected) in cases {
+            assert_eq!(issue_reason(&issue, ME), expected, "{name}");
+        }
+    }
 
     fn changes_requested_mine() -> PullRequest {
         PullRequest {

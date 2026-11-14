@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, PrKey};
+use argon_core::{AgentKind, PrKey, SessionKind};
 use futures::StreamExt as _;
 use futures::channel::mpsc;
 use gpui_kit::Context;
@@ -28,6 +28,7 @@ pub struct SessionMeta {
 struct Identity {
     session_id: String,
     pr: PrKey,
+    kind: SessionKind,
     number: u64,
     model: String,
     meta: SessionMeta,
@@ -73,6 +74,7 @@ impl AgentSessions {
         let identity = Identity {
             session_id: request.session_id.clone(),
             pr: request.pr.clone(),
+            kind: request.kind(),
             number: request.number,
             model: request.model.clone(),
             meta,
@@ -163,11 +165,11 @@ impl AgentSessions {
             }
             Ok(Err(LaunchError::Cancelled)) => LaunchState::Cancelled,
             Ok(Err(LaunchError::Failed(error))) => {
-                tracing::warn!(session = %id, %error, "agent review launch failed");
+                tracing::warn!(session = %id, kind = identity.kind.as_str(), %error, "agent launch failed");
                 LaunchState::Failed(error)
             }
             Err(error) => {
-                tracing::warn!(session = %id, %error, "agent review launch task failed");
+                tracing::warn!(session = %id, kind = identity.kind.as_str(), %error, "agent launch task failed");
                 LaunchState::Failed(error.to_string())
             }
         };

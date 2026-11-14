@@ -4,7 +4,7 @@ use super::toast::ToastTarget;
 use crate::agents::SessionCatalog;
 use crate::center::CenterItem;
 use crate::inbox::InboxView;
-use crate::workspace::{SessionPlacement, Workspace};
+use crate::workspace::{SessionPlacement, Workspace, subject_item};
 
 pub(super) fn is_window_focused(cx: &mut App) -> bool {
     cx.windows()
@@ -30,13 +30,16 @@ pub(super) fn open_target(target: ToastTarget, cx: &mut App) {
                 ToastTarget::Pr(key) => {
                     workspace.open_item(CenterItem::Pr(key), false, window, cx);
                 }
+                ToastTarget::Issue(key) => {
+                    workspace.open_item(CenterItem::Issue(key), false, window, cx);
+                }
                 ToastTarget::AppUpdate => workspace.show_about(window, cx),
-                ToastTarget::AgentReview(key) => {
-                    workspace.open_item(CenterItem::Pr(key.clone()), false, window, cx);
+                ToastTarget::AgentSession(key, kind) => {
                     let latest = SessionCatalog::global(cx)
                         .and_then(|catalog| catalog.read(cx).latest_for(&key, cx));
+                    workspace.open_item(subject_item(key, kind), false, window, cx);
                     if let Some(id) = latest {
-                        workspace.open_session(id, SessionPlacement::BesidePr, window, cx);
+                        workspace.open_session(id, SessionPlacement::BesideSubject, window, cx);
                     }
                 }
             }

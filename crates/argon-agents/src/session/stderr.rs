@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use crate::redact::redact_line;
+use argon_core::redact_line;
+
 use crate::util::lock;
 
 const CAPACITY: usize = 200;

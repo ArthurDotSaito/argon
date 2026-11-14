@@ -1,0 +1,213 @@
+{
+  "data": {
+    "node": {
+      "__typename": "Issue",
+      "id": "I_kwDOOrbita0101",
+      "number": 101,
+      "title": "Scheduling client times out on large clinics",
+      "url": "https://github.com/orbita-health/atlas/issues/101",
+      "state": "OPEN",
+      "stateReason": "REOPENED",
+      "createdAt": "2026-10-20T08:00:00Z",
+      "updatedAt": "2026-11-02T10:15:00Z",
+      "closedAt": null,
+      "author": { "login": "mcouto" },
+      "repository": { "nameWithOwner": "orbita-health/atlas" },
+      "issueType": { "name": "Bug" },
+      "labels": {
+        "nodes": [
+          { "name": "bug", "color": "d73a4a" },
+          { "name": "scheduling", "color": "0e8a16" }
+        ]
+      },
+      "assignees": { "nodes": [{ "login": "lfarias" }, { "login": "dnogueira" }] },
+      "milestone": { "title": "Q4 stability" },
+      "comments": { "totalCount": 3 },
+      "closedByPullRequestsReferences": {
+        "nodes": [
+          {
+            "number": 412,
+            "repository": { "nameWithOwner": "orbita-health/atlas" },
+            "state": "OPEN",
+            "isDraft": false
+          }
+        ]
+      },
+      "subIssuesSummary": { "total": 3, "completed": 1 },
+      "body": "Large clinics hit the 30s timeout.\n\n- repro: 500 slots\n- seen on prod",
+      "timelineItems": {
+        "pageInfo": { "hasPreviousPage": true },
+        "nodes": [
+          {
+            "__typename": "IssueComment",
+            "id": "IC_kwDOOrbita11",
+            "author": { "login": "lfarias" },
+            "body": "I can take a look. cc @mcouto",
+            "createdAt": "2026-10-20T09:00:00Z",
+            "url": "https://github.com/orbita-health/atlas/issues/101#issuecomment-11"
+          },
+          {
+            "__typename": "AssignedEvent",
+            "actor": { "login": "mcouto" },
+            "assignee": { "login": "lfarias" },
+            "createdAt": "2026-10-20T09:05:00Z"
+          },
+          {
+            "__typename": "AssignedEvent",
+            "actor": null,
+            "assignee": null,
+            "createdAt": "2026-10-20T09:06:00Z"
+          },
+          {
+            "__typename": "UnassignedEvent",
+            "actor": { "login": "lfarias" },
+            "assignee": { "login": "pbarros" },
+            "createdAt": "2026-10-21T10:00:00Z"
+          },
+          {
+            "__typename": "LabeledEvent",
+            "actor": { "login": "mcouto" },
+            "label": { "name": "bug" },
+            "createdAt": "2026-10-21T10:05:00Z"
+          },
+          {
+            "__typename": "UnlabeledEvent",
+            "actor": { "login": "mcouto" },
+            "label": { "name": "triage" },
+            "createdAt": "2026-10-21T10:06:00Z"
+          },
+          {
+            "__typename": "MilestonedEvent",
+            "actor": { "login": "dnogueira" },
+            "milestoneTitle": "Q4 stability",
+            "createdAt": "2026-10-22T11:00:00Z"
+          },
+          {
+            "__typename": "CrossReferencedEvent",
+            "actor": { "login": "mcouto" },
+            "source": {
+              "__typename": "PullRequest",
+              "number": 412,
+              "repository": { "nameWithOwner": "orbita-health/atlas" }
+            },
+            "createdAt": "2026-10-27T13:05:12Z"
+          },
+          {
+            "__typename": "CrossReferencedEvent",
+            "actor": { "login": "dnogueira" },
+            "source": {
+              "__typename": "Issue",
+              "number": 87,
+              "repository": { "nameWithOwner": "orbita-health/billing" }
+            },
+            "createdAt": "2026-10-28T08:00:00Z"
+          },
+          {
+            "__typename": "CrossReferencedEvent",
+            "actor": { "login": "dnogueira" },
+            "source": { "__typename": "SomethingNew" },
+            "createdAt": "2026-10-28T08:01:00Z"
+          },
+          {
+            "__typename": "ConnectedEvent",
+            "actor": { "login": "lfarias" },
+            "subject": {
+              "__typename": "PullRequest",
+              "number": 430,
+              "repository": { "nameWithOwner": "orbita-health/atlas" }
+            },
+            "createdAt": "2026-10-29T08:00:00Z"
+          },
+          {
+            "__typename": "ClosedEvent",
+            "actor": { "login": "lfarias" },
+            "createdAt": "2026-10-30T09:00:00Z"
+          },
+          {
+            "__typename": "ReopenedEvent",
+            "actor": { "login": "mcouto" },
+            "createdAt": "2026-10-30T09:30:00Z"
+          },
+          {
+            "__typename": "DemilestonedEvent",
+            "createdAt": "2026-10-30T09:40:00Z"
+          },
+          null,
+          {
+            "__typename": "IssueComment",
+            "id": "IC_kwDOOrbita12",
+            "author": null,
+            "body": "Still failing on staging.",
+            "createdAt": "2026-11-02T10:15:00Z"
+          }
+        ]
+      },
+      "linkedPullRequests": {
+        "nodes": [
+          {
+            "id": "PR_kwDOOrbita0412",
+            "number": 412,
+            "title": "Add retry budget to scheduling client",
+            "url": "https://github.com/orbita-health/atlas/pull/412",
+            "isDraft": false,
+            "state": "OPEN",
+            "createdAt": "2026-10-27T13:05:11Z",
+            "updatedAt": "2026-11-01T09:40:02Z",
+            "closedAt": null,
+            "author": { "login": "mcouto" },
+            "repository": { "nameWithOwner": "orbita-health/atlas" },
+            "baseRefName": "main",
+            "headRefName": "feat/retry-budget",
+            "additions": 214,
+            "deletions": 37,
+            "changedFiles": 9,
+            "reviewDecision": "CHANGES_REQUESTED",
+            "mergeable": "CONFLICTING",
+            "comments": { "totalCount": 6 },
+            "closingIssuesReferences": {
+              "nodes": [
+                { "number": 101, "repository": { "nameWithOwner": "orbita-health/atlas" } }
+              ]
+            },
+            "reviewRequests": { "nodes": [] },
+            "assignees": { "nodes": [{ "login": "mcouto" }] },
+            "latestReviews": { "nodes": [] },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "committedDate": "2026-10-31T20:11:09Z",
+                    "statusCheckRollup": { "state": "FAILURE" }
+                  }
+                }
+              ]
+            }
+          },
+          null
+        ]
+      },
+      "subIssues": {
+        "nodes": [
+          {
+            "number": 102,
+            "title": "Cap concurrent slot lookups",
+            "state": "CLOSED",
+            "repository": { "nameWithOwner": "orbita-health/atlas" }
+          },
+          {
+            "number": 103,
+            "title": "Surface timeout in the clinic dashboard",
+            "state": "OPEN",
+            "repository": { "nameWithOwner": "orbita-health/atlas" }
+          },
+          {
+            "number": 12,
+            "title": "Expose retry metrics",
+            "state": "OPEN",
+            "repository": { "nameWithOwner": "orbita-health/observability" }
+          }
+        ]
+      }
+    }
+  }
+}

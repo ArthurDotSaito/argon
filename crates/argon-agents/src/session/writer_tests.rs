@@ -17,6 +17,8 @@ fn session(id: &str) -> NewAgentSession {
         permission_mode: "supervised".into(),
         nonce: "n".into(),
         allowed_files: vec!["a.rs".into()],
+        kind: argon_core::SessionKind::Review,
+        base_sha: None,
     }
 }
 
@@ -109,4 +111,43 @@ async fn findings_round_trip_with_ids() {
         .unwrap();
     let second = writer.save_findings("s1", vec![finding]).await.unwrap();
     assert_eq!(first[0].id, second[0].id);
+}
+
+#[tokio::test]
+async fn plan_is_recorded_under_the_issue_key_and_base_sha() {
+    let writer = writer();
+    writer.create_session(session("s1")).await.unwrap();
+    let issue = PrKey::new("ghe.example.com", "I_42");
+
+    assert!(!writer.has_plan("s1").await.unwrap());
+    let first = writer
+        .record_plan("s1", &issue, "## v1", "abc123")
+        .await
+        .unwrap();
+    let second = writer
+        .record_plan("s1", &issue, "## v2", "def456")
+        .await
+        .unwrap();
+
+    assert_eq!(first.host, "ghe.example.com");
+    assert_eq!(first.issue_id, "I_42");
+    assert_eq!(first.session_id, "s1");
+    assert_eq!(first.body, "## v1");
+    assert_eq!(first.base_sha, "abc123");
+    assert_eq!(second.id, first.id);
+    assert_eq!(second.body, "## v2");
+    assert_eq!(second.base_sha, "def456");
+    assert!(writer.has_plan("s1").await.unwrap());
+    assert!(!writer.has_plan("s2").await.unwrap());
+}
+
+#[tokio::test]
+async fn stopped_writer_fails_plan_requests() {
+    let writer = SessionWriter::stopped();
+    let issue = PrKey::new("github.com", "I_1");
+
+    let recorded = writer.record_plan("s1", &issue, "## v1", "abc").await;
+
+    assert_eq!(recorded, Err("o gravador de sessões parou".to_owned()));
+    assert!(writer.has_plan("s1").await.is_err());
 }

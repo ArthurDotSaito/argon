@@ -1,9 +1,10 @@
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{Context, SharedString, Window};
 
-use super::{Load, Phase, StartDialog, app_services, fresh_session_id};
+use super::{Gathering, Load, Phase, StartDialog, app_services, fresh_session_id};
+use crate::agents::context::plan_context;
 use crate::agents::labels;
-use crate::agents::launcher::{LaunchRequest, LaunchStage};
+use crate::agents::launcher::{LaunchPrompt, LaunchRequest, LaunchStage};
 use crate::agents::launches::{LaunchState, SessionMeta};
 
 pub(super) enum Status {
@@ -80,22 +81,34 @@ impl StartDialog {
     fn request(&self, cx: &Context<Self>) -> Option<(LaunchRequest, SessionMeta)> {
         let option = self.selected_option()?;
         let prompt = self.preview.as_ref()?.rendered.as_ref().ok()?;
-        let gathered = self.context.ready()?;
+        let prompt = match self.context.ready()? {
+            Gathering::Review(gathered) => LaunchPrompt::Review {
+                prompt: prompt.clone(),
+                allowed_files: gathered
+                    .files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect(),
+            },
+            Gathering::Plan(detail) => LaunchPrompt::Plan {
+                template: Box::new(self.current_template()?.clone()),
+                context: Box::new(plan_context(
+                    detail,
+                    labels::PLAN_BASE_PENDING,
+                    labels::PLAN_SHA_PENDING,
+                )),
+            },
+        };
         let sessions = Self::sessions(cx)?;
         let sessions = sessions.read(cx);
         let request = LaunchRequest {
             spec: option.spec.clone(),
             session_id: self.session_id.clone().ok()?,
-            pr: self.pr.key(),
-            repo: self.pr.repo.clone(),
-            number: self.pr.number,
+            pr: self.subject.key(),
+            repo: self.subject.repo().to_owned(),
+            number: self.subject.number(),
             template_id: self.template.clone()?,
-            prompt: prompt.clone(),
-            allowed_files: gathered
-                .files
-                .iter()
-                .map(|file| file.path.clone())
-                .collect(),
+            prompt,
             model: self.model.clone()?,
             permission_mode: self.permission_mode,
             store: sessions.store(),
@@ -158,7 +171,7 @@ impl StartDialog {
                 self.session_id = fresh_session_id();
             }
             LaunchState::Failed(error) => {
-                self.phase = Phase::Failed(labels::launch_failed(&error).into());
+                self.phase = Phase::Failed(labels::launch_failed(self.kind(), &error).into());
                 self.session_id = fresh_session_id();
             }
         }

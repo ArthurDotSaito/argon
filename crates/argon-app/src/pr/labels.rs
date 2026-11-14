@@ -1,12 +1,13 @@
-use argon_core::ReviewState;
+use argon_core::{IssueRef, ReviewState};
 use argon_github::MergeMethod;
 
 pub const OPEN_ON_GITHUB: &str = "Abrir no GitHub";
+pub const OPEN_ISSUE: &str = "Abrir a issue";
 pub const REFRESH: &str = "Atualizar";
 pub const MERGE: &str = "Merge";
 pub const REVIEW: &str = "Revisar";
 pub const REVIEW_TOOLTIP: &str = "Abrir a review deste PR";
-pub const AI_REVIEW: &str = "Revisar com IA";
+pub const AI_REVIEW: &str = "Agent Review";
 pub const RETRY: &str = "Tentar de novo";
 pub const COPY_BRANCH: &str = "Copiar branch";
 pub const MERGING: &str = "Fazendo merge…";
@@ -71,6 +72,15 @@ pub fn changed_files(count: u32) -> String {
     format!("{count} {FILES}")
 }
 
+pub fn closing_issue(closing: &IssueRef, pr_repo: &str, merged: bool) -> String {
+    let verb = if merged { "Fechou" } else { "Fecha" };
+    if closing.repo.eq_ignore_ascii_case(pr_repo) {
+        format!("{verb} #{}", closing.number)
+    } else {
+        format!("{verb} {}#{}", closing.repo, closing.number)
+    }
+}
+
 pub fn review_state(state: ReviewState) -> &'static str {
     match state {
         ReviewState::Approved => "Approved",
@@ -127,5 +137,53 @@ pub fn line_ref(path: &str, line: Option<u32>) -> String {
     match line {
         Some(line) => format!("{path}:{line}"),
         None => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn issue(repo: &str, number: u64) -> IssueRef {
+        IssueRef {
+            repo: repo.into(),
+            number,
+        }
+    }
+
+    #[test]
+    fn closing_issue_in_the_same_repo_shows_only_the_number() {
+        assert_eq!(
+            closing_issue(&issue("acme/api", 76), "acme/api", false),
+            "Fecha #76"
+        );
+    }
+
+    #[test]
+    fn closing_issue_matches_the_repo_without_case() {
+        assert_eq!(
+            closing_issue(&issue("Acme/API", 76), "acme/api", false),
+            "Fecha #76"
+        );
+    }
+
+    #[test]
+    fn closing_issue_in_another_repo_shows_the_repo() {
+        assert_eq!(
+            closing_issue(&issue("acme/web", 3), "acme/api", false),
+            "Fecha acme/web#3"
+        );
+    }
+
+    #[test]
+    fn merged_pull_request_closed_its_issues() {
+        assert_eq!(
+            closing_issue(&issue("acme/api", 76), "acme/api", true),
+            "Fechou #76"
+        );
+        assert_eq!(
+            closing_issue(&issue("acme/web", 3), "acme/api", true),
+            "Fechou acme/web#3"
+        );
     }
 }

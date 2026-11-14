@@ -1,4 +1,4 @@
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 
 use super::choice::{Choice, permission_choices};
-use super::labels::{FULL_ACCESS_RISK, permission_mode_hint};
+use super::labels::{FULL_ACCESS_RISK, PLAN_MODE_LOCKED, permission_mode_hint};
 use super::panel_labels as labels;
 use super::thread_model::ThreadModel;
 use crate::review::{Confirm, confirm};
@@ -212,14 +212,24 @@ impl Render for Composer {
         let mode_select = Select::new(&self.mode_select)
             .xsmall()
             .placeholder(labels::PERMISSION_MODE_TOOLTIP)
-            .disabled(mode.is_none() || model.is_changing_permission_mode());
-        let mode_hint = mode.map(permission_mode_hint);
-        let reference = Button::new("composer-reference")
-            .icon(Icon::new(IconName::AtSign))
-            .xsmall()
-            .ghost()
-            .tooltip(labels::REFERENCE)
-            .on_click(cx.listener(|this, _, window, cx| this.insert_reference(window, cx)));
+            .disabled(
+                mode.is_none()
+                    || model.is_changing_permission_mode()
+                    || model.is_permission_mode_locked(),
+            );
+        let mode_hint = if model.is_permission_mode_locked() {
+            Some(PLAN_MODE_LOCKED)
+        } else {
+            mode.map(permission_mode_hint)
+        };
+        let reference = (model.info().kind != SessionKind::Plan).then(|| {
+            Button::new("composer-reference")
+                .icon(Icon::new(IconName::AtSign))
+                .xsmall()
+                .ghost()
+                .tooltip(labels::REFERENCE)
+                .on_click(cx.listener(|this, _, window, cx| this.insert_reference(window, cx)))
+        });
         let primary = if in_turn {
             Button::new("composer-stop")
                 .icon(Icon::new(IconName::Square))
@@ -248,7 +258,7 @@ impl Render for Composer {
                     .gap_1p5()
                     .items_center()
                     .child(div().w_40().child(select))
-                    .child(reference)
+                    .children(reference)
                     .child(div().flex_1())
                     .child(
                         h_flex()

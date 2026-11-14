@@ -27,7 +27,7 @@ const ACCOUNT_AVATAR_SIZE: f32 = 22.;
 
 const AGENTS_GROUP_POSITION: usize = 1;
 
-const GROUPS: [(&str, &[InboxView]); 3] = [
+const GROUPS: [(&str, &[InboxView]); 4] = [
     (
         labels::GROUP_INBOX,
         &[InboxView::Inbox, InboxView::NeedsYou],
@@ -39,6 +39,15 @@ const GROUPS: [(&str, &[InboxView]); 3] = [
             InboxView::WaitingOnOthers,
             InboxView::ChangesRequested,
             InboxView::ReadyToMerge,
+        ],
+    ),
+    (
+        labels::GROUP_ISSUES,
+        &[
+            InboxView::IssuesAssigned,
+            InboxView::IssuesMentioned,
+            InboxView::IssuesAuthored,
+            InboxView::IssuesParticipating,
         ],
     ),
     (labels::GROUP_REVIEWED, &[InboxView::AlreadyDone]),
@@ -207,6 +216,10 @@ fn view_icon(view: InboxView) -> IconName {
         InboxView::ChangesRequested => IconName::FileDiff,
         InboxView::ReadyToMerge => IconName::GitMerge,
         InboxView::AlreadyDone => IconName::CheckCheck,
+        InboxView::IssuesAssigned => IconName::CircleDot,
+        InboxView::IssuesMentioned => IconName::AtSign,
+        InboxView::IssuesAuthored => IconName::Pencil,
+        InboxView::IssuesParticipating => IconName::MessageSquare,
     }
 }
 

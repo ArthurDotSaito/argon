@@ -1,4 +1,4 @@
-use argon_core::PrKey;
+use argon_core::{PrKey, SessionKind};
 use argon_store::SessionRow;
 use chrono::{DateTime, Utc};
 use gpui_kit::{App, SharedString};
@@ -17,6 +17,7 @@ use crate::inbox::InboxModel;
 pub struct SessionCard {
     pub id: String,
     pub pr: PrKey,
+    pub kind: SessionKind,
     pub number: Option<u64>,
     pub agent_line: SharedString,
     pub status: CardStatus,
@@ -27,15 +28,33 @@ pub struct SessionCard {
     pub controls: SessionControls,
 }
 
-pub fn pr_labels(pr: &PrKey, number: Option<u64>, cx: &App) -> (SharedString, SharedString) {
-    let found = InboxModel::global(cx).and_then(|inbox| inbox.read(cx).pr(pr).cloned());
-    match found {
-        Some(pr) => (
-            pr.title.into(),
-            format!("{} #{}", pr.repo, pr.number).into(),
-        ),
+fn subject_ref(key: &PrKey, kind: SessionKind, cx: &App) -> Option<(String, String, u64)> {
+    let inbox = InboxModel::global(cx)?;
+    let inbox = inbox.read(cx);
+    match kind {
+        SessionKind::Review => inbox
+            .pr(key)
+            .map(|pr| (pr.title.clone(), pr.repo.clone(), pr.number)),
+        SessionKind::Plan => inbox
+            .issue(key)
+            .map(|issue| (issue.title.clone(), issue.repo.clone(), issue.number)),
+    }
+}
+
+pub fn subject_number(key: &PrKey, kind: SessionKind, cx: &App) -> Option<u64> {
+    subject_ref(key, kind, cx).map(|(_, _, number)| number)
+}
+
+pub fn subject_labels(
+    key: &PrKey,
+    kind: SessionKind,
+    number: Option<u64>,
+    cx: &App,
+) -> (SharedString, SharedString) {
+    match subject_ref(key, kind, cx) {
+        Some((title, repo, number)) => (title.into(), format!("{repo} #{number}").into()),
         None => (
-            labels::UNKNOWN_PR.into(),
+            labels::unknown_subject(kind).into(),
             number.map_or_else(String::new, |n| format!("#{n}")).into(),
         ),
     }
@@ -71,6 +90,7 @@ impl SessionCard {
         Self {
             id: info.session_id.clone(),
             pr: info.pr.clone(),
+            kind: info.kind,
             number: info.number,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
             status: thread.card_status(),
@@ -104,6 +124,7 @@ impl SessionCard {
         Self {
             id: row.id.clone(),
             pr: row.pr.clone(),
+            kind: row.kind,
             number: info.number,
             agent_line: format!("{} · {}", info.agent_label, info.model_label).into(),
             status,

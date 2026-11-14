@@ -119,7 +119,14 @@ impl Notifier {
             .iter()
             .filter(|item| item.views.contains(ViewSet::NEEDS_YOU))
             .map(|item| {
-                NeedsYouEntry::new(item.pr.key(), item.pr.number, &item.pr.title, &item.reason)
+                let subject = &item.subject;
+                NeedsYouEntry::new(
+                    subject.key(),
+                    subject.kind(),
+                    subject.number(),
+                    subject.title(),
+                    &item.reason,
+                )
             })
             .collect();
         let entered = self.needs_you.observe(current);
@@ -191,6 +198,7 @@ fn read_snapshots(
                 pr: info.pr.clone(),
                 number: info.number,
                 agent_label: info.agent_label.to_string(),
+                kind: info.kind,
                 phase: phase_of(
                     thread.is_live(),
                     thread.status(),

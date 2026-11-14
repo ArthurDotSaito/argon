@@ -927,7 +927,7 @@ fn permissions_approval_shows_compact_permissions_and_reason() {
         params,
     );
     assert_eq!(ask.tool_call_id.as_deref(), Some("p1"));
-    assert_eq!(ask.kind, "other");
+    assert_eq!(ask.kind, "permissions");
     assert_eq!(
         ask.title,
         r#"Permissões: {"network":{"enabled":true}} — needs network"#

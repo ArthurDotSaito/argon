@@ -1,5 +1,7 @@
 use serde_json::json;
 
+use argon_core::SessionKind;
+
 use super::state::*;
 use super::*;
 
@@ -119,6 +121,38 @@ fn unsafe_permission_route_is_unanswerable_in_any_turn_state() {
         permission_intake(&unsafe_route, &turns),
         Intake::Unanswerable
     );
+}
+
+#[test]
+fn plan_sessions_never_use_the_session_grant_shortcut() {
+    let grants: HashSet<String> = ["read".to_owned()].into();
+    let cwd = Path::new("repo");
+    let ask = PermissionAsk {
+        tool_call_id: None,
+        kind: "read".to_owned(),
+        title: "Read".to_owned(),
+        paths: vec!["src/a.rs".to_owned()],
+        options: Vec::new(),
+    };
+
+    assert!(grant_shortcut_applies(
+        &grants,
+        &ask,
+        cwd,
+        SessionKind::Review
+    ));
+    assert!(!grant_shortcut_applies(
+        &grants,
+        &ask,
+        cwd,
+        SessionKind::Plan
+    ));
+    assert!(!grant_shortcut_applies(
+        &HashSet::new(),
+        &ask,
+        cwd,
+        SessionKind::Review
+    ));
 }
 
 #[test]

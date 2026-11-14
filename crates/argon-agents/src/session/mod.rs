@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use argon_core::{PermissionMode, PrKey};
+use argon_core::{PermissionMode, PrKey, SessionKind};
 use argon_store::SessionStatus;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -33,8 +33,8 @@ pub(crate) use failure::{STDERR_LINES, explain_failure, with_stderr};
 #[cfg(test)]
 pub(crate) use permissions::prompt_title;
 pub(crate) use permissions::{
-    ALLOW_ALWAYS, ALLOW_ONCE, PermissionAnswer, PermissionReply, REJECT_ONCE, input_paths,
-    native_options_for, native_options_with_session, session_grant_applies,
+    ALLOW_ALWAYS, ALLOW_ONCE, PERMISSIONS_KIND, PermissionAnswer, PermissionReply, REJECT_ONCE,
+    input_paths, native_options_for, native_options_with_session, session_grant_applies,
 };
 pub use permissions::{
     PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,
@@ -45,6 +45,7 @@ pub use writer::SessionWriter;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const SESSION_ID_BYTES: usize = 16;
+const PLAN_MODE_LOCKED: &str = "a sessão de plano roda só em Supervisionado";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -101,6 +102,8 @@ pub struct SessionContext {
     pub cwd: PathBuf,
     pub model: String,
     pub permission_mode: PermissionMode,
+    pub kind: SessionKind,
+    pub base_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +180,10 @@ impl AgentSessionHandle {
             .map_err(|_| SessionError::Closed)
     }
 
+    pub fn kind(&self) -> SessionKind {
+        self.shared.kind()
+    }
+
     pub fn prompt(&self, text: impl Into<String>) -> Result<()> {
         if !self.shared.try_acquire() {
             return Err(SessionError::Busy);
@@ -209,6 +216,12 @@ impl AgentSessionHandle {
     }
 
     pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
+        if self.shared.kind() == SessionKind::Plan && mode != PermissionMode::Supervised {
+            return Err(SessionError::SetPermissionMode {
+                mode: mode.as_str().to_owned(),
+                reason: PLAN_MODE_LOCKED.to_owned(),
+            });
+        }
         let (reply, response) = oneshot::channel();
         self.send(Command::SetPermissionMode { mode, reply })?;
         response.await.map_err(|_| SessionError::Closed)?

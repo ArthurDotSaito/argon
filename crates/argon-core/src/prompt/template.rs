@@ -11,11 +11,35 @@ const HEADER_FENCE: &str = "+++";
 pub(super) const TEMPLATE_EXTENSION: &str = "md";
 const NONCE_VARIABLE: &str = "nonce";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum TemplateKind {
+    #[default]
+    Review,
+    Plan,
+}
+
+impl TemplateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Plan => "plan",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<TemplateKind> {
+        [Self::Review, Self::Plan]
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PromptTemplate {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub kind: TemplateKind,
+    pub version: Option<u32>,
     pub body: String,
 }
 
@@ -46,6 +70,8 @@ pub struct TemplateSet {
 struct Header {
     name: Option<String>,
     description: Option<String>,
+    kind: Option<String>,
+    argon_template_version: Option<toml::Value>,
 }
 
 pub(super) fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> PromptError {
@@ -72,11 +98,26 @@ fn split_header(source: &str) -> Result<(Header, &str), String> {
     Err(format!("missing closing `{HEADER_FENCE}` line"))
 }
 
+fn template_kind(value: Option<&str>) -> Result<TemplateKind, String> {
+    let Some(value) = value else {
+        return Ok(TemplateKind::default());
+    };
+    TemplateKind::parse(value).ok_or_else(|| {
+        format!(
+            "unknown template kind `{value}`, expected `{}` or `{}`",
+            TemplateKind::Review.as_str(),
+            TemplateKind::Plan.as_str()
+        )
+    })
+}
+
 pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, PromptError> {
-    let (header, body) = split_header(source).map_err(|reason| PromptError::InvalidHeader {
+    let invalid = |reason| PromptError::InvalidHeader {
         id: id.to_owned(),
         reason,
-    })?;
+    };
+    let (header, body) = split_header(source).map_err(invalid)?;
+    let kind = template_kind(header.kind.as_deref()).map_err(invalid)?;
     let name = header
         .name
         .map(|name| name.trim().to_owned())
@@ -86,6 +127,11 @@ pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, P
         id: id.to_owned(),
         name,
         description: header.description,
+        kind,
+        version: header
+            .argon_template_version
+            .and_then(|value| value.as_integer())
+            .and_then(|version| u32::try_from(version).ok()),
         body: body.trim_start_matches(['\r', '\n']).to_owned(),
     })
 }
@@ -124,7 +170,7 @@ fn load_entry(entry: std::io::Result<DirEntry>) -> Option<Result<PromptTemplate,
     if !template.uses_nonce() {
         tracing::warn!(
             path = %path.display(),
-            "prompt template does not use the nonce variable, so no findings will be read"
+            "prompt template does not use the nonce variable, so the agent's answer will not be read"
         );
     }
     Some(Ok(template))

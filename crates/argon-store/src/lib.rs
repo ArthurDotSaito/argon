@@ -2,8 +2,10 @@ mod agent_log;
 mod agents;
 mod drafts;
 mod error;
+mod issues;
 mod lifecycle;
 mod local;
+mod plans;
 mod prs;
 mod schema;
 mod viewers;
@@ -17,6 +19,7 @@ pub use agents::{FindingState, NewAgentSession, SessionRow, SessionStatus, Store
 pub use error::{Result, StoreError};
 pub use lifecycle::{ARCHIVE_PENDING, StaleWorktree};
 pub use local::LocalState;
+pub use plans::PlanDraft;
 pub use viewers::{CachedOrg, CachedViewer};
 
 pub struct Store {

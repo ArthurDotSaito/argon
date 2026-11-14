@@ -1,4 +1,4 @@
-use argon_core::PrKey;
+use argon_core::{PrKey, SessionKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
@@ -12,7 +12,8 @@ pub enum Channel {
 pub enum ToastTarget {
     NeedsYou,
     Pr(PrKey),
-    AgentReview(PrKey),
+    Issue(PrKey),
+    AgentSession(PrKey, SessionKind),
     AppUpdate,
 }
 

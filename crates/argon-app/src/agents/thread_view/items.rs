@@ -10,7 +10,7 @@ use gpui_kit::{
 use super::ThreadView;
 use crate::agents::card_status::login_hint;
 use crate::agents::finding_card::findings_block;
-use crate::agents::message_text::hide_findings_block;
+use crate::agents::message_text::hide_output_blocks;
 use crate::agents::panel_labels as labels;
 use crate::agents::permission_card::permission_card;
 use crate::agents::safe_markdown::agent_markdown;
@@ -56,6 +56,7 @@ impl ThreadView {
                 unreadable,
             } => findings_block(weak, &ids, (outside, unreadable), self.model.read(cx), cx)
                 .into_any_element(),
+            Item::PlanDraft(id) => self.plan_card(id, cx),
             Item::Interrupted(reason) => self.notice(labels::interrupted(&reason), cx),
             Item::Error(message) => self.error(ix, &message, cx),
         };
@@ -215,7 +216,7 @@ impl ThreadView {
 }
 
 fn agent_message(ix: usize, text: &str, streaming: bool) -> AnyElement {
-    let text = hide_findings_block(text);
+    let text = hide_output_blocks(text);
     let body = if streaming {
         format!("{text}{CURSOR}")
     } else {

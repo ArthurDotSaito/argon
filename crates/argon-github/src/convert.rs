@@ -1,11 +1,13 @@
 use argon_core::{
-    ChecksState, Involvement, LatestReview, Mergeable, PrId, PrState, PullRequest, ReviewDecision,
-    ReviewState,
+    ChecksState, Involvement, Issue, IssueLabel, IssueRef, IssueState, IssueStateReason,
+    LatestReview, LinkedPr, Mergeable, PrId, PrState, PullRequest, ReviewDecision, ReviewState,
+    SubIssues,
 };
 
 use crate::wire::{
-    WireMergeable, WirePr, WirePrState, WireReview, WireReviewDecision, WireReviewRequest,
-    WireReviewState, WireReviewer, WireRollupState,
+    WireIssue, WireIssueState, WireIssueStateReason, WireLinkedPr, WireMergeable, WirePr,
+    WirePrState, WireReview, WireReviewDecision, WireReviewRequest, WireReviewState, WireReviewer,
+    WireRollupState,
 };
 
 const GHOST: &str = "ghost";
@@ -75,6 +77,99 @@ pub(crate) fn into_pull_request(wire: WirePr, host: &str) -> PullRequest {
         updated_at: wire.updated_at,
         closed_at: wire.closed_at,
         involvement: Involvement::default(),
+        closing_issues: wire
+            .closing_issues_references
+            .into_items()
+            .into_iter()
+            .map(|reference| IssueRef {
+                repo: reference.repository.name_with_owner,
+                number: reference.number,
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn into_issues(nodes: Vec<Option<WireIssue>>, host: &str) -> Vec<Issue> {
+    nodes
+        .into_iter()
+        .flatten()
+        .map(|wire| into_issue(wire, host))
+        .collect()
+}
+
+pub(crate) fn into_issue(wire: WireIssue, host: &str) -> Issue {
+    Issue {
+        id: PrId(wire.id),
+        host: host.to_string(),
+        repo: wire.repository.name_with_owner,
+        number: wire.number,
+        title: wire.title,
+        url: wire.url,
+        author: login_or_ghost(wire.author.map(|actor| actor.login)),
+        state: issue_state(wire.state),
+        state_reason: wire.state_reason.and_then(issue_state_reason),
+        issue_type: wire.issue_type.map(|issue_type| issue_type.name),
+        labels: wire
+            .labels
+            .into_items()
+            .into_iter()
+            .map(|label| IssueLabel {
+                name: label.name,
+                color: label.color,
+            })
+            .collect(),
+        assignees: wire
+            .assignees
+            .into_items()
+            .into_iter()
+            .map(|actor| actor.login)
+            .collect(),
+        milestone: wire.milestone.map(|milestone| milestone.title),
+        comments: wire.comments.total_count,
+        linked_prs: wire
+            .closed_by_pull_requests_references
+            .into_items()
+            .into_iter()
+            .map(linked_pr)
+            .collect(),
+        sub_issues: wire
+            .sub_issues_summary
+            .filter(|summary| summary.total > 0)
+            .map(|summary| SubIssues {
+                total: summary.total,
+                completed: summary.completed,
+            }),
+        created_at: wire.created_at,
+        updated_at: wire.updated_at,
+        closed_at: wire.closed_at,
+        last_mention_at: None,
+        involvement: Involvement::default(),
+    }
+}
+
+fn linked_pr(wire: WireLinkedPr) -> LinkedPr {
+    LinkedPr {
+        repo: wire.repository.name_with_owner,
+        number: wire.number,
+        state: pr_state(wire.state),
+        is_draft: wire.is_draft,
+    }
+}
+
+pub(crate) fn issue_state(state: WireIssueState) -> IssueState {
+    match state {
+        WireIssueState::Open | WireIssueState::Unknown => IssueState::Open,
+        WireIssueState::Closed => IssueState::Closed,
+    }
+}
+
+fn issue_state_reason(reason: WireIssueStateReason) -> Option<IssueStateReason> {
+    match reason {
+        WireIssueStateReason::Completed => Some(IssueStateReason::Completed),
+        WireIssueStateReason::NotPlanned => Some(IssueStateReason::NotPlanned),
+        WireIssueStateReason::Duplicate => Some(IssueStateReason::Duplicate),
+        WireIssueStateReason::Reopened => Some(IssueStateReason::Reopened),
+        WireIssueStateReason::Unknown => None,
     }
 }
 
@@ -152,7 +247,7 @@ pub(crate) mod tests {
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::wire::{Envelope, HydrateData};
+    use crate::wire::{Envelope, HydrateData, IssueHydrateData};
 
     const NODES_PAGE: &str = include_str!("../tests/fixtures/nodes_page.json");
 
@@ -164,6 +259,158 @@ pub(crate) mod tests {
 
     pub(crate) fn fixture_prs() -> Vec<PullRequest> {
         prs_from(NODES_PAGE)
+    }
+
+    const ISSUE_NODES: &str = include_str!("../tests/fixtures/issue_nodes.json");
+
+    pub(crate) fn fixture_issues() -> Vec<Issue> {
+        let envelope: Envelope<IssueHydrateData> = serde_json::from_str(ISSUE_NODES).unwrap();
+        let parsed = envelope.into_data(Utc::now()).unwrap();
+        into_issues(parsed.data.nodes, "github.com")
+    }
+
+    fn issue_by_number(issues: &[Issue], number: u64) -> &Issue {
+        issues.iter().find(|issue| issue.number == number).unwrap()
+    }
+
+    #[test]
+    fn issue_fixture_maps_every_issue() {
+        let numbers: Vec<u64> = fixture_issues().iter().map(|issue| issue.number).collect();
+        assert_eq!(numbers, vec![101, 87, 64, 130, 92]);
+    }
+
+    #[test]
+    fn open_issue_with_type_labels_assignees_and_milestone() {
+        let issues = fixture_issues();
+        let issue = issue_by_number(&issues, 101);
+        assert_eq!(issue.id, PrId("I_kwDOOrbita0101".into()));
+        assert_eq!(issue.host, "github.com");
+        assert_eq!(issue.repo, "orbita-health/atlas");
+        assert_eq!(issue.title, "Scheduling client times out on large clinics");
+        assert_eq!(
+            issue.url,
+            "https://github.com/orbita-health/atlas/issues/101"
+        );
+        assert_eq!(issue.author, "mcouto");
+        assert_eq!(issue.state, IssueState::Open);
+        assert_eq!(issue.state_reason, None);
+        assert_eq!(issue.issue_type.as_deref(), Some("Bug"));
+        assert_eq!(
+            issue.labels,
+            vec![
+                IssueLabel {
+                    name: "bug".into(),
+                    color: "d73a4a".into()
+                },
+                IssueLabel {
+                    name: "scheduling".into(),
+                    color: "0e8a16".into()
+                },
+            ]
+        );
+        assert_eq!(issue.assignees, vec!["lfarias", "dnogueira"]);
+        assert_eq!(issue.milestone.as_deref(), Some("Q4 stability"));
+        assert_eq!(issue.comments, 3);
+        assert!(issue.linked_prs.is_empty());
+        assert_eq!(issue.sub_issues, None);
+        assert_eq!(issue.created_at, at("2026-10-20T08:00:00Z"));
+        assert_eq!(issue.updated_at, at("2026-11-02T10:15:00Z"));
+        assert_eq!(issue.closed_at, None);
+        assert_eq!(issue.last_mention_at, None);
+        assert_eq!(issue.involvement, Involvement::default());
+    }
+
+    #[test]
+    fn closed_issue_keeps_state_reason_and_linked_merged_pr() {
+        let issues = fixture_issues();
+        let completed = issue_by_number(&issues, 87);
+        assert_eq!(completed.state, IssueState::Closed);
+        assert_eq!(completed.state_reason, Some(IssueStateReason::Completed));
+        assert_eq!(completed.closed_at, Some(at("2026-10-30T09:00:00Z")));
+        assert_eq!(completed.issue_type, None);
+        assert_eq!(completed.milestone, None);
+        assert_eq!(
+            completed.linked_prs,
+            vec![LinkedPr {
+                repo: "orbita-health/atlas".into(),
+                number: 398,
+                state: PrState::Merged,
+                is_draft: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn issue_closed_as_not_planned() {
+        let issues = fixture_issues();
+        let issue = issue_by_number(&issues, 64);
+        assert_eq!(issue.state, IssueState::Closed);
+        assert_eq!(issue.state_reason, Some(IssueStateReason::NotPlanned));
+        assert!(issue.assignees.is_empty());
+    }
+
+    #[test]
+    fn issue_with_open_draft_pr_linked() {
+        let issues = fixture_issues();
+        let issue = issue_by_number(&issues, 130);
+        assert_eq!(
+            issue.linked_prs,
+            vec![LinkedPr {
+                repo: "orbita-health/atlas".into(),
+                number: 412,
+                state: PrState::Open,
+                is_draft: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn issue_with_sub_issues_from_deleted_author() {
+        let issues = fixture_issues();
+        let issue = issue_by_number(&issues, 92);
+        assert_eq!(issue.author, "ghost");
+        assert_eq!(issue.state_reason, Some(IssueStateReason::Reopened));
+        assert_eq!(
+            issue.sub_issues,
+            Some(SubIssues {
+                total: 5,
+                completed: 2
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_issue_enum_values_fall_back_without_failing_the_page() {
+        let json = ISSUE_NODES
+            .replace("\"NOT_PLANNED\"", "\"BRAND_NEW\"")
+            .replace("\"CLOSED\"", "\"BRAND_NEW\"");
+        let envelope: Envelope<IssueHydrateData> = serde_json::from_str(&json).unwrap();
+        let issues = into_issues(
+            envelope.into_data(Utc::now()).unwrap().data.nodes,
+            "github.com",
+        );
+        assert_eq!(issues.len(), 5);
+        assert_eq!(issue_by_number(&issues, 64).state, IssueState::Open);
+        assert_eq!(issue_by_number(&issues, 64).state_reason, None);
+    }
+
+    #[test]
+    fn pull_request_closing_issues_come_from_the_fixture() {
+        let prs = fixture_prs();
+        assert_eq!(
+            by_number(&prs, 412).closing_issues,
+            vec![
+                IssueRef {
+                    repo: "orbita-health/atlas".into(),
+                    number: 130
+                },
+                IssueRef {
+                    repo: "orbita-health/atlas".into(),
+                    number: 101
+                },
+            ]
+        );
+        assert!(by_number(&prs, 398).closing_issues.is_empty());
     }
 
     fn at(value: &str) -> DateTime<Utc> {

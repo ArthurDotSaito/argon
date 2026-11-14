@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use argon_core::{AgentKind, Config, PrKey};
+use argon_core::{AgentKind, Config, PrKey, SessionKind};
 use argon_store::{NewAgentSession, SessionStatus, Store};
 
 use super::state::*;
@@ -154,6 +154,7 @@ fn mode_rules_auto_allow_without_a_session_grant() {
         &read,
         &cwd(),
         PermissionMode::Supervised,
+        SessionKind::Review,
         &granted(&[])
     ));
 }
@@ -166,12 +167,27 @@ fn session_grant_covers_contained_edits_of_the_granted_kind() {
         &edit,
         &cwd(),
         PermissionMode::Supervised,
+        SessionKind::Review,
         &granted(&[])
     ));
     assert!(auto_allowed(
         &edit,
         &cwd(),
         PermissionMode::Supervised,
+        SessionKind::Review,
+        &granted(&["edit"])
+    ));
+}
+
+#[test]
+fn plan_sessions_never_auto_allow_edits_even_with_a_grant() {
+    let edit = native_ask("edit", &[inside("src/a.rs")]);
+
+    assert!(!auto_allowed(
+        &edit,
+        &cwd(),
+        PermissionMode::FullAccess,
+        SessionKind::Plan,
         &granted(&["edit"])
     ));
 }
@@ -183,6 +199,7 @@ fn session_grant_never_covers_commands_or_escaping_edits() {
         &command,
         &cwd(),
         PermissionMode::AcceptEdits,
+        SessionKind::Review,
         &granted(&["execute"])
     ));
     for paths in [vec![outside()], vec!["~/x".to_owned()], Vec::new()] {
@@ -192,6 +209,7 @@ fn session_grant_never_covers_commands_or_escaping_edits() {
                 &edit,
                 &cwd(),
                 PermissionMode::Supervised,
+                SessionKind::Review,
                 &granted(&["edit"])
             ),
             "{paths:?}"
@@ -451,6 +469,8 @@ async fn live_session(mode: PermissionMode, turns: Turns) -> Session {
             permission_mode: mode.as_str().into(),
             nonce: String::new(),
             allowed_files: Vec::new(),
+            kind: argon_core::SessionKind::Review,
+            base_sha: None,
         })
         .await
         .unwrap();

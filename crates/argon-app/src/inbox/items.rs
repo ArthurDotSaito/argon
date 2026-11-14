@@ -1,14 +1,116 @@
 use std::collections::HashMap;
 
-use argon_core::{PullRequest, Reason, ViewSet, classify, reason};
+use argon_core::{
+    Issue, PrKey, PullRequest, Reason, SubjectKind, ViewSet, classify, classify_issue,
+    issue_reason, reason,
+};
 use argon_store::{LocalState, Store};
 use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
 
 use super::labels;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Subject {
+    Pr(PullRequest),
+    Issue(Issue),
+}
+
+impl Subject {
+    pub fn key(&self) -> PrKey {
+        match self {
+            Self::Pr(pr) => pr.key(),
+            Self::Issue(issue) => issue.key(),
+        }
+    }
+
+    pub fn kind(&self) -> SubjectKind {
+        match self {
+            Self::Pr(_) => SubjectKind::Pr,
+            Self::Issue(_) => SubjectKind::Issue,
+        }
+    }
+
+    pub fn number(&self) -> u64 {
+        match self {
+            Self::Pr(pr) => pr.number,
+            Self::Issue(issue) => issue.number,
+        }
+    }
+
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.title,
+            Self::Issue(issue) => &issue.title,
+        }
+    }
+
+    pub fn repo(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.repo,
+            Self::Issue(issue) => &issue.repo,
+        }
+    }
+
+    pub fn host(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.host,
+            Self::Issue(issue) => &issue.host,
+        }
+    }
+
+    pub fn author(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.author,
+            Self::Issue(issue) => &issue.author,
+        }
+    }
+
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        match self {
+            Self::Pr(pr) => pr.updated_at,
+            Self::Issue(issue) => issue.updated_at,
+        }
+    }
+
+    pub fn as_pr(&self) -> Option<&PullRequest> {
+        match self {
+            Self::Pr(pr) => Some(pr),
+            Self::Issue(_) => None,
+        }
+    }
+
+    pub fn as_issue(&self) -> Option<&Issue> {
+        match self {
+            Self::Pr(_) => None,
+            Self::Issue(issue) => Some(issue),
+        }
+    }
+
+    fn node_id(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.id.0,
+            Self::Issue(issue) => &issue.id.0,
+        }
+    }
+
+    fn haystack(&self) -> String {
+        let mut parts = vec![
+            self.title().to_string(),
+            format!("{}#{}", self.repo(), self.number()),
+            labels::repo_ref(self.repo(), self.number()),
+            self.author().to_string(),
+        ];
+        match self {
+            Self::Pr(pr) => parts.push(pr.head.clone()),
+            Self::Issue(issue) => parts.extend(issue.labels.iter().map(|label| label.name.clone())),
+        }
+        parts.join("\n").to_lowercase()
+    }
+}
+
 pub struct InboxItem {
-    pub pr: PullRequest,
+    pub subject: Subject,
     pub unread: bool,
     pub views: ViewSet,
     pub reason: Reason,
@@ -17,30 +119,28 @@ pub struct InboxItem {
 }
 
 impl InboxItem {
-    fn new(pr: PullRequest, state: LocalState, context: &LoadContext) -> Self {
+    fn new(subject: Subject, state: LocalState, context: &LoadContext) -> Self {
         let me = context
             .logins
-            .get(&pr.host.to_lowercase())
+            .get(&subject.host().to_lowercase())
             .map(String::as_str)
             .unwrap_or_default();
-        let views = classify(&pr, me, context.now, context.closed_window_days);
-        let reason = reason(&pr, me);
-        let owner = pr
-            .repo
+        let (now, window) = (context.now, context.closed_window_days);
+        let (views, reason) = match &subject {
+            Subject::Pr(pr) => (classify(pr, me, now, window), reason(pr, me)),
+            Subject::Issue(issue) => (
+                classify_issue(issue, me, now, window, state.last_seen),
+                issue_reason(issue, me),
+            ),
+        };
+        let repo = subject.repo();
+        let owner = repo
             .split_once('/')
-            .map_or(pr.repo.as_str(), |(owner, _)| owner)
+            .map_or(repo, |(owner, _)| owner)
             .to_lowercase();
-        let haystack = [
-            pr.title.clone(),
-            format!("{}#{}", pr.repo, pr.number),
-            labels::repo_ref(&pr.repo, pr.number),
-            pr.author.clone(),
-            pr.head.clone(),
-        ]
-        .join("\n")
-        .to_lowercase();
+        let haystack = subject.haystack();
         Self {
-            pr,
+            subject,
             unread: state.unread,
             views,
             reason,
@@ -54,7 +154,7 @@ impl InboxItem {
     }
 
     pub(super) fn belongs_to(&self, org: &OrgKey) -> bool {
-        self.owner == org.owner && self.pr.host.eq_ignore_ascii_case(&org.host)
+        self.owner == org.owner && self.subject.host().eq_ignore_ascii_case(&org.host)
     }
 }
 
@@ -95,9 +195,20 @@ pub(super) fn load_items(
     store: &mut Store,
     context: &mut LoadContext,
 ) -> argon_store::Result<Vec<InboxItem>> {
-    let prs: Vec<(PullRequest, LocalState)> = store
+    let prs = store
         .list_prs()?
         .into_iter()
+        .map(|(pr, state)| (Subject::Pr(pr), state));
+    let issues = store
+        .list_issues()
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "failed to load issues for the inbox");
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(issue, state)| (Subject::Issue(issue), state));
+    let subjects: Vec<(Subject, LocalState)> = prs
+        .chain(issues)
         .filter(|(_, state)| !state.archived)
         .collect();
     for viewer in store.viewers()? {
@@ -106,15 +217,16 @@ pub(super) fn load_items(
             .entry(viewer.host.to_lowercase())
             .or_insert(viewer.login);
     }
-    let mut items: Vec<InboxItem> = prs
+    let mut items: Vec<InboxItem> = subjects
         .into_iter()
-        .map(|(pr, state)| InboxItem::new(pr, state, context))
+        .map(|(subject, state)| InboxItem::new(subject, state, context))
         .collect();
     items.sort_by(|a, b| {
-        b.pr.updated_at
-            .cmp(&a.pr.updated_at)
-            .then_with(|| a.pr.host.cmp(&b.pr.host))
-            .then_with(|| a.pr.id.0.cmp(&b.pr.id.0))
+        let (a, b) = (&a.subject, &b.subject);
+        b.updated_at()
+            .cmp(&a.updated_at())
+            .then_with(|| a.host().cmp(b.host()))
+            .then_with(|| a.node_id().cmp(b.node_id()))
     });
     Ok(items)
 }

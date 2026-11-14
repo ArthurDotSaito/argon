@@ -176,14 +176,24 @@ pub(crate) struct IdsConnection {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct IdNode {
     pub(crate) id: Option<String>,
+    #[serde(default)]
+    pub(crate) updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HydrateData {
     pub(crate) nodes: Vec<Option<WirePr>>,
+    pub(crate) rate_limit: RateLimit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IssueHydrateData {
+    pub(crate) nodes: Vec<Option<WireIssue>>,
     pub(crate) rate_limit: RateLimit,
 }
 
@@ -231,6 +241,92 @@ pub(crate) struct WirePr {
     pub(crate) latest_reviews: Option<Connection<WireReview>>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) commits: Connection<WireCommitNode>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) closing_issues_references: Connection<WireIssueRef>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireIssueRef {
+    pub(crate) number: u64,
+    pub(crate) repository: WireRepository,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireIssue {
+    pub(crate) id: String,
+    pub(crate) number: u64,
+    pub(crate) title: String,
+    pub(crate) url: String,
+    pub(crate) state: WireIssueState,
+    pub(crate) state_reason: Option<WireIssueStateReason>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
+    pub(crate) closed_at: Option<DateTime<Utc>>,
+    pub(crate) author: Option<Actor>,
+    pub(crate) repository: WireRepository,
+    pub(crate) issue_type: Option<WireIssueType>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) labels: Connection<WireLabel>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) assignees: Connection<Actor>,
+    pub(crate) milestone: Option<WireMilestone>,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) comments: TotalCount,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub(crate) closed_by_pull_requests_references: Connection<WireLinkedPr>,
+    pub(crate) sub_issues_summary: Option<WireSubIssuesSummary>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireIssueType {
+    pub(crate) name: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireLabel {
+    pub(crate) name: String,
+    pub(crate) color: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireMilestone {
+    pub(crate) title: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WireLinkedPr {
+    pub(crate) number: u64,
+    pub(crate) repository: WireRepository,
+    pub(crate) state: WirePrState,
+    pub(crate) is_draft: bool,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WireSubIssuesSummary {
+    pub(crate) total: u32,
+    pub(crate) completed: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum WireIssueState {
+    Open,
+    Closed,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum WireIssueStateReason {
+    Completed,
+    NotPlanned,
+    Duplicate,
+    Reopened,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Deserialize)]
@@ -353,6 +449,7 @@ pub(crate) struct ViewerData {
 
 #[derive(Deserialize)]
 pub(crate) struct WireViewer {
+    pub(crate) id: String,
     pub(crate) login: String,
     pub(crate) organizations: Connection<WireViewerOrg>,
 }

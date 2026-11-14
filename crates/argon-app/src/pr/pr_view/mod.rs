@@ -1,5 +1,6 @@
 mod ai;
 mod body;
+mod closing;
 mod loading;
 mod merge;
 
@@ -25,6 +26,10 @@ use crate::inbox::InboxModel;
 use crate::keymap::PR_VIEW_CONTEXT;
 use crate::review::{ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::services::{AppServices, Services};
+
+pub use body::{
+    failure_banner, failure_panel, fallback_header, retry_button, skeleton, tab_button,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PrTab {
@@ -263,10 +268,12 @@ impl Render for PrView {
             Some(pr) => {
                 let can_merge = self.can_merge();
                 let can_review_with_ai = self.can_review_with_ai();
+                let closing = self.closing_links(pr, cx);
                 header(
                     HeaderProps {
                         pr,
                         detail: detail.as_deref(),
+                        closing,
                         can_merge,
                         can_review_with_ai,
                         merge_state: &self.merge_state,
@@ -276,7 +283,7 @@ impl Render for PrView {
                     cx,
                 )
             }
-            None => body::fallback_header(cx),
+            None => body::pr_fallback_header(cx),
         };
         let banner = self.error_banner(cx);
         let tab_bar = self.tab_bar(cx);

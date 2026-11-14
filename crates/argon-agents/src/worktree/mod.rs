@@ -16,12 +16,19 @@ use checkout::Slot;
 pub use error::{Result, WorktreeError};
 use invocation::{FETCH_TIMEOUT, Invocation, WORKTREE_TIMEOUT};
 use layout::{
-    RepoRef, mirror_dir, mirror_from_gitfile, pr_ref, session_prefix, validate_host,
-    worktree_dir_name, worktree_parent,
+    DEFAULT_REF, RepoRef, WorktreeKind, mirror_dir, mirror_from_gitfile, pr_ref, session_prefix,
+    validate_host, worktree_dir_name, worktree_parent,
 };
 pub use scan::{FoundWorktree, orphan_worktrees};
 
 type RepoLock = Arc<tokio::sync::Mutex<()>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedWorktree {
+    pub path: PathBuf,
+    pub base_sha: String,
+    pub branch: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct WorktreeManager {
@@ -46,6 +53,42 @@ impl WorktreeManager {
         number: u64,
         session: &str,
     ) -> Result<PathBuf> {
+        self.prepare_kind(WorktreeKind::PullRequest, host, repo, number, session)
+            .await
+            .map(|(path, _)| path)
+    }
+
+    pub async fn prepare_default(
+        &self,
+        host: &str,
+        repo: &str,
+        number: u64,
+        session: &str,
+    ) -> Result<PreparedWorktree> {
+        let (path, branch) = self
+            .prepare_kind(WorktreeKind::Issue, host, repo, number, session)
+            .await?;
+        match self.head_oid(&path).await {
+            Ok(base_sha) => Ok(PreparedWorktree {
+                path,
+                base_sha,
+                branch: branch.unwrap_or_default(),
+            }),
+            Err(error) => {
+                let _ = self.discard(&path).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn prepare_kind(
+        &self,
+        kind: WorktreeKind,
+        host: &str,
+        repo: &str,
+        number: u64,
+        session: &str,
+    ) -> Result<(PathBuf, Option<String>)> {
         let host = validate_host(host)?;
         let repo = RepoRef::parse(repo)?;
         let prefix = session_prefix(session)?;
@@ -57,20 +100,33 @@ impl WorktreeManager {
         let _guard = lock.lock().await;
 
         mirror::ensure(host, &repo, &mirror).await?;
-        let reference = pr_ref(number);
-        Invocation::git_authenticated(&mirror, host)
-            .args(pr_fetch_args(number, &reference))
-            .run(FETCH_TIMEOUT)
-            .await?;
+        let (reference, branch) = match kind {
+            WorktreeKind::PullRequest => {
+                let reference = pr_ref(number);
+                Invocation::git_authenticated(&mirror, host)
+                    .args(pr_fetch_args(number, &reference))
+                    .run(FETCH_TIMEOUT)
+                    .await?;
+                (reference, None)
+            }
+            WorktreeKind::Issue => {
+                let branch = mirror::default_branch(host, &mirror).await?;
+                Invocation::git_authenticated(&mirror, host)
+                    .args(default_fetch_args(&branch))
+                    .run(FETCH_TIMEOUT)
+                    .await?;
+                (DEFAULT_REF.to_owned(), Some(branch))
+            }
+        };
         prune(&mirror).await?;
 
         let parent = worktree_parent(&worktrees_root, host, &repo);
-        let slot = checkout::pick_slot(&parent, number, &prefix, session).await?;
+        let slot = checkout::pick_slot(&parent, kind, number, &prefix, session).await?;
         let target = slot.path().to_path_buf();
         self.clear_slot(&mirror, slot).await?;
         add_worktree(&mirror, host, &target, &reference).await?;
         checkout::claim(&target, session).await?;
-        Ok(target)
+        Ok((target, branch))
     }
 
     pub fn planned_path(
@@ -83,8 +139,34 @@ impl WorktreeManager {
         let host = validate_host(host)?;
         let repo = RepoRef::parse(repo)?;
         let prefix = session_prefix(session)?;
-        Ok(worktree_parent(&self.worktrees_dir, host, &repo)
-            .join(worktree_dir_name(number, &prefix, None)))
+        Ok(
+            worktree_parent(&self.worktrees_dir, host, &repo).join(worktree_dir_name(
+                WorktreeKind::PullRequest,
+                number,
+                &prefix,
+                None,
+            )),
+        )
+    }
+
+    pub fn planned_default_path(
+        &self,
+        host: &str,
+        repo: &str,
+        number: u64,
+        session: &str,
+    ) -> Result<PathBuf> {
+        let host = validate_host(host)?;
+        let repo = RepoRef::parse(repo)?;
+        let prefix = session_prefix(session)?;
+        Ok(
+            worktree_parent(&self.worktrees_dir, host, &repo).join(worktree_dir_name(
+                WorktreeKind::Issue,
+                number,
+                &prefix,
+                None,
+            )),
+        )
     }
 
     pub async fn discard(&self, path: &Path) -> Result<()> {
@@ -168,6 +250,15 @@ fn pr_fetch_args(number: u64, reference: &str) -> [String; 4] {
     ]
 }
 
+fn default_fetch_args(branch: &str) -> [String; 4] {
+    [
+        "fetch".to_owned(),
+        "--no-prune".to_owned(),
+        "origin".to_owned(),
+        format!("+refs/heads/{branch}:{DEFAULT_REF}"),
+    ]
+}
+
 async fn canonical_root(root: &Path) -> Result<PathBuf> {
     tokio::fs::create_dir_all(root).await?;
     Ok(dunce::canonicalize(root)?)
@@ -246,6 +337,40 @@ mod tests {
     }
 
     #[test]
+    fn planned_default_path_uses_the_issue_slot_name() {
+        let path = manager()
+            .planned_default_path(
+                "github.com",
+                "nuria-tech/nuria-auth",
+                12,
+                "0190a3b27c117e2f9a10",
+            )
+            .unwrap();
+        assert_eq!(
+            path,
+            Path::new("data/worktrees/github.com/nuria-tech/nuria-auth/issue-12-0190a3b27c11")
+        );
+        assert!(
+            manager()
+                .planned_default_path("github.com", "../x", 1, "abc")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn default_fetch_targets_the_argon_default_ref_without_pruning() {
+        assert_eq!(
+            default_fetch_args("main"),
+            [
+                "fetch",
+                "--no-prune",
+                "origin",
+                "+refs/heads/main:refs/argon/default"
+            ]
+        );
+    }
+
+    #[test]
     fn pr_fetch_never_prunes_the_review_refs() {
         assert_eq!(
             pr_fetch_args(14, "refs/argon/pr-14"),
@@ -270,5 +395,69 @@ mod tests {
                 .planned_path("github.com", "a/b", 1, "../x")
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs network, git and gh; set ARGON_WORKTREE_TEST_DIR to a scratch directory"]
+    async fn prepares_and_removes_review_and_issue_worktrees_with_real_git() {
+        let dir = PathBuf::from(
+            std::env::var("ARGON_WORKTREE_TEST_DIR").expect("ARGON_WORKTREE_TEST_DIR is not set"),
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dunce::canonicalize(dir).unwrap();
+        let manager = WorktreeManager::new(&Paths {
+            config_dir: dir.join("config"),
+            data_dir: dir.join("data"),
+        });
+        let (host, repo, session) = ("github.com", "octocat/Hello-World", "issue0-session-real");
+
+        let planned = manager
+            .planned_default_path(host, repo, 1, session)
+            .unwrap();
+        let prepared = manager
+            .prepare_default(host, repo, 1, session)
+            .await
+            .unwrap();
+        assert_eq!(prepared.path, planned);
+        assert!(prepared.path.join("README").exists());
+        assert_eq!(prepared.base_sha.len(), 40);
+        let default_tip = Invocation::git(&dir.join("data/repos/github.com/octocat/Hello-World"))
+            .args(["rev-parse", DEFAULT_REF])
+            .run(WORKTREE_TIMEOUT)
+            .await
+            .unwrap();
+        assert_eq!(prepared.base_sha, default_tip);
+        println!(
+            "issue worktree: {} @ {}",
+            prepared.path.display(),
+            prepared.base_sha
+        );
+
+        let again = manager
+            .prepare_default(host, repo, 1, session)
+            .await
+            .unwrap();
+        assert_eq!(again, prepared);
+
+        let review = manager.prepare(host, repo, 6, session).await.unwrap();
+        let review_name = review.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(review_name.starts_with("pr-6-"), "{review_name}");
+        assert_eq!(
+            manager.head_oid(&review).await.unwrap(),
+            "762941318ee16e59dabbacb1b4049eec22f0d303"
+        );
+
+        let found: Vec<PathBuf> = manager.scan().into_iter().map(|slot| slot.path).collect();
+        assert!(found.contains(&prepared.path) && found.contains(&review));
+        let orphans = orphan_worktrees(
+            &manager.scan(),
+            std::slice::from_ref(&review),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+        );
+        assert_eq!(orphans, std::slice::from_ref(&prepared.path));
+
+        manager.discard(&orphans[0]).await.unwrap();
+        manager.remove(&review).await.unwrap();
+        assert!(!prepared.path.exists() && !review.exists());
     }
 }

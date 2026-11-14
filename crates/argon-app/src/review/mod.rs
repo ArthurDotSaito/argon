@@ -12,6 +12,7 @@ mod review_tab;
 mod status_badge;
 mod threads;
 
+pub(crate) use comment_editor::{CommentEditor, CommentEditorEvent, EditorAction, EditorKind};
 pub(crate) use confirm::{Confirm, confirm};
 pub use drafts::{DraftsBus, DraftsChanged};
 pub(crate) use file_diff::patch_order;

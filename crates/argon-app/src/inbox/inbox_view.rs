@@ -1,18 +1,21 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use gpui_kit::assets::IconName as AppIconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ListAlignment, ListOffset, ListState, ParentElement as _,
     Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window,
     div, list, px,
 };
 
+use super::filter::{self, KindFilter};
 use super::labels;
 use super::model::InboxModel;
 use super::row;
@@ -25,6 +28,20 @@ use crate::theme::density;
 
 const LIST_OVERDRAW: f32 = 260.;
 const FILTER_WIDTH: f32 = 320.;
+const KIND_SEGMENT_HEIGHT: f32 = 24.;
+const KIND_OPTIONS: [(KindFilter, &str, Option<AppIconName>); 3] = [
+    (KindFilter::All, labels::KIND_ALL, None),
+    (
+        KindFilter::Prs,
+        labels::KIND_PRS,
+        Some(AppIconName::GitPullRequest),
+    ),
+    (
+        KindFilter::Issues,
+        labels::KIND_ISSUES,
+        Some(AppIconName::CircleDot),
+    ),
+];
 const SINGLE_CLICK_DELAY: Duration = Duration::from_millis(300);
 
 pub struct InboxPane {
@@ -159,14 +176,14 @@ impl InboxPane {
             .model
             .read(cx)
             .item_at(position)
-            .map(|item| item.pr.key())
+            .map(|item| item.subject.key())
         else {
             return;
         };
         let model = self.model.downgrade();
         self.pending_click = Some(cx.spawn(async move |_, cx| {
             cx.background_executor().timer(SINGLE_CLICK_DELAY).await;
-            _ = model.update(cx, |model, cx| model.open_pr(&id, true, cx));
+            _ = model.update(cx, |model, cx| model.open_subject(&id, true, cx));
         }));
     }
 
@@ -209,9 +226,10 @@ impl InboxPane {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = self.model.read(cx).view();
+        let kind_segment = filter::applies_to(view).then(|| self.kind_segment(cx));
         let theme = cx.theme();
         let model = self.model.read(cx);
-        let view = model.view();
         let org_chip = model.org_filter().map(|org| {
             let inbox = self.model.downgrade();
             h_flex()
@@ -253,6 +271,7 @@ impl InboxPane {
                     .child(model.visible_count().to_string()),
             )
             .children(org_chip)
+            .children(kind_segment)
             .child(div().flex_1())
             .child(
                 div().w(px(FILTER_WIDTH)).child(
@@ -273,6 +292,49 @@ impl InboxPane {
             )
     }
 
+    fn kind_segment(&self, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
+        let current = self.model.read(cx).kind_filter();
+        h_flex()
+            .h(px(KIND_SEGMENT_HEIGHT))
+            .flex_none()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .overflow_hidden()
+            .children(
+                KIND_OPTIONS
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, (kind, label, icon))| {
+                        let selected = kind == current;
+                        h_flex()
+                            .id(("inbox-kind", ix))
+                            .px(px(9.))
+                            .gap(px(5.))
+                            .items_center()
+                            .text_xs()
+                            .cursor_pointer()
+                            .when(ix > 0, |this| this.border_l_1().border_color(theme.border))
+                            .map(|this| {
+                                if selected {
+                                    this.bg(theme.accent).text_color(theme.foreground)
+                                } else {
+                                    this.text_color(theme.muted_foreground)
+                                        .hover(|style| style.text_color(theme.foreground))
+                                }
+                            })
+                            .children(icon.map(|icon| Icon::new(icon).xsmall()))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.model
+                                    .update(cx, |model, cx| model.set_kind_filter(kind, cx));
+                                this.focus_handle.focus(window, cx);
+                            }))
+                    }),
+            )
+    }
+
     fn body(&self, cx: &mut Context<Self>) -> AnyElement {
         let model = self.model.read(cx);
         let message = if !model.is_loaded() && model.error().is_none() {
@@ -281,7 +343,7 @@ impl InboxPane {
             Some(if model.has_query() {
                 labels::EMPTY_FILTER
             } else {
-                labels::EMPTY_VIEW
+                labels::empty_view(model.view(), model.kind_filter())
             })
         } else {
             None
@@ -323,13 +385,13 @@ fn render_list_row(
         Some(InboxRow::Header { title, count }) => {
             row::header(title.clone(), *count, cx).into_any_element()
         }
-        Some(InboxRow::Pr { position }) => {
+        Some(InboxRow::Item { position }) => {
             let position = *position;
             let Some(item) = model.item_at(position) else {
                 return div().into_any_element();
             };
             let pane = pane.clone();
-            row::pr_row(position, item, model.is_selected(position), Utc::now(), cx)
+            row::item_row(position, item, model.is_selected(position), Utc::now(), cx)
                 .on_click(move |event: &ClickEvent, window, cx| {
                     _ = pane.update(cx, |pane, cx| {
                         pane.on_row_click(position, event.click_count(), window, cx)

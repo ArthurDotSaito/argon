@@ -1,4 +1,4 @@
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::select::Select;
@@ -63,14 +63,17 @@ impl StartDialog {
             .small()
             .placeholder(model_placeholder)
             .disabled(!has_models || self.is_launching());
+        let plan = self.kind() == SessionKind::Plan;
         let permissions = Select::new(&self.permission_select)
             .small()
-            .disabled(self.selected_option().is_none() || self.is_launching());
-        let risk_note = (self.permission_mode == PermissionMode::FullAccess).then(|| {
-            note(labels::FULL_ACCESS_RISK, theme.warning)
-                .w_full()
-                .min_w_0()
-        });
+            .disabled(plan || self.selected_option().is_none() || self.is_launching());
+        let risk_note = if plan {
+            Some(note(labels::PLAN_MODE_LOCKED, theme.muted_foreground))
+        } else {
+            (self.permission_mode == PermissionMode::FullAccess)
+                .then(|| note(labels::FULL_ACCESS_RISK, theme.warning))
+        }
+        .map(|note| note.w_full().min_w_0());
         let template_placeholder = match &self.templates {
             Load::Loading => labels::LOADING_TEMPLATES,
             Load::Ready(_) | Load::Failed(_) => labels::NO_TEMPLATES,
@@ -152,6 +155,9 @@ impl StartDialog {
     }
 
     pub(super) fn options(&self, cx: &mut Context<Self>) -> Div {
+        if self.kind() == SessionKind::Plan {
+            return self.plan_options(cx);
+        }
         let theme = cx.theme();
         let busy = self.is_launching();
         let entity = cx.entity().downgrade();
@@ -208,6 +214,40 @@ impl StartDialog {
             )
     }
 
+    fn plan_options(&self, cx: &App) -> Div {
+        h_flex()
+            .w_full()
+            .gap_2()
+            .items_start()
+            .child(section_label(labels::OPTIONS, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .grid()
+                    .grid_cols(2)
+                    .gap_x_6()
+                    .gap_y_2()
+                    .child(locked_switch(
+                        "ai-read-only",
+                        labels::READ_ONLY,
+                        labels::READ_ONLY_HINT,
+                        cx,
+                    ))
+                    .child(locked_switch(
+                        "ai-worktree",
+                        labels::ISOLATED_WORKTREE,
+                        labels::ISOLATED_WORKTREE_HINT,
+                        cx,
+                    ))
+                    .child(locked_switch(
+                        "ai-drafts-only",
+                        labels::PLAN_DRAFT_ONLY,
+                        labels::PLAN_DRAFT_ONLY_HINT,
+                        cx,
+                    )),
+            )
+    }
+
     pub(super) fn permissions_warning(&self, cx: &App) -> Div {
         let theme = cx.theme();
         let agent = self
@@ -234,7 +274,7 @@ impl StartDialog {
                     .min_w_0()
                     .text_xs()
                     .text_color(theme.foreground)
-                    .child(labels::permissions_warning(agent)),
+                    .child(labels::permissions_warning(agent, self.kind())),
             )
     }
 }

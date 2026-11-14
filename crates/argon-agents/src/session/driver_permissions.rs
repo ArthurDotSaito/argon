@@ -8,6 +8,9 @@ use crate::session::permissions::{
 use crate::session::writer::Op;
 use crate::session::{Result, SessionError};
 
+const PLAN_DENIAL_NOTICE: &str = "Edição negada: Agent Plan é somente leitura.";
+const TURN_ENDS_HINT: &str = " Mande outra mensagem para continuar.";
+
 pub(super) struct Pending {
     pub reply: PermissionReply,
     pub ask: PermissionAsk,
@@ -32,11 +35,22 @@ pub(crate) fn validate_option(permission: &PendingPermission, option_id: &str) -
 impl Shared {
     pub fn on_permission(&self, ask: PermissionAsk, reply: PermissionReply) {
         let mut state = self.lock();
-        match decide(&ask, &self.config.cwd, state.permission_mode) {
+        match decide(
+            &ask,
+            &self.config.cwd,
+            state.permission_mode,
+            self.config.kind,
+        ) {
             PermissionDecision::Allow { option_id } => {
                 if let Err(error) = reply(PermissionAnswer::Selected(option_id)) {
                     tracing::warn!(%error, "failed to auto-allow permission");
                 }
+            }
+            PermissionDecision::Deny { option_id } => {
+                if let Err(error) = reply(PermissionAnswer::Selected(option_id)) {
+                    tracing::warn!(%error, "failed to auto-deny permission");
+                }
+                self.announce_denial(&mut state);
             }
             PermissionDecision::Ask(prompt) => {
                 state.next_permission += 1;
@@ -58,6 +72,15 @@ impl Shared {
         }
     }
 
+    fn announce_denial(&self, state: &mut State) {
+        let notice = if self.config.denial_ends_turn {
+            format!("{PLAN_DENIAL_NOTICE}{TURN_ENDS_HINT}")
+        } else {
+            PLAN_DENIAL_NOTICE.to_owned()
+        };
+        self.emit_locked(state, AgentEvent::Error(notice));
+    }
+
     pub fn set_permission_mode(&self, mode: PermissionMode) {
         let mut state = self.lock();
         let changed = std::mem::replace(&mut state.permission_mode, mode) != mode;
@@ -69,13 +92,21 @@ impl Shared {
             self.emit_locked(&mut state, AgentEvent::PermissionModeChanged(mode));
         }
         for pending in std::mem::take(&mut state.pending) {
-            match decide(&pending.ask, &self.config.cwd, mode) {
+            match decide(&pending.ask, &self.config.cwd, mode, self.config.kind) {
                 PermissionDecision::Allow { option_id } => {
                     if let Err(error) = (pending.reply)(PermissionAnswer::Selected(option_id)) {
                         tracing::warn!(%error, "failed to auto-allow pending permission");
                     }
                     let event = AgentEvent::permission_resolved(&pending.permission);
                     self.emit_locked(&mut state, event);
+                }
+                PermissionDecision::Deny { option_id } => {
+                    if let Err(error) = (pending.reply)(PermissionAnswer::Selected(option_id)) {
+                        tracing::warn!(%error, "failed to auto-deny pending permission");
+                    }
+                    let event = AgentEvent::permission_resolved(&pending.permission);
+                    self.emit_locked(&mut state, event);
+                    self.announce_denial(&mut state);
                 }
                 PermissionDecision::Ask(_) => state.pending.push(pending),
             }

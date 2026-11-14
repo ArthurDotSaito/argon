@@ -1,10 +1,12 @@
-use argon_core::Severity;
+use argon_core::{SessionKind, Severity};
 
 use super::card_status::{CardStatus, SessionFilter};
 
 pub const PANEL_TITLE: &str = "Agentes";
 pub const REVIEW_PR: &str = "Nova review";
 pub const OPEN_PR: &str = "Abrir PR";
+pub const PLAN_ISSUE: &str = "Novo plano";
+pub const OPEN_ISSUE: &str = "Abrir issue";
 pub const NO_SESSIONS: &str = "Nenhuma sessão de agente ainda.";
 pub const NO_SESSIONS_IN_FILTER: &str = "Nenhuma sessão neste filtro.";
 pub const LOADING_SESSIONS: &str = "carregando sessões…";
@@ -43,6 +45,7 @@ pub const FULL_ACCESS_TITLE: &str = "Ativar acesso total?";
 pub const FULL_ACCESS_CONFIRM: &str = "Ativar acesso total";
 pub use super::labels::SERVICES_UNAVAILABLE;
 pub const UNKNOWN_PR: &str = "PR fora da inbox";
+pub const UNKNOWN_ISSUE: &str = "Issue fora da inbox";
 pub const YOU: &str = "você";
 pub const CONTINUE: &str = "Continuar";
 pub const OUT_OF_DIFF: &str = "Linha fora do diff — abra no diff e comente manualmente";
@@ -59,6 +62,56 @@ pub const NO_ACP_SESSION: &str = "esta sessão não tem id ACP para retomar";
 pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
 pub const SESSION_ARCHIVED: &str = "esta sessão foi arquivada";
 pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
+
+pub const EDIT_PLAN: &str = "Editar";
+pub const EDIT_PLAN_CAPTION: &str = "Editando o plano — o texto salvo é o que será publicado";
+pub const PUBLISH_PLAN: &str = "Publicar na issue";
+pub const PUBLISHED_PLAN: &str = "Publicado · ver no GitHub";
+pub const PLAN_EDITED: &str = "editado por você";
+pub const NEW_PLAN_VERSION: &str = "O agente gerou uma nova versão do plano";
+pub const USE_NEW_VERSION: &str = "Usar a nova versão";
+pub const KEEP_MINE: &str = "Manter a minha";
+pub const PLAN_LOADING: &str = "carregando o plano…";
+pub const PLAN_CHANGED: &str = "O rascunho mudou; confira antes de publicar.";
+
+pub fn plan_footer(agent: &str, model: &str, login: &str) -> String {
+    format!("_Plano preparado com Agent Plan ({agent} · {model}) e revisado por @{login}._")
+}
+
+pub fn no_account(host: &str) -> String {
+    format!("nenhuma conta do GitHub conectada em {host}")
+}
+
+pub fn publish_failed(error: &str) -> String {
+    format!("Falha ao publicar o plano: {error}")
+}
+
+pub fn publish_unconfirmed(error: &str) -> String {
+    format!(
+        "Não consegui confirmar se o plano foi publicado ({error}); o rascunho ficou travado para não duplicar. Confira a issue no GitHub."
+    )
+}
+
+pub fn published_not_recorded(error: &str) -> String {
+    format!(
+        "O comentário foi publicado, mas não consegui marcar o rascunho como publicado: {error}"
+    )
+}
+
+pub fn plan_save_failed(error: &str) -> String {
+    format!("Falha ao salvar o plano: {error}")
+}
+
+pub fn plan_update_failed(error: &str) -> String {
+    format!("Falha ao atualizar o plano: {error}")
+}
+
+pub fn unknown_subject(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Review => UNKNOWN_PR,
+        SessionKind::Plan => UNKNOWN_ISSUE,
+    }
+}
 
 pub fn filter_label(filter: SessionFilter) -> &'static str {
     match filter {

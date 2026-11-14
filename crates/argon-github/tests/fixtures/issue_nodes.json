@@ -1,0 +1,130 @@
+{
+  "data": {
+    "nodes": [
+      {
+        "id": "I_kwDOOrbita0101",
+        "number": 101,
+        "title": "Scheduling client times out on large clinics",
+        "url": "https://github.com/orbita-health/atlas/issues/101",
+        "state": "OPEN",
+        "stateReason": null,
+        "createdAt": "2026-10-20T08:00:00Z",
+        "updatedAt": "2026-11-02T10:15:00Z",
+        "closedAt": null,
+        "author": { "login": "mcouto" },
+        "repository": { "nameWithOwner": "orbita-health/atlas" },
+        "issueType": { "name": "Bug" },
+        "labels": {
+          "nodes": [
+            { "name": "bug", "color": "d73a4a" },
+            { "name": "scheduling", "color": "0e8a16" }
+          ]
+        },
+        "assignees": { "nodes": [{ "login": "lfarias" }, { "login": "dnogueira" }] },
+        "milestone": { "title": "Q4 stability" },
+        "comments": { "totalCount": 3 },
+        "closedByPullRequestsReferences": { "nodes": [] },
+        "subIssuesSummary": { "total": 0, "completed": 0 }
+      },
+      {
+        "id": "I_kwDOOrbita0087",
+        "number": 87,
+        "title": "Export fails for empty date range",
+        "url": "https://github.com/orbita-health/atlas/issues/87",
+        "state": "CLOSED",
+        "stateReason": "COMPLETED",
+        "createdAt": "2026-10-10T12:00:00Z",
+        "updatedAt": "2026-10-30T09:00:00Z",
+        "closedAt": "2026-10-30T09:00:00Z",
+        "author": { "login": "lfarias" },
+        "repository": { "nameWithOwner": "orbita-health/atlas" },
+        "issueType": null,
+        "labels": { "nodes": [] },
+        "assignees": { "nodes": [{ "login": "mcouto" }] },
+        "milestone": null,
+        "comments": { "totalCount": 0 },
+        "closedByPullRequestsReferences": {
+          "nodes": [
+            {
+              "number": 398,
+              "repository": { "nameWithOwner": "orbita-health/atlas" },
+              "state": "MERGED",
+              "isDraft": false
+            }
+          ]
+        },
+        "subIssuesSummary": { "total": 0, "completed": 0 }
+      },
+      {
+        "id": "I_kwDOOrbita0064",
+        "number": 64,
+        "title": "Support legacy HL7 v2.3 feeds",
+        "url": "https://github.com/orbita-health/atlas/issues/64",
+        "state": "CLOSED",
+        "stateReason": "NOT_PLANNED",
+        "createdAt": "2026-09-02T15:30:00Z",
+        "updatedAt": "2026-10-28T16:45:00Z",
+        "closedAt": "2026-10-28T16:45:00Z",
+        "author": { "login": "dnogueira" },
+        "repository": { "nameWithOwner": "orbita-health/atlas" },
+        "issueType": { "name": "Feature" },
+        "labels": { "nodes": [{ "name": "wontfix", "color": "ffffff" }] },
+        "assignees": { "nodes": [] },
+        "milestone": null,
+        "comments": { "totalCount": 7 },
+        "closedByPullRequestsReferences": { "nodes": [] },
+        "subIssuesSummary": { "total": 0, "completed": 0 }
+      },
+      {
+        "id": "I_kwDOOrbita0130",
+        "number": 130,
+        "title": "Add retry budget metrics dashboard",
+        "url": "https://github.com/orbita-health/atlas/issues/130",
+        "state": "OPEN",
+        "stateReason": null,
+        "createdAt": "2026-10-31T09:20:00Z",
+        "updatedAt": "2026-11-01T18:00:00Z",
+        "closedAt": null,
+        "author": { "login": "mcouto" },
+        "repository": { "nameWithOwner": "orbita-health/atlas" },
+        "issueType": { "name": "Task" },
+        "labels": { "nodes": [{ "name": "observability", "color": "1d76db" }] },
+        "assignees": { "nodes": [{ "login": "mcouto" }] },
+        "milestone": null,
+        "comments": { "totalCount": 1 },
+        "closedByPullRequestsReferences": {
+          "nodes": [
+            {
+              "number": 412,
+              "repository": { "nameWithOwner": "orbita-health/atlas" },
+              "state": "OPEN",
+              "isDraft": true
+            }
+          ]
+        },
+        "subIssuesSummary": { "total": 0, "completed": 0 }
+      },
+      {
+        "id": "I_kwDOOrbita0092",
+        "number": 92,
+        "title": "Migrate scheduling to the new calendar API",
+        "url": "https://github.com/orbita-health/atlas/issues/92",
+        "state": "OPEN",
+        "stateReason": "REOPENED",
+        "createdAt": "2026-09-15T11:00:00Z",
+        "updatedAt": "2026-10-29T07:30:00Z",
+        "closedAt": null,
+        "author": null,
+        "repository": { "nameWithOwner": "orbita-health/atlas" },
+        "issueType": null,
+        "labels": { "nodes": [] },
+        "assignees": { "nodes": [] },
+        "milestone": { "title": "Calendar v2" },
+        "comments": { "totalCount": 12 },
+        "closedByPullRequestsReferences": { "nodes": [] },
+        "subIssuesSummary": { "total": 5, "completed": 2 }
+      }
+    ],
+    "rateLimit": { "remaining": 4970, "resetAt": "2026-11-02T14:00:00Z" }
+  }
+}

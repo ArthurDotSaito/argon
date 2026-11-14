@@ -1,13 +1,67 @@
-use argon_core::{AgentCfg, AgentKind, PermissionMode, PromptTemplate, render_prompt};
-use gpui_kit::{AppContext as _, Context, SharedString, Window};
+use argon_core::{
+    AgentCfg, AgentKind, PermissionMode, PromptError, PromptTemplate, RenderedPrompt, SessionKind,
+    TemplateKind, render_plan_prompt, render_prompt,
+};
+use gpui_kit::{AppContext as _, Context, SharedString, Task, Window};
 
-use super::{Load, Preview, StartDialog};
+use super::{Gathering, Load, Preview, StartDialog};
 use crate::agents::choice::Choice;
-use crate::agents::context::{ContextOptions, diff_inline, prompt_context};
+use crate::agents::context::{ContextOptions, diff_inline, plan_context, prompt_context};
 use crate::agents::detection::{
     AgentOption, default_agent, default_model, default_template, model_choices,
 };
 use crate::agents::labels;
+
+pub(super) fn template_kind(kind: SessionKind) -> TemplateKind {
+    match kind {
+        SessionKind::Review => TemplateKind::Review,
+        SessionKind::Plan => TemplateKind::Plan,
+    }
+}
+
+pub(super) fn templates_of_kind(
+    templates: Vec<PromptTemplate>,
+    kind: TemplateKind,
+) -> Vec<PromptTemplate> {
+    templates
+        .into_iter()
+        .filter(|template| template.kind == kind)
+        .collect()
+}
+
+pub(super) fn session_permission_mode(
+    kind: SessionKind,
+    requested: PermissionMode,
+) -> PermissionMode {
+    match kind {
+        SessionKind::Review => requested,
+        SessionKind::Plan => PermissionMode::Supervised,
+    }
+}
+
+fn preview(rendered: Result<RenderedPrompt, SharedString>, diff_inline: Option<bool>) -> Preview {
+    let (lines, chars) = match &rendered {
+        Ok(prompt) => (
+            prompt
+                .text
+                .lines()
+                .map(|line| SharedString::from(line.to_owned()))
+                .collect(),
+            prompt.text.chars().count(),
+        ),
+        Err(_) => (Vec::new(), 0),
+    };
+    Preview {
+        rendered,
+        lines,
+        chars,
+        diff_inline,
+    }
+}
+
+fn render_error(error: &PromptError) -> SharedString {
+    labels::render_failed(&error.to_string()).into()
+}
 
 impl StartDialog {
     pub(super) fn set_agents(
@@ -50,12 +104,13 @@ impl StartDialog {
         if !selectable {
             return;
         }
-        let permission_mode = self
+        let configured = self
             .config
             .agents
             .get(&kind)
             .map(AgentCfg::permission_mode)
             .unwrap_or_default();
+        let permission_mode = session_permission_mode(self.kind(), configured);
         self.agent = Some(kind);
         self.set_model_choices(None, window, cx);
         self.permission_mode = permission_mode;
@@ -112,6 +167,7 @@ impl StartDialog {
     }
 
     pub(super) fn set_permission_mode(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
+        let mode = session_permission_mode(self.kind(), mode);
         if self.permission_mode != mode {
             self.permission_mode = mode;
             cx.notify();
@@ -124,7 +180,13 @@ impl StartDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let chosen = default_template(&templates, &self.config.review.default_template);
+        let kind = template_kind(self.kind());
+        let templates = templates_of_kind(templates, kind);
+        let configured = match kind {
+            TemplateKind::Review => &self.config.review.default_template,
+            TemplateKind::Plan => &self.config.review.default_plan_template,
+        };
+        let chosen = default_template(&templates, configured);
         let choices: Vec<Choice> = templates
             .iter()
             .map(|template| Choice::new(template.id.clone(), template.name.clone()))
@@ -189,37 +251,31 @@ impl StartDialog {
             cx.notify();
             return;
         };
-        let gathered = gathered.clone();
         let template = template.clone();
-        let ci = self.ci_text().map(str::to_owned);
-        let options = ContextOptions {
-            include_reviews: self.include_reviews,
-            include_ci: self.include_ci,
-        };
-        let max_diff_chars = self.config.review.max_diff_chars;
-        let job = cx.background_spawn(async move {
-            let ctx = prompt_context(&gathered, ci.as_deref(), options, max_diff_chars);
-            let inline = diff_inline(&ctx.diff, max_diff_chars);
-            let rendered = render_prompt(&template, &ctx, max_diff_chars)
-                .map_err(|error| SharedString::from(labels::render_failed(&error.to_string())));
-            let (lines, chars) = match &rendered {
-                Ok(prompt) => (
-                    prompt
-                        .text
-                        .lines()
-                        .map(|line| SharedString::from(line.to_owned()))
-                        .collect(),
-                    prompt.text.chars().count(),
-                ),
-                Err(_) => (Vec::new(), 0),
-            };
-            Preview {
-                rendered,
-                lines,
-                chars,
-                diff_inline: inline,
+        let job: Task<Preview> = match gathered.clone() {
+            Gathering::Review(gathered) => {
+                let ci = self.ci_text().map(str::to_owned);
+                let options = ContextOptions {
+                    include_reviews: self.include_reviews,
+                    include_ci: self.include_ci,
+                };
+                let max_diff_chars = self.config.review.max_diff_chars;
+                cx.background_spawn(async move {
+                    let ctx = prompt_context(&gathered, ci.as_deref(), options, max_diff_chars);
+                    let inline = diff_inline(&ctx.diff, max_diff_chars);
+                    let rendered = render_prompt(&template, &ctx, max_diff_chars)
+                        .map_err(|error| render_error(&error));
+                    preview(rendered, Some(inline))
+                })
             }
-        });
+            Gathering::Plan(detail) => cx.background_spawn(async move {
+                let ctx =
+                    plan_context(&detail, labels::PLAN_BASE_PENDING, labels::PLAN_SHA_PENDING);
+                let rendered =
+                    render_plan_prompt(&template, &ctx).map_err(|error| render_error(&error));
+                preview(rendered, None)
+            }),
+        };
         self.render_task = Some(cx.spawn(async move |this, cx| {
             let preview = job.await;
             _ = this.update(cx, |this, cx| {
@@ -231,5 +287,68 @@ impl StartDialog {
             });
         }));
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn template(id: &str, kind: TemplateKind) -> PromptTemplate {
+        PromptTemplate {
+            id: id.into(),
+            name: id.into(),
+            kind,
+            ..PromptTemplate::default()
+        }
+    }
+
+    fn ids(templates: &[PromptTemplate]) -> Vec<&str> {
+        templates
+            .iter()
+            .map(|template| template.id.as_str())
+            .collect()
+    }
+
+    fn all() -> Vec<PromptTemplate> {
+        vec![
+            template("review-padrao", TemplateKind::Review),
+            template("plan-padrao", TemplateKind::Plan),
+            template("seguranca", TemplateKind::Review),
+            template("meu-plano", TemplateKind::Plan),
+        ]
+    }
+
+    #[test]
+    fn review_dialog_lists_only_review_templates() {
+        let kind = template_kind(SessionKind::Review);
+        assert_eq!(
+            ids(&templates_of_kind(all(), kind)),
+            ["review-padrao", "seguranca"]
+        );
+    }
+
+    #[test]
+    fn plan_dialog_lists_only_plan_templates() {
+        let kind = template_kind(SessionKind::Plan);
+        assert_eq!(
+            ids(&templates_of_kind(all(), kind)),
+            ["plan-padrao", "meu-plano"]
+        );
+    }
+
+    #[test]
+    fn plan_sessions_stay_supervised_whatever_is_asked() {
+        for mode in [
+            PermissionMode::Supervised,
+            PermissionMode::AcceptEdits,
+            PermissionMode::FullAccess,
+        ] {
+            assert_eq!(
+                session_permission_mode(SessionKind::Plan, mode),
+                PermissionMode::Supervised
+            );
+            assert_eq!(session_permission_mode(SessionKind::Review, mode), mode);
+        }
     }
 }

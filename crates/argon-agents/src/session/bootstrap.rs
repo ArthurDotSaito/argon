@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use argon_store::{NewAgentSession, SessionStatus};
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -14,6 +14,7 @@ use super::{
     SessionOptions,
 };
 use crate::AgentEvent;
+use crate::Transport;
 use crate::registry::{AgentSpec, ModelInfo};
 
 const EVENT_CAPACITY: usize = 4096;
@@ -107,6 +108,27 @@ fn supervise(
     });
 }
 
+async fn restore_plan_state(writer: &SessionWriter, shared: &Shared, ctx: &SessionContext) {
+    if ctx.kind != SessionKind::Plan {
+        return;
+    }
+    match writer.has_plan(&ctx.id).await {
+        Ok(true) => shared.mark_plan_recorded(),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(session = %ctx.id, %error, "failed to read plan drafts"),
+    }
+}
+
+fn pinned_mode(ctx: SessionContext) -> SessionContext {
+    match ctx.kind {
+        SessionKind::Plan => SessionContext {
+            permission_mode: PermissionMode::Supervised,
+            ..ctx
+        },
+        SessionKind::Review => ctx,
+    }
+}
+
 pub(super) async fn launch(
     spec: &AgentSpec,
     ctx: SessionContext,
@@ -115,11 +137,16 @@ pub(super) async fn launch(
     options: SessionOptions,
     run: fn(DriverRun) -> DriverFuture,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
+    let ctx = pinned_mode(ctx);
     let tail = Arc::new(StderrTail::default());
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let shared = Arc::new(Shared::new(
         SharedConfig {
             id: ctx.id.clone(),
+            subject: ctx.pr.clone(),
+            kind: ctx.kind,
+            base_sha: ctx.base_sha.clone(),
+            denial_ends_turn: spec.transport == Transport::OpencodeServe,
             cwd: ctx.cwd.clone(),
             nonce: ctx.nonce.clone(),
             allowed_files: ctx.allowed_files.clone(),
@@ -178,6 +205,8 @@ pub(super) async fn launch(
                 permission_mode: permission_mode.as_str().to_owned(),
                 nonce: ctx.nonce.clone(),
                 allowed_files: ctx.allowed_files.clone(),
+                kind: ctx.kind,
+                base_sha: ctx.base_sha.clone(),
             })
             .await
             .map(|()| 0),
@@ -189,6 +218,7 @@ pub(super) async fn launch(
             return Err(SessionError::Store(error));
         }
     };
+    restore_plan_state(&writer, &shared, &ctx).await;
     aborter.disarm();
     let status = if load.is_some() {
         SessionStatus::Completed
@@ -223,7 +253,7 @@ pub(super) async fn launch(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use argon_core::{AgentKind, Config, PrKey};
@@ -234,18 +264,85 @@ mod tests {
     use crate::registry::agent_spec;
 
     const DRIVER_ERROR: &str = "boom";
+    const NONCE: &str = "00112233445566778899aabbccddeeff";
+
+    fn ready() -> Ready {
+        Ready {
+            agent_session_id: "agent".to_owned(),
+            model: "sonnet".to_owned(),
+            models: Vec::new(),
+            warnings: Vec::new(),
+            permission_mode: None,
+        }
+    }
 
     fn dies_after_ready(run: DriverRun) -> DriverFuture {
         Box::pin(async move {
-            let _ = run.ready.send(Ok(Ready {
-                agent_session_id: "agent".to_owned(),
-                model: "sonnet".to_owned(),
-                models: Vec::new(),
-                warnings: Vec::new(),
-                permission_mode: None,
-            }));
+            let _ = run.ready.send(Ok(ready()));
             Err(DRIVER_ERROR.to_owned())
         })
+    }
+
+    fn replies_with_the_prompt(mut run: DriverRun) -> DriverFuture {
+        Box::pin(async move {
+            let _ = run.ready.send(Ok(ready()));
+            while let Some(command) = run.commands.recv().await {
+                match command {
+                    Command::Prompt(reply) => {
+                        run.shared.begin_turn("planeje");
+                        run.shared.emit(AgentEvent::MessageChunk(reply));
+                        run.shared.end_turn("end_turn").await;
+                    }
+                    Command::Shutdown => break,
+                    _ => {}
+                }
+            }
+            Ok(false)
+        })
+    }
+
+    fn temp_store(name: &str) -> (PathBuf, SessionWriter) {
+        let dir =
+            std::env::temp_dir().join(format!("argon-bootstrap-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let writer =
+            SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
+        (dir, writer)
+    }
+
+    fn stream_spec() -> AgentSpec {
+        let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
+        spec.transport = Transport::ClaudeStream;
+        spec
+    }
+
+    async fn reply_turn(
+        agent: &AgentSessionHandle,
+        writer: &SessionWriter,
+        reply: &str,
+    ) -> Vec<AgentEvent> {
+        agent.prompt(reply).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !agent.shared.try_acquire() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        agent.shared.release();
+        let events: Vec<AgentEvent> = writer
+            .events_since("s1", 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect();
+        let start = events
+            .iter()
+            .rposition(|event| matches!(event, AgentEvent::UserMessage(_)))
+            .unwrap();
+        events[start..].to_vec()
     }
 
     fn context(id: &str, cwd: PathBuf) -> SessionContext {
@@ -253,26 +350,34 @@ mod tests {
             id: id.to_owned(),
             pr: PrKey::new("github.com", "PR_1"),
             template_id: "review-padrao".to_owned(),
-            nonce: "00112233445566778899aabbccddeeff".to_owned(),
+            nonce: NONCE.to_owned(),
             allowed_files: Vec::new(),
             cwd,
             model: String::new(),
             permission_mode: PermissionMode::Supervised,
+            kind: SessionKind::Review,
+            base_sha: None,
         }
     }
 
-    async fn launch_dying(name: &str) -> (PathBuf, SessionWriter, AgentSessionHandle) {
-        let dir =
-            std::env::temp_dir().join(format!("argon-bootstrap-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let writer =
-            SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
-        let mut spec = agent_spec(AgentKind::ClaudeCode, &Config::default());
-        spec.transport = Transport::ClaudeStream;
+    fn plan_context(id: &str, cwd: PathBuf) -> SessionContext {
+        SessionContext {
+            pr: PrKey::new("github.com", "I_7"),
+            template_id: "plan-padrao".to_owned(),
+            kind: SessionKind::Plan,
+            base_sha: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+            ..context(id, cwd)
+        }
+    }
+
+    async fn launch_dying(
+        name: &str,
+        build: fn(&str, PathBuf) -> SessionContext,
+    ) -> (PathBuf, SessionWriter, AgentSessionHandle) {
+        let (dir, writer) = temp_store(name);
         let (_, agent) = launch(
-            &spec,
-            context("s1", dir.clone()),
+            &stream_spec(),
+            build("s1", dir.clone()),
             writer.clone(),
             None,
             SessionOptions::default(),
@@ -286,7 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn early_failure_releases_the_writer_error_forwarder() {
-        let (dir, _writer, agent) = launch_dying("forwarder").await;
+        let (dir, _writer, agent) = launch_dying("forwarder", context).await;
 
         for _ in 0..500 {
             if Arc::strong_count(&agent.shared) == 1 {
@@ -301,13 +406,15 @@ mod tests {
 
     #[tokio::test]
     async fn driver_dying_before_activation_fails_the_session() {
-        let (dir, writer, agent) = launch_dying("activate").await;
+        let (dir, writer, agent) = launch_dying("activate", context).await;
         let db = dir.join("argon.db");
 
         assert!(agent.is_finished());
         assert_eq!(agent.status(), SessionStatus::Failed);
         let row = Store::open(&db).unwrap().session("s1").unwrap().unwrap();
         assert_eq!(row.status, SessionStatus::Failed);
+        assert_eq!(row.kind, SessionKind::Review);
+        assert_eq!(row.base_sha, None);
         let events = writer.events_since("s1", 0).await.unwrap();
         assert!(
             matches!(
@@ -317,6 +424,171 @@ mod tests {
             ),
             "{events:?}"
         );
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn new_plan_session_persists_its_kind_and_base_sha() {
+        let (dir, writer, agent) = launch_dying("plan-kind", plan_context).await;
+        let expected = plan_context("s1", dir.clone());
+
+        let row = Store::open(&dir.join("argon.db"))
+            .unwrap()
+            .session("s1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.kind, SessionKind::Plan);
+        assert_eq!(row.base_sha, expected.base_sha);
+        assert_eq!(row.pr, expected.pr);
+        drop((writer, agent));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn launch_replying(
+        dir: &Path,
+        writer: &SessionWriter,
+        load: Option<String>,
+    ) -> AgentSessionHandle {
+        let (_, agent) = launch(
+            &stream_spec(),
+            plan_context("s1", dir.to_path_buf()),
+            writer.clone(),
+            load,
+            SessionOptions::default(),
+            replies_with_the_prompt,
+        )
+        .await
+        .unwrap();
+        agent
+    }
+
+    #[tokio::test]
+    async fn plan_session_warns_only_until_it_has_a_draft_even_after_resume() {
+        let (dir, writer) = temp_store("plan-follow-up");
+        let missing =
+            AgentEvent::Error("O agente não devolveu um plano no formato esperado.".into());
+        let plan = format!("```argon-plan-{NONCE}\n## Plano\n```");
+
+        let agent = launch_replying(&dir, &writer, None).await;
+        let first = reply_turn(&agent, &writer, "Ainda lendo.").await;
+        let second = reply_turn(&agent, &writer, &plan).await;
+        let third = reply_turn(&agent, &writer, "Respondido sem plano novo.").await;
+        agent.shutdown().await;
+
+        assert_eq!(first.last(), Some(&missing));
+        assert!(
+            matches!(second.last(), Some(AgentEvent::PlanDraft { markdown, .. }) if markdown == "## Plano")
+        );
+        assert!(
+            matches!(third.last(), Some(AgentEvent::TurnEnded { .. })),
+            "{third:?}"
+        );
+
+        let resumed = launch_replying(&dir, &writer, Some("agent".into())).await;
+        let after_resume = reply_turn(&resumed, &writer, "Outra pergunta respondida.").await;
+        resumed.shutdown().await;
+
+        assert!(
+            matches!(after_resume.last(), Some(AgentEvent::TurnEnded { .. })),
+            "{after_resume:?}"
+        );
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn plan_sessions_run_supervised_whatever_mode_was_configured() {
+        for mode in [PermissionMode::AcceptEdits, PermissionMode::FullAccess] {
+            let (dir, writer) = temp_store(&format!("plan-mode-{}", mode.as_str()));
+            let configured = SessionContext {
+                permission_mode: mode,
+                ..plan_context("s1", dir.clone())
+            };
+            let (_, started) = launch(
+                &stream_spec(),
+                configured.clone(),
+                writer.clone(),
+                None,
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            writer.flush().await;
+            let row = Store::open(&dir.join("argon.db"))
+                .unwrap()
+                .session("s1")
+                .unwrap()
+                .unwrap();
+            let started_mode = started.shared.subscribe().0.permission_mode;
+            started.shutdown().await;
+
+            let (_, resumed) = launch(
+                &stream_spec(),
+                configured,
+                writer.clone(),
+                Some("agent".into()),
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            let resumed_mode = resumed.shared.subscribe().0.permission_mode;
+            resumed.shutdown().await;
+
+            assert_eq!(started_mode, PermissionMode::Supervised, "{mode:?}");
+            assert_eq!(row.permission_mode, "supervised", "{mode:?}");
+            assert_eq!(resumed_mode, PermissionMode::Supervised, "{mode:?}");
+            drop(writer);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_sessions_refuse_to_leave_supervised() {
+        let (dir, writer) = temp_store("plan-refuse");
+        let agent = launch_replying(&dir, &writer, None).await;
+
+        for mode in [PermissionMode::AcceptEdits, PermissionMode::FullAccess] {
+            let refused = agent.set_permission_mode(mode).await;
+            assert!(
+                matches!(&refused, Err(SessionError::SetPermissionMode { mode: shown, .. })
+                    if shown == mode.as_str()),
+                "{mode:?}: {refused:?}"
+            );
+        }
+        assert_eq!(
+            agent.shared.subscribe().0.permission_mode,
+            PermissionMode::Supervised
+        );
+        agent.shutdown().await;
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn review_sessions_keep_the_configured_mode() {
+        let (dir, writer) = temp_store("review-mode");
+        let configured = SessionContext {
+            permission_mode: PermissionMode::AcceptEdits,
+            ..context("s1", dir.clone())
+        };
+        let (_, agent) = launch(
+            &stream_spec(),
+            configured,
+            writer.clone(),
+            None,
+            SessionOptions::default(),
+            replies_with_the_prompt,
+        )
+        .await
+        .unwrap();
+        let mode = agent.shared.subscribe().0.permission_mode;
+        agent.shutdown().await;
+
+        assert_eq!(mode, PermissionMode::AcceptEdits);
         drop(writer);
         let _ = std::fs::remove_dir_all(&dir);
     }

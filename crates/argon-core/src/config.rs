@@ -152,6 +152,7 @@ fn is_false(value: &bool) -> bool {
 #[serde(default)]
 pub struct ReviewCfg {
     pub default_template: String,
+    pub default_plan_template: String,
     pub max_diff_chars: usize,
     pub use_worktree: bool,
     pub include_previous_reviews: bool,
@@ -162,6 +163,7 @@ impl Default for ReviewCfg {
     fn default() -> Self {
         Self {
             default_template: "review-padrao".into(),
+            default_plan_template: "plan-padrao".into(),
             max_diff_chars: 0,
             use_worktree: true,
             include_previous_reviews: true,
@@ -329,6 +331,7 @@ mod tests {
             agents,
             review: ReviewCfg {
                 default_template: "seguranca".into(),
+                default_plan_template: "meu-plano".into(),
                 max_diff_chars: 50_000,
                 use_worktree: false,
                 include_previous_reviews: false,
@@ -354,6 +357,7 @@ mod tests {
         assert!(!config.orgs.initialized);
         assert!(config.agents.is_empty());
         assert_eq!(config.review.default_template, "review-padrao");
+        assert_eq!(config.review.default_plan_template, "plan-padrao");
         assert_eq!(config.review.max_diff_chars, 0);
         assert!(config.review.use_worktree);
         assert!(config.review.include_previous_reviews);
@@ -414,6 +418,18 @@ mod tests {
             ..Config::default()
         };
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn review_section_without_plan_template_keeps_the_default_plan_template() {
+        let text = "[review]\ndefault_template = \"seguranca\"\nmax_diff_chars = 1000\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(parsed.review.default_template, "seguranca");
+        assert_eq!(parsed.review.default_plan_template, "plan-padrao");
+        let text = "[review]\ndefault_plan_template = \"meu-plano\"\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(parsed.review.default_plan_template, "meu-plano");
+        assert_eq!(parsed.review.default_template, "review-padrao");
     }
 
     #[test]

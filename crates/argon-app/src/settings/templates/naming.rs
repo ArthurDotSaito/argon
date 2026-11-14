@@ -1,3 +1,5 @@
+use argon_core::TemplateKind;
+
 const MAX_NAME_CHARS: usize = 80;
 const MAX_ID_CHARS: usize = 48;
 const FALLBACK_ID: &str = "template";
@@ -6,9 +8,9 @@ const RESERVED_IDS: [&str; 22] = [
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-pub const BUILT_IN_IDS: [&str; 3] = ["review-padrao", "seguranca", "performance"];
+pub const BUILT_IN_IDS: [&str; 4] = ["review-padrao", "seguranca", "performance", "plan-padrao"];
 
-pub const VARIABLES: [&str; 19] = [
+const REVIEW_VARIABLES: [&str; 19] = [
     "pr.title",
     "pr.number",
     "pr.url",
@@ -29,6 +31,28 @@ pub const VARIABLES: [&str; 19] = [
     "ci_failures",
     "nonce",
 ];
+
+const PLAN_VARIABLES: [&str; 12] = [
+    "issue.title",
+    "issue.number",
+    "issue.url",
+    "issue.body",
+    "issue.repo",
+    "issue.labels",
+    "issue.assignees",
+    "issue.milestone",
+    "issue.comments",
+    "base",
+    "base_sha",
+    "nonce",
+];
+
+pub fn variables(kind: TemplateKind) -> &'static [&'static str] {
+    match kind {
+        TemplateKind::Review => &REVIEW_VARIABLES,
+        TemplateKind::Plan => &PLAN_VARIABLES,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameError {
@@ -170,6 +194,7 @@ mod tests {
     #[test]
     fn built_ins_are_known() {
         assert!(BUILT_IN_IDS.iter().all(|id| is_built_in(id)));
+        assert!(is_built_in("plan-padrao"));
         assert!(!is_built_in("meu-template"));
     }
 
@@ -177,6 +202,15 @@ mod tests {
     fn variable_token_wraps_in_double_braces() {
         assert_eq!(variable_token("pr.title"), "{{pr.title}}");
         assert_eq!(variable_token("nonce"), "{{nonce}}");
-        assert!(VARIABLES.contains(&"nonce"));
+    }
+
+    #[test]
+    fn variable_chips_follow_the_template_kind() {
+        let review = variables(TemplateKind::Review);
+        let plan = variables(TemplateKind::Plan);
+        assert!(review.contains(&"pr.title") && !review.contains(&"issue.title"));
+        assert!(plan.contains(&"issue.title") && !plan.contains(&"pr.title"));
+        assert!(plan.contains(&"issue.comments") && !plan.contains(&"diff"));
+        assert!(review.contains(&"nonce") && plan.contains(&"nonce"));
     }
 }

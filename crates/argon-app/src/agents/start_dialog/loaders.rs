@@ -3,9 +3,12 @@ use std::time::Instant;
 
 use argon_agents::detect_all;
 use argon_core::{ensure_default_templates, scan_templates};
+use argon_github::IssueDetail;
 use gpui_kit::{Context, Window};
 
-use super::{Load, ReviewTarget, StartDialog, app_services};
+use super::{
+    Gathering, Load, PlanTarget, ReviewTarget, StartDialog, Subject, Target, app_services,
+};
 use crate::agents::context::{gather, gather_ci};
 use crate::agents::detection::AgentOption;
 use crate::agents::labels;
@@ -94,7 +97,45 @@ impl StartDialog {
         }));
     }
 
-    pub(super) fn load_context(&mut self, target: ReviewTarget, cx: &mut Context<Self>) {
+    pub(super) fn load_context(&mut self, target: Target, cx: &mut Context<Self>) {
+        match target {
+            Target::Review(target) => self.load_review_context(target, cx),
+            Target::Plan(target) => self.load_plan_context(target, cx),
+        }
+    }
+
+    fn load_plan_context(&mut self, target: PlanTarget, cx: &mut Context<Self>) {
+        if let Some(detail) = target.detail {
+            self.set_plan_detail(detail, cx);
+            return;
+        }
+        let Some(services) = app_services(cx) else {
+            self.context = Load::Failed(labels::SERVICES_UNAVAILABLE.into());
+            return;
+        };
+        let id = target.issue.id.clone();
+        let task = services.spawn_github(cx, target.issue.host.clone(), move |client| async move {
+            client.issue_detail(&id).await
+        });
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            _ = this.update(cx, |this, cx| match result {
+                Ok(detail) => this.set_plan_detail(detail, cx),
+                Err(error) => {
+                    this.context = Load::Failed(labels::context_failed(&error.to_string()).into());
+                    this.rerender(cx);
+                }
+            });
+        }));
+    }
+
+    fn set_plan_detail(&mut self, detail: IssueDetail, cx: &mut Context<Self>) {
+        self.subject = Subject::Issue(detail.issue.clone());
+        self.context = Load::Ready(Gathering::Plan(Arc::new(detail)));
+        self.rerender(cx);
+    }
+
+    fn load_review_context(&mut self, target: ReviewTarget, cx: &mut Context<Self>) {
         let Some(services) = app_services(cx) else {
             self.context = Load::Failed(labels::SERVICES_UNAVAILABLE.into());
             return;
@@ -105,8 +146,8 @@ impl StartDialog {
             _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(gathered) => {
-                        this.pr = gathered.detail.pr.clone();
-                        this.context = Load::Ready(Arc::new(gathered));
+                        this.subject = Subject::Pr(gathered.detail.pr.clone());
+                        this.context = Load::Ready(Gathering::Review(Arc::new(gathered)));
                         if this.include_ci {
                             this.load_ci(cx);
                         }
@@ -122,7 +163,9 @@ impl StartDialog {
     }
 
     pub(super) fn load_ci(&mut self, cx: &mut Context<Self>) {
-        let (Some(services), Some(gathered)) = (app_services(cx), self.context.ready()) else {
+        let (Some(services), Some(Gathering::Review(gathered))) =
+            (app_services(cx), self.context.ready())
+        else {
             return;
         };
         if self.ci.is_some() {

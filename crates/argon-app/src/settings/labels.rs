@@ -22,7 +22,8 @@ pub const AUTHENTICATED: &str = "autenticado — aguardando o próximo sync";
 pub const CHECKING: &str = "verificando…";
 pub const RECHECK: &str = "Verificar de novo";
 
-pub const ORGS_HINT: &str = "Só PRs das orgs marcadas entram na inbox. O sync roda ao salvar.";
+pub const ORGS_HINT: &str =
+    "Só PRs e issues das orgs marcadas entram na inbox. O sync roda ao salvar.";
 pub const NO_ORGS: &str = "Nenhuma org conhecida ainda — rode um sync com uma conta conectada.";
 pub const ADMIN: &str = "admin";
 pub const SAVE_AND_SYNC: &str = "Salvar e sincronizar";
@@ -64,8 +65,11 @@ pub const NAME: &str = "Nome";
 pub const VARIABLES: &str = "Variáveis";
 pub const NO_NONCE: &str =
     "Este template não usa {{nonce}} — os achados do agente não serão lidos.";
+pub const NO_NONCE_PLAN: &str =
+    "Este template não usa {{nonce}} — o plano do agente não será lido.";
 pub const PREVIEW: &str = "Preview";
 pub const PREVIEW_SAMPLE: &str = "Contexto de exemplo";
+pub const PREVIEW_SAMPLE_ISSUE: &str = "Issue de exemplo";
 pub const PREVIEW_LOADING: &str = "montando contexto do PR…";
 pub const NO_TEMPLATE_SELECTED: &str = "Selecione um template.";
 pub const LOADING_TEMPLATES: &str = "carregando templates…";
@@ -81,7 +85,7 @@ pub const NEW_TEMPLATE_BODY: &str =
     "Revise o PR {{ pr.title }} (#{{ pr.number }}) em {{ repo }}.\n";
 
 pub const NOTIFICATIONS_HINT: &str = "Toasts do Windows. Valem a partir do próximo evento.";
-pub const NOTIFY_NEEDS_YOU: &str = "PR entrou em Needs you";
+pub const NOTIFY_NEEDS_YOU: &str = "PR ou issue entrou em Needs you";
 pub const NOTIFY_AGENTS: &str = "Agente pediu permissão ou terminou";
 
 pub const APPEARANCE_HINT: &str = "Aplica na hora, sem reiniciar.";

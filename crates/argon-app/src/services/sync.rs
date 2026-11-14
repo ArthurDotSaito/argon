@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use argon_core::DEFAULT_HOST;
+use argon_core::{DEFAULT_HOST, Involvement, Issue, SubjectKind, is_mention_candidate};
 use argon_github::{
-    Account, GithubClient, GithubError, OrgFetch, Viewer, discover_accounts, token_for,
+    Account, Fetched, GithubClient, GithubError, OrgFetch, Viewer, discover_accounts, token_for,
 };
 use argon_store::Store;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::runtime::{Handle, Runtime};
@@ -23,6 +23,7 @@ const RUNTIME_THREAD_NAME: &str = "argon-tokio";
 const RUNTIME_WORKERS: usize = 2;
 const LOCAL_STORE_HOST: &str = "argon.db";
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
+const HYDRATION_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncEvent {
@@ -47,9 +48,34 @@ enum Step {
 
 enum AccountOutcome {
     Synced,
+    SyncedThenRateLimited(DateTime<Utc>),
     Failed,
     RateLimited(DateTime<Utc>),
     Expired,
+}
+
+enum IssueError {
+    Github(GithubError),
+    Store(String),
+}
+
+impl From<GithubError> for IssueError {
+    fn from(error: GithubError) -> Self {
+        Self::Github(error)
+    }
+}
+
+struct IssueSync {
+    orgs_with_more: Vec<String>,
+    mention_error: Option<IssueError>,
+}
+
+#[derive(Default)]
+struct MentionCheck {
+    candidates: usize,
+    found: usize,
+    retry: Vec<String>,
+    error: Option<IssueError>,
 }
 
 pub(super) struct SyncWorker {
@@ -186,7 +212,7 @@ impl SyncLoop {
             outcomes.push(match step {
                 Step::Important(kept) => {
                     let orgs = orgs_for_host(&config.orgs.tracked, &session.account.host);
-                    self.sync_orgs(session, orgs, kept, window).await
+                    self.sync_host(session, orgs, kept, window).await
                 }
                 Step::Done(outcome) => outcome,
             });
@@ -196,7 +222,12 @@ impl SyncLoop {
 
         let synced = outcomes
             .iter()
-            .filter(|outcome| matches!(outcome, AccountOutcome::Synced))
+            .filter(|outcome| {
+                matches!(
+                    outcome,
+                    AccountOutcome::Synced | AccountOutcome::SyncedThenRateLimited(_)
+                )
+            })
             .count();
         let failures = outcomes.len() - synced;
         if synced > 0 {
@@ -212,7 +243,9 @@ impl SyncLoop {
 
     fn apply_outcomes(&mut self, outcomes: &[AccountOutcome]) {
         for (session, outcome) in self.sessions.iter().zip(outcomes) {
-            if let AccountOutcome::RateLimited(reset_at) = outcome {
+            if let AccountOutcome::RateLimited(reset_at)
+            | AccountOutcome::SyncedThenRateLimited(reset_at) = outcome
+            {
                 self.blocked.insert(session.account.host.clone(), *reset_at);
             }
         }
@@ -229,11 +262,13 @@ impl SyncLoop {
             return Step::Done(AccountOutcome::Failed);
         }
         let fetched = Instant::now();
-        let prs = match session.client.fetch_important(window).await {
-            Ok(prs) => prs,
+        let Fetched {
+            items: prs, kept, ..
+        } = match session.client.fetch_important(window).await {
+            Ok(fetched) => fetched,
             Err(error) => return Step::Done(self.report(&account.host, error)),
         };
-        let kept: HashSet<String> = prs.iter().map(|pr| pr.id.0.clone()).collect();
+        let hydrated = prs.len();
         let host = account.host.clone();
         let saved = self
             .store_prs(&account.host, move |store| store.upsert_prs(&host, &prs))
@@ -245,6 +280,7 @@ impl SyncLoop {
             host = %account.host,
             login = %account.login,
             prs = kept.len(),
+            hydrated,
             elapsed_ms = elapsed_ms(fetched),
             "important pull requests synced"
         );
@@ -252,49 +288,332 @@ impl SyncLoop {
         Step::Important(kept)
     }
 
-    async fn sync_orgs(
+    async fn sync_host(
         &self,
         session: &Session,
         orgs: Vec<String>,
-        mut kept: HashSet<String>,
+        kept: HashSet<String>,
         window: i64,
     ) -> AccountOutcome {
-        let account = &session.account;
-        let pages = self.worker.shared.org_depths(&account.host, orgs);
-        let fetched = Instant::now();
-        let OrgFetch {
-            prs,
-            orgs_with_more,
-        } = match session.client.fetch_orgs(&pages, &kept, window).await {
-            Ok(fetch) => fetch,
-            Err(error) => return self.report(&account.host, error),
+        let host = &session.account.host;
+        let pages = self.worker.shared.org_depths(host, orgs);
+        let outdated = self.cache_outdated(host).await;
+        let pr_more = match self
+            .sync_orgs(session, &pages, kept, window, outdated)
+            .await
+        {
+            Ok(orgs_with_more) => orgs_with_more,
+            Err(outcome) => return outcome,
         };
+        let (issue_more, issue_error, mention_error) =
+            match self.sync_issues(session, &pages, window, outdated).await {
+                Ok(synced) => {
+                    if outdated {
+                        self.record_hydration_version(host).await;
+                    }
+                    (synced.orgs_with_more, None, synced.mention_error)
+                }
+                Err(error) => (Vec::new(), Some(error), None),
+            };
         self.worker
             .shared
-            .set_orgs_with_more(&account.host, &orgs_with_more);
-        kept.extend(prs.iter().map(|pr| pr.id.0.clone()));
-        let org_prs = prs.len();
+            .set_orgs_with_more(host, &combine_orgs_with_more(&pr_more, &issue_more));
+        match (issue_error, mention_error) {
+            (Some(error), _) => self.report_issues(host, error),
+            (None, Some(error)) => report_mentions(host, error),
+            (None, None) => AccountOutcome::Synced,
+        }
+    }
+
+    async fn sync_orgs(
+        &self,
+        session: &Session,
+        pages: &[(String, usize)],
+        mut kept: HashSet<String>,
+        window: i64,
+        hydrate_all: bool,
+    ) -> Result<Vec<String>, AccountOutcome> {
+        let account = &session.account;
+        let fetched = Instant::now();
+        let stored = self
+            .stored_updated_at(&account.host, SubjectKind::Pr, hydrate_all)
+            .await;
+        let OrgFetch {
+            fetched:
+                Fetched {
+                    items: prs,
+                    kept: org_kept,
+                    unchanged,
+                },
+            orgs_with_more,
+        } = match session
+            .client
+            .fetch_orgs(pages, &kept, &stored, window)
+            .await
+        {
+            Ok(fetch) => fetch,
+            Err(error) => return Err(self.report(&account.host, error)),
+        };
+        kept.extend(org_kept);
+        let hydrated = prs.len();
         let total = kept.len();
         let host = account.host.clone();
         let saved = self
             .store_prs(&account.host, move |store| {
                 store.upsert_prs(&host, &prs)?;
+                store.update_involvement(&host, SubjectKind::Pr, &unchanged)?;
                 store.prune_prs(&host, &kept)
             })
             .await;
         if !saved {
-            return AccountOutcome::Failed;
+            return Err(AccountOutcome::Failed);
         }
         info!(
             host = %account.host,
             login = %account.login,
-            org_prs,
+            hydrated,
             prs = total,
             orgs_with_more = orgs_with_more.len(),
             elapsed_ms = elapsed_ms(fetched),
             "inbox synced"
         );
-        AccountOutcome::Synced
+        self.emit(SyncEvent::Partial);
+        Ok(orgs_with_more)
+    }
+
+    async fn sync_issues(
+        &self,
+        session: &Session,
+        pages: &[(String, usize)],
+        window: i64,
+        outdated: bool,
+    ) -> Result<IssueSync, IssueError> {
+        let account = &session.account;
+        let fetched = Instant::now();
+        let hydrate_all = outdated || !self.issue_baseline_done(&account.host).await;
+        let stored = self
+            .stored_updated_at(&account.host, SubjectKind::Issue, hydrate_all)
+            .await;
+        let Fetched {
+            items: mut issues,
+            mut kept,
+            mut unchanged,
+        } = session
+            .client
+            .fetch_important_issues(&stored, window)
+            .await?;
+        let OrgFetch {
+            fetched:
+                Fetched {
+                    items: org_issues,
+                    kept: org_kept,
+                    unchanged: org_unchanged,
+                },
+            orgs_with_more,
+        } = session
+            .client
+            .fetch_org_issues(pages, &kept, &stored, window)
+            .await?;
+        kept.extend(org_kept);
+        unchanged.extend(org_unchanged);
+        issues.extend(org_issues);
+        let MentionCheck {
+            candidates,
+            found: new_mentions,
+            retry,
+            error: mention_error,
+        } = self.check_mentions(session, &mut issues, window).await;
+        let hydrated = issues.len();
+        let total = kept.len();
+        let baseline = self
+            .store_issues(&account.host, issues, unchanged, kept, retry)
+            .await?;
+        info!(
+            host = %account.host,
+            login = %account.login,
+            hydrated,
+            issues = total,
+            mention_candidates = candidates,
+            new_mentions,
+            orgs_with_more = orgs_with_more.len(),
+            baseline,
+            elapsed_ms = elapsed_ms(fetched),
+            "issues synced"
+        );
+        Ok(IssueSync {
+            orgs_with_more,
+            mention_error,
+        })
+    }
+
+    async fn check_mentions(
+        &self,
+        session: &Session,
+        issues: &mut [Issue],
+        window: i64,
+    ) -> MentionCheck {
+        let account = &session.account;
+        let host = account.host.clone();
+        let loaded = flatten(
+            self.worker
+                .store
+                .call(move |store| store.last_seen_map(&host))
+                .await,
+        );
+        let last_seen = match loaded {
+            Ok(last_seen) => last_seen,
+            Err(error) => {
+                let every: Vec<String> = issues.iter().map(|issue| issue.id.0.clone()).collect();
+                self.keep_stored_mentions(&account.host, issues, &every)
+                    .await;
+                return MentionCheck {
+                    retry: every,
+                    error: Some(IssueError::Store(error)),
+                    ..MentionCheck::default()
+                };
+            }
+        };
+        let candidates: Vec<String> = issues
+            .iter()
+            .filter(|issue| {
+                let seen = last_seen.get(&issue.id.0).copied();
+                is_mention_candidate(issue, &account.login, seen)
+            })
+            .map(|issue| issue.id.0.clone())
+            .collect();
+        if candidates.is_empty() {
+            return MentionCheck::default();
+        }
+        let window_start = Utc::now() - ChronoDuration::days(window);
+        let since = mention_floors(&candidates, &last_seen, window_start);
+        match session
+            .client
+            .latest_mentions(&candidates, &account.login, &since)
+            .await
+        {
+            Ok(latest) => {
+                apply_mentions(issues, &latest);
+                MentionCheck {
+                    candidates: candidates.len(),
+                    found: latest.len(),
+                    ..MentionCheck::default()
+                }
+            }
+            Err(error) => {
+                self.keep_stored_mentions(&account.host, issues, &candidates)
+                    .await;
+                MentionCheck {
+                    candidates: candidates.len(),
+                    retry: candidates,
+                    error: Some(error.into()),
+                    ..MentionCheck::default()
+                }
+            }
+        }
+    }
+
+    async fn keep_stored_mentions(&self, host: &str, issues: &mut [Issue], ids: &[String]) {
+        let owned = host.to_string();
+        let stored = self
+            .worker
+            .store
+            .call(move |store| store.stored_last_mentions(&owned))
+            .await;
+        match flatten(stored) {
+            Ok(mut stored) => {
+                stored.retain(|id, _| ids.contains(id));
+                apply_mentions(issues, &stored);
+            }
+            Err(error) => warn!(host, %error, "failed to read stored mention times"),
+        }
+    }
+
+    async fn store_issues(
+        &self,
+        host: &str,
+        issues: Vec<Issue>,
+        unchanged: Vec<(String, Involvement)>,
+        kept: HashSet<String>,
+        retry: Vec<String>,
+    ) -> Result<bool, IssueError> {
+        let host = host.to_string();
+        let stored = self
+            .worker
+            .store
+            .call(move |store| -> argon_store::Result<bool> {
+                let baseline = !store.issue_baseline_done(&host)?;
+                store.upsert_issues(&host, &issues)?;
+                store.update_involvement(&host, SubjectKind::Issue, &unchanged)?;
+                store.mark_stale(&host, SubjectKind::Issue, &retry)?;
+                store.prune_issues(&host, &kept)?;
+                if baseline {
+                    let seen: Vec<(String, DateTime<Utc>)> = issues
+                        .iter()
+                        .map(|issue| (issue.id.0.clone(), issue.updated_at))
+                        .collect();
+                    store.mark_seen_all(&host, &seen)?;
+                    store.mark_issue_baseline_done(&host, Utc::now())?;
+                }
+                Ok(baseline)
+            })
+            .await;
+        flatten(stored).map_err(IssueError::Store)
+    }
+
+    async fn cache_outdated(&self, host: &str) -> bool {
+        let owned = host.to_string();
+        let stored = self
+            .worker
+            .store
+            .call(move |store| store.hydration_version(&owned))
+            .await;
+        hydration_outdated(flatten(stored).unwrap_or_else(|error| {
+            warn!(host, %error, "failed to read hydration version");
+            None
+        }))
+    }
+
+    async fn record_hydration_version(&self, host: &str) {
+        let owned = host.to_string();
+        let saved = self
+            .worker
+            .store
+            .call(move |store| store.set_hydration_version(&owned, HYDRATION_VERSION))
+            .await;
+        if let Err(error) = flatten(saved) {
+            warn!(host, %error, "failed to record hydration version");
+        }
+    }
+
+    async fn issue_baseline_done(&self, host: &str) -> bool {
+        let owned = host.to_string();
+        let done = self
+            .worker
+            .store
+            .call(move |store| store.issue_baseline_done(&owned))
+            .await;
+        flatten(done).unwrap_or(false)
+    }
+
+    async fn stored_updated_at(
+        &self,
+        host: &str,
+        kind: SubjectKind,
+        hydrate_all: bool,
+    ) -> HashMap<String, DateTime<Utc>> {
+        if hydrate_all {
+            return HashMap::new();
+        }
+        let owned = host.to_string();
+        let loaded = self
+            .worker
+            .store
+            .call(move |store| store.updated_at_map(&owned, kind))
+            .await;
+        flatten(loaded).unwrap_or_else(|error| {
+            warn!(host, %error, "failed to read stored update times, hydrating everything");
+            HashMap::new()
+        })
     }
 
     async fn store_prs(
@@ -316,14 +635,22 @@ impl SyncLoop {
         let counted = self
             .worker
             .store
-            .call(|store| store.list_prs().map(|prs| prs.len()))
-            .await
-            .map_err(|error| error.to_string())
-            .and_then(|counted| counted.map_err(|error| error.to_string()));
-        match counted {
-            Ok(count) => {
+            .call(|store| {
+                let issues = store.list_issues().map(|issues| issues.len());
+                store.list_prs().map(|prs| (prs.len(), issues))
+            })
+            .await;
+        match flatten(counted) {
+            Ok((prs, issues)) => {
+                let issues = issues.unwrap_or_else(|error| {
+                    warn!(%error, "failed to count stored issues");
+                    0
+                });
+                let count = prs + issues;
                 info!(
                     count,
+                    prs,
+                    issues,
                     failures,
                     elapsed_ms = elapsed_ms(started),
                     "sync cycle finished"
@@ -485,6 +812,79 @@ impl SyncLoop {
             }
         }
     }
+
+    fn report_issues(&self, host: &str, error: IssueError) -> AccountOutcome {
+        let detail = match error {
+            IssueError::Github(
+                error @ (GithubError::AuthMissing { .. } | GithubError::RateLimited { .. }),
+            ) => {
+                return match self.report(host, error) {
+                    AccountOutcome::RateLimited(reset_at) => {
+                        AccountOutcome::SyncedThenRateLimited(reset_at)
+                    }
+                    outcome => outcome,
+                };
+            }
+            IssueError::Github(error) => error.to_string(),
+            IssueError::Store(error) => format!("banco local: {error}"),
+        };
+        warn!(host, error = %detail, "issue sync failed");
+        self.fail(host, format!("Falha ao sincronizar issues: {detail}"));
+        AccountOutcome::Synced
+    }
+}
+
+fn report_mentions(host: &str, error: IssueError) -> AccountOutcome {
+    match error {
+        IssueError::Github(GithubError::RateLimited { reset_at }) => {
+            warn!(host, %reset_at, "github rate limit reached while checking issue mentions");
+            AccountOutcome::SyncedThenRateLimited(reset_at)
+        }
+        IssueError::Github(error) => {
+            warn!(host, %error, "issue mention check failed");
+            AccountOutcome::Synced
+        }
+        IssueError::Store(error) => {
+            warn!(host, %error, "issue mention check failed to read the local store");
+            AccountOutcome::Synced
+        }
+    }
+}
+
+fn hydration_outdated(stored: Option<u32>) -> bool {
+    stored != Some(HYDRATION_VERSION)
+}
+
+fn mention_floors(
+    candidates: &[String],
+    last_seen: &HashMap<String, DateTime<Utc>>,
+    window_start: DateTime<Utc>,
+) -> HashMap<String, DateTime<Utc>> {
+    candidates
+        .iter()
+        .map(|id| {
+            let floor = last_seen.get(id).copied().unwrap_or(window_start);
+            (id.clone(), floor)
+        })
+        .collect()
+}
+
+fn apply_mentions(issues: &mut [Issue], mentions: &HashMap<String, DateTime<Utc>>) {
+    for issue in issues {
+        if let Some(at) = mentions.get(&issue.id.0) {
+            issue.last_mention_at = Some(*at);
+        }
+    }
+}
+
+fn combine_orgs_with_more(pr: &[String], issue: &[String]) -> Vec<String> {
+    let mut combined: Vec<String> = Vec::with_capacity(pr.len() + issue.len());
+    for org in pr.iter().chain(issue) {
+        if !combined.iter().any(|known| known.eq_ignore_ascii_case(org)) {
+            combined.push(org.clone());
+        }
+    }
+    combined
 }
 
 fn build_runtime() -> std::io::Result<Runtime> {
@@ -512,4 +912,102 @@ fn rate_limit_message(reset_at: DateTime<Utc>) -> String {
 
 fn elapsed_ms(since: Instant) -> u64 {
     u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Case = (
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+
+    fn strings(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn hydration_is_outdated_unless_the_stored_version_matches() {
+        assert!(hydration_outdated(None));
+        assert!(hydration_outdated(Some(HYDRATION_VERSION + 1)));
+        assert!(hydration_outdated(Some(0)));
+        assert!(!hydration_outdated(Some(HYDRATION_VERSION)));
+    }
+
+    #[test]
+    fn a_failed_mention_check_still_counts_as_synced() {
+        for error in [
+            IssueError::Github(GithubError::GraphQl(vec!["boom".into()])),
+            IssueError::Store("locked".into()),
+        ] {
+            assert!(matches!(
+                report_mentions("github.com", error),
+                AccountOutcome::Synced
+            ));
+        }
+    }
+
+    #[test]
+    fn a_rate_limited_mention_check_blocks_the_host_without_failing() {
+        let reset_at = DateTime::from_timestamp(9_000, 0).unwrap();
+        let error = IssueError::Github(GithubError::RateLimited { reset_at });
+        assert!(matches!(
+            report_mentions("github.com", error),
+            AccountOutcome::SyncedThenRateLimited(at) if at == reset_at
+        ));
+    }
+
+    #[test]
+    fn mention_floors_fall_back_to_the_window_start_for_unseen_issues() {
+        let window_start = DateTime::from_timestamp(1_000, 0).unwrap();
+        let seen_at = DateTime::from_timestamp(5_000, 0).unwrap();
+        let last_seen = HashMap::from([
+            ("seen".to_string(), seen_at),
+            ("not_a_candidate".to_string(), seen_at),
+        ]);
+
+        let floors = mention_floors(&strings(&["seen", "unseen"]), &last_seen, window_start);
+
+        assert_eq!(
+            floors,
+            HashMap::from([
+                ("seen".to_string(), seen_at),
+                ("unseen".to_string(), window_start),
+            ])
+        );
+    }
+
+    #[test]
+    fn combine_orgs_with_more_unites_pr_and_issue_orgs() {
+        let cases: [Case; 7] = [
+            ("both empty", &[], &[], &[]),
+            ("only pull requests", &["vela"], &[], &["vela"]),
+            ("only issues", &[], &["atlas"], &["atlas"]),
+            ("disjoint", &["vela"], &["atlas"], &["vela", "atlas"]),
+            (
+                "overlap keeps first appearance order",
+                &["vela", "nimbus"],
+                &["atlas", "nimbus"],
+                &["vela", "nimbus", "atlas"],
+            ),
+            ("same org in another case", &["Vela"], &["vela"], &["Vela"]),
+            (
+                "duplicate within one side",
+                &["vela", "vela"],
+                &["vela"],
+                &["vela"],
+            ),
+        ];
+
+        for (name, pr, issue, expected) in cases {
+            assert_eq!(
+                combine_orgs_with_more(&strings(pr), &strings(issue)),
+                strings(expected),
+                "{name}"
+            );
+        }
+    }
 }

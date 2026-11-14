@@ -1,4 +1,5 @@
 use super::*;
+use crate::prompt::TemplateKind;
 use crate::prompt::template::{load_templates, parse_template};
 use crate::prompt::test_support::TempDir;
 
@@ -11,11 +12,40 @@ fn ensure_default_templates_writes_the_embedded_templates() {
 
     let templates = load_templates(&prompts).unwrap();
     let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
-    assert_eq!(ids, ["performance", "review-padrao", "seguranca"]);
+    assert_eq!(
+        ids,
+        ["performance", "plan-padrao", "review-padrao", "seguranca"]
+    );
     assert!(
         templates
             .iter()
             .all(|t| !t.name.is_empty() && !t.body.is_empty())
+    );
+}
+
+#[test]
+fn embedded_templates_declare_their_kind() {
+    for (id, source) in DEFAULT_TEMPLATES {
+        let expected = match id {
+            "plan-padrao" => TemplateKind::Plan,
+            _ => TemplateKind::Review,
+        };
+        let template = parse_template(id, source).unwrap();
+        assert_eq!(template.kind, expected, "{id}");
+        assert_eq!(template.version, Some(expected_version(id)), "{id}");
+    }
+}
+
+#[test]
+fn plan_padrao_header_matches_the_spec() {
+    let template = parse_template("plan-padrao", embedded_source("plan-padrao")).unwrap();
+
+    assert_eq!(template.name, "Plano padrão");
+    assert!(
+        template
+            .description
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
     );
 }
 
@@ -33,6 +63,7 @@ fn ensure_default_templates_does_not_overwrite_user_edits() {
     );
     assert!(dir.path().join("review-padrao.md").is_file());
     assert!(dir.path().join("performance.md").is_file());
+    assert!(dir.path().join("plan-padrao.md").is_file());
 }
 
 #[test]
@@ -64,6 +95,7 @@ const V2_REVIEW_PADRAO: &str = include_str!("../testdata/review-padrao.v2.md");
 fn expected_version(id: &str) -> u32 {
     match id {
         "review-padrao" => 3,
+        "plan-padrao" => 1,
         _ => 2,
     }
 }

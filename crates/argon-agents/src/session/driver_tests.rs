@@ -1,4 +1,4 @@
-use argon_core::{AgentKind, PermissionMode, PrKey};
+use argon_core::{AgentKind, PermissionMode, PrKey, SessionKind};
 use argon_store::{NewAgentSession, Store};
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -15,11 +15,20 @@ fn writer() -> SessionWriter {
 }
 
 async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
-    let writer = writer();
+    shared_of(writer(), capacity, SessionKind::Review, None).await
+}
+
+async fn shared_of(
+    writer: SessionWriter,
+    capacity: usize,
+    kind: SessionKind,
+    base_sha: Option<&str>,
+) -> (Shared, SessionWriter) {
+    let subject = PrKey::new("github.com", "PR_1");
     writer
         .create_session(NewAgentSession {
             id: "s1".into(),
-            pr: PrKey::new("github.com", "PR_1"),
+            pr: subject.clone(),
             agent: AgentKind::ClaudeCode,
             model: "sonnet".into(),
             template: "review-padrao".into(),
@@ -29,23 +38,38 @@ async fn shared_with(capacity: usize) -> (Shared, SessionWriter) {
             permission_mode: "supervised".into(),
             nonce: NONCE.into(),
             allowed_files: vec!["src/lib.rs".into()],
+            kind,
+            base_sha: base_sha.map(str::to_owned),
         })
         .await
         .unwrap();
     let (events, _) = broadcast::channel(capacity);
     let shared = Shared::new(
-        SharedConfig {
-            id: "s1".into(),
-            cwd: PathBuf::from("repo"),
-            nonce: NONCE.into(),
-            allowed_files: vec!["src/lib.rs".into()],
-            writer: writer.clone(),
-            stderr: Arc::default(),
-        },
+        config(subject, writer.clone(), kind, base_sha),
         PermissionMode::Supervised,
         events,
     );
     (shared, writer)
+}
+
+fn config(
+    subject: PrKey,
+    writer: SessionWriter,
+    kind: SessionKind,
+    base_sha: Option<&str>,
+) -> SharedConfig {
+    SharedConfig {
+        id: "s1".into(),
+        subject,
+        kind,
+        base_sha: base_sha.map(str::to_owned),
+        denial_ends_turn: false,
+        cwd: PathBuf::from("repo"),
+        nonce: NONCE.into(),
+        allowed_files: vec!["src/lib.rs".into()],
+        writer,
+        stderr: Arc::default(),
+    }
 }
 
 fn chunk(text: &str) -> Value {
@@ -139,6 +163,196 @@ async fn identical_finding_keeps_its_id_on_second_turn() {
         ids.push(findings[0].id);
     }
     assert_eq!(ids[0], ids[1]);
+}
+
+struct PlanSession {
+    dir: PathBuf,
+    shared: Shared,
+    writer: SessionWriter,
+}
+
+impl PlanSession {
+    async fn start(name: &str, base_sha: Option<&str>) -> PlanSession {
+        let dir = std::env::temp_dir().join(format!("argon-driver-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let writer =
+            SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
+        let (shared, writer) = shared_of(writer, 64, SessionKind::Plan, base_sha).await;
+        shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
+        PlanSession {
+            dir,
+            shared,
+            writer,
+        }
+    }
+
+    async fn turn(&self, message: &str) -> Vec<AgentEvent> {
+        self.shared.begin_turn("planeje");
+        self.shared.emit_all(map_update(&chunk(message)));
+        self.shared.end_turn("end_turn").await;
+        let events: Vec<AgentEvent> = self
+            .writer
+            .events_since("s1", 0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect();
+        let start = events
+            .iter()
+            .rposition(|event| matches!(event, AgentEvent::UserMessage(_)))
+            .unwrap();
+        events[start..].to_vec()
+    }
+
+    fn drafts(&self) -> Vec<argon_store::PlanDraft> {
+        Store::open(&self.dir.join("argon.db"))
+            .unwrap()
+            .plans_for_session("s1")
+            .unwrap()
+    }
+
+    fn finish(self) {
+        let PlanSession {
+            dir,
+            shared,
+            writer,
+        } = self;
+        drop((shared, writer));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+fn plan_message(markdown: &str) -> String {
+    format!("Pronto.\n```argon-plan-{NONCE}\n{markdown}\n```")
+}
+
+const PLAN_MISSING: &str = "O agente não devolveu um plano no formato esperado.";
+
+#[tokio::test]
+async fn plan_turn_records_the_draft_and_then_emits_it() {
+    let session = PlanSession::start("plan-recorded", Some("abc123")).await;
+
+    let events = session.turn(&plan_message("## Passos\n\n1. Ler")).await;
+
+    let drafts = session.drafts();
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::PlanDraft {
+            draft_id: drafts[0].id,
+            markdown: "## Passos\n\n1. Ler".into()
+        })
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Findings { .. }))
+    );
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(drafts[0].host, "github.com");
+    assert_eq!(drafts[0].issue_id, "PR_1");
+    assert_eq!(drafts[0].session_id, "s1");
+    assert_eq!(drafts[0].body, "## Passos\n\n1. Ler");
+    assert_eq!(drafts[0].base_sha, "abc123");
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    session.finish();
+}
+
+#[tokio::test]
+async fn plan_turn_without_block_reports_an_error_and_records_nothing() {
+    let session = PlanSession::start("plan-missing", Some("abc123")).await;
+
+    let events = session.turn(&findings_message("t")).await;
+
+    assert_eq!(events.last(), Some(&AgentEvent::Error(PLAN_MISSING.into())));
+    assert!(session.drafts().is_empty());
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    session.finish();
+}
+
+#[tokio::test]
+async fn missing_plan_warns_only_until_the_session_has_a_draft() {
+    let session = PlanSession::start("plan-follow-up", Some("abc123")).await;
+
+    let before = session.turn("Ainda lendo o código.").await;
+    let with_plan = session.turn(&plan_message("## Plano")).await;
+    let follow_up = session.turn("Respondido sem plano novo.").await;
+
+    assert_eq!(before.last(), Some(&AgentEvent::Error(PLAN_MISSING.into())));
+    assert!(matches!(
+        with_plan.last(),
+        Some(AgentEvent::PlanDraft { markdown, .. }) if markdown == "## Plano"
+    ));
+    assert!(
+        matches!(follow_up.last(), Some(AgentEvent::TurnEnded { .. })),
+        "{follow_up:?}"
+    );
+    assert_eq!(session.drafts().len(), 1);
+    session.finish();
+}
+
+#[tokio::test]
+async fn plan_session_without_base_sha_reports_the_save_failure_and_continues() {
+    let session = PlanSession::start("plan-no-base", None).await;
+
+    let events = session.turn(&plan_message("## Plano")).await;
+
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Error(
+            "não consegui gravar o plano: a sessão de plano não tem o commit base".into()
+        ))
+    );
+    assert!(session.drafts().is_empty());
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    assert!(session.shared.try_acquire());
+    session.finish();
+}
+
+#[tokio::test]
+async fn failed_plan_save_reports_an_error_and_keeps_the_session() {
+    let (events, mut receiver) = broadcast::channel(64);
+    let shared = Shared::new(
+        config(
+            PrKey::new("github.com", "I_1"),
+            SessionWriter::stopped(),
+            SessionKind::Plan,
+            Some("abc123"),
+        ),
+        PermissionMode::Supervised,
+        events,
+    );
+    shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
+    assert!(shared.try_acquire());
+
+    shared.begin_turn("planeje");
+    shared.emit_all(map_update(&chunk(&plan_message("## Plano"))));
+    shared.end_turn("end_turn").await;
+
+    let emitted = drained(&mut receiver);
+    assert_eq!(
+        emitted.last(),
+        Some(&AgentEvent::Error(
+            "não consegui gravar o plano: o gravador de sessões parou".into()
+        ))
+    );
+    assert!(
+        !emitted
+            .iter()
+            .any(|event| matches!(event, AgentEvent::PlanDraft { .. }))
+    );
+    assert_eq!(shared.subscribe().0.status, SessionStatus::Completed);
+    assert!(shared.try_acquire());
 }
 
 #[tokio::test]
@@ -261,6 +475,65 @@ async fn local_read_is_allowed_without_asking() {
         [PermissionAnswer::Selected("allow_once".into())]
     );
     assert!(shared.subscribe().0.pending_permissions.is_empty());
+}
+
+#[tokio::test]
+async fn plan_session_answers_edits_with_the_reject_option_and_keeps_commands_as_cards() {
+    let (shared, _writer) = shared_of(writer(), 64, SessionKind::Plan, Some("abc")).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (edit_reply, edit_answers) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), edit_reply);
+    let (exec_reply, exec_answers) = recording_reply();
+    shared.on_permission(ask("execute", &[]), exec_reply);
+
+    assert_eq!(
+        *edit_answers.lock().unwrap(),
+        [PermissionAnswer::Selected("reject_once".into())]
+    );
+    assert!(exec_answers.lock().unwrap().is_empty());
+    let (snapshot, _) = shared.subscribe();
+    assert_eq!(snapshot.pending_permissions.len(), 1);
+    assert_eq!(snapshot.pending_permissions[0].kind, "execute");
+}
+
+async fn denial_notice(denial_ends_turn: bool) -> Vec<AgentEvent> {
+    let writer = writer();
+    let shared = Shared::new(
+        SharedConfig {
+            denial_ends_turn,
+            ..config(
+                PrKey::new("github.com", "PR_1"),
+                writer,
+                SessionKind::Plan,
+                Some("abc"),
+            )
+        },
+        PermissionMode::Supervised,
+        broadcast::channel(64).0,
+    );
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (_, mut events) = shared.subscribe();
+    let (reply, _) = recording_reply();
+    shared.on_permission(ask("delete", &["repo/src/lib.rs"]), reply);
+    drained(&mut events)
+}
+
+#[tokio::test]
+async fn plan_denial_is_announced_in_the_session() {
+    assert_eq!(
+        denial_notice(false).await,
+        [AgentEvent::Error(
+            "Edição negada: Agent Plan é somente leitura.".into()
+        )]
+    );
+    assert_eq!(
+        denial_notice(true).await,
+        [AgentEvent::Error(
+            "Edição negada: Agent Plan é somente leitura. Mande outra mensagem para continuar."
+                .into()
+        )]
+    );
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use argon_core::PrId;
+use argon_core::{IssueStateReason, PrId};
 use reqwest::Method;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
@@ -10,6 +10,8 @@ use crate::rest::repo_path;
 
 const ADD_COMMENT_QUERY: &str = include_str!("../queries/add_comment.graphql");
 const MERGE_QUERY: &str = include_str!("../queries/merge_pull_request.graphql");
+const CLOSE_ISSUE_QUERY: &str = include_str!("../queries/close_issue.graphql");
+const ADD_ASSIGNEES_QUERY: &str = include_str!("../queries/add_assignees.graphql");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MergeMethod {
@@ -28,10 +30,33 @@ impl MergeMethod {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentRef {
+    pub id: String,
+    pub url: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AddCommentData {
-    add_comment: Option<IgnoredAny>,
+    add_comment: Option<AddCommentPayload>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddCommentPayload {
+    comment_edge: Option<CommentEdge>,
+}
+
+#[derive(Deserialize)]
+struct CommentEdge {
+    node: Option<CommentNode>,
+}
+
+#[derive(Deserialize)]
+struct CommentNode {
+    id: String,
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -40,14 +65,58 @@ struct MergeData {
     merge_pull_request: Option<IgnoredAny>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseIssueData {
+    close_issue: Option<IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddAssigneesData {
+    add_assignees_to_assignable: Option<IgnoredAny>,
+}
+
 pub(crate) fn require_payload(payload: Option<IgnoredAny>, mutation: &str) -> Result<()> {
     payload
         .map(|_| ())
         .ok_or_else(|| GithubError::GraphQl(vec![format!("{mutation} returned no payload")]))
 }
 
-fn add_comment_variables(pr: &PrId, body: &str) -> Value {
-    json!({ "input": { "subjectId": pr.0, "body": body } })
+fn comment_ref(payload: Option<AddCommentPayload>) -> Result<CommentRef> {
+    let payload = payload
+        .ok_or_else(|| GithubError::GraphQl(vec!["addComment returned no payload".to_string()]))?;
+    let node = payload
+        .comment_edge
+        .and_then(|edge| edge.node)
+        .ok_or_else(|| GithubError::Unconfirmed("addComment".to_string()))?;
+    Ok(CommentRef {
+        id: node.id,
+        url: node.url,
+    })
+}
+
+fn add_comment_variables(subject: &PrId, body: &str) -> Value {
+    json!({ "input": { "subjectId": subject.0, "body": body } })
+}
+
+fn close_issue_state_reason(reason: IssueStateReason) -> Result<&'static str> {
+    match reason {
+        IssueStateReason::Completed => Ok("COMPLETED"),
+        IssueStateReason::NotPlanned => Ok("NOT_PLANNED"),
+        IssueStateReason::Duplicate => Ok("DUPLICATE"),
+        IssueStateReason::Reopened => Err(GithubError::GraphQl(vec![
+            "an issue cannot be closed with the reopened reason".to_string(),
+        ])),
+    }
+}
+
+fn close_issue_variables(issue: &PrId, reason: IssueStateReason) -> Result<Value> {
+    Ok(json!({ "input": { "issueId": issue.0, "stateReason": close_issue_state_reason(reason)? } }))
+}
+
+fn add_assignees_variables(issue: &PrId, assignee_ids: &[String]) -> Value {
+    json!({ "input": { "assignableId": issue.0, "assigneeIds": assignee_ids } })
 }
 
 fn merge_variables(pr: &PrId, method: MergeMethod, expected_head_oid: &str) -> Value {
@@ -62,15 +131,34 @@ fn rerun_failed_path(repo: &str, run_id: u64) -> Result<String> {
 }
 
 impl GithubClient {
-    pub async fn add_comment(&self, pr: &PrId, body: &str) -> Result<()> {
+    pub async fn add_comment(&self, subject: &PrId, body: &str) -> Result<CommentRef> {
         let data: AddCommentData = self
             .graphql(
                 "add_comment",
                 ADD_COMMENT_QUERY,
-                add_comment_variables(pr, body),
+                add_comment_variables(subject, body),
             )
             .await?;
-        require_payload(data.add_comment, "addComment")
+        comment_ref(data.add_comment)
+    }
+
+    pub async fn close_issue(&self, id: &PrId, reason: IssueStateReason) -> Result<()> {
+        let variables = close_issue_variables(id, reason)?;
+        let data: CloseIssueData = self
+            .graphql("close_issue", CLOSE_ISSUE_QUERY, variables)
+            .await?;
+        require_payload(data.close_issue, "closeIssue")
+    }
+
+    pub async fn add_assignees(&self, id: &PrId, assignee_ids: &[String]) -> Result<()> {
+        let data: AddAssigneesData = self
+            .graphql(
+                "add_assignees",
+                ADD_ASSIGNEES_QUERY,
+                add_assignees_variables(id, assignee_ids),
+            )
+            .await?;
+        require_payload(data.add_assignees_to_assignable, "addAssigneesToAssignable")
     }
 
     pub async fn merge(
@@ -143,6 +231,99 @@ mod tests {
         assert!(ADD_COMMENT_QUERY.contains("$input: AddCommentInput!"));
         assert!(MERGE_QUERY.contains("mergePullRequest(input: $input)"));
         assert!(MERGE_QUERY.contains("$input: MergePullRequestInput!"));
+        assert!(CLOSE_ISSUE_QUERY.contains("closeIssue(input: $input)"));
+        assert!(CLOSE_ISSUE_QUERY.contains("$input: CloseIssueInput!"));
+        assert!(ADD_ASSIGNEES_QUERY.contains("addAssigneesToAssignable(input: $input)"));
+        assert!(ADD_ASSIGNEES_QUERY.contains("$input: AddAssigneesToAssignableInput!"));
+    }
+
+    #[test]
+    fn close_issue_variables_map_every_closing_reason() {
+        let issue = PrId("I_kwDOOrbita0101".to_string());
+        for (reason, expected) in [
+            (IssueStateReason::Completed, "COMPLETED"),
+            (IssueStateReason::NotPlanned, "NOT_PLANNED"),
+            (IssueStateReason::Duplicate, "DUPLICATE"),
+        ] {
+            assert_eq!(
+                close_issue_variables(&issue, reason).unwrap(),
+                json!({ "input": { "issueId": "I_kwDOOrbita0101", "stateReason": expected } })
+            );
+        }
+    }
+
+    #[test]
+    fn close_issue_rejects_the_reopened_reason() {
+        let issue = PrId("I_kwDOOrbita0101".to_string());
+        assert!(matches!(
+            close_issue_variables(&issue, IssueStateReason::Reopened),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn add_assignees_variables_carry_the_issue_and_the_users() {
+        let issue = PrId("I_kwDOOrbita0101".to_string());
+        let assignees = vec!["U_kgDOOrbita01".to_string(), "U_kgDOOrbita02".to_string()];
+        assert_eq!(
+            add_assignees_variables(&issue, &assignees),
+            json!({ "input": {
+                "assignableId": "I_kwDOOrbita0101",
+                "assigneeIds": ["U_kgDOOrbita01", "U_kgDOOrbita02"]
+            } })
+        );
+    }
+
+    fn closed_issue(json: &str) -> Result<()> {
+        let envelope: Envelope<CloseIssueData> = serde_json::from_str(json).unwrap();
+        require_payload(
+            envelope.into_data(Utc::now())?.data.close_issue,
+            "closeIssue",
+        )
+    }
+
+    fn added_assignees(json: &str) -> Result<()> {
+        let envelope: Envelope<AddAssigneesData> = serde_json::from_str(json).unwrap();
+        require_payload(
+            envelope
+                .into_data(Utc::now())?
+                .data
+                .add_assignees_to_assignable,
+            "addAssigneesToAssignable",
+        )
+    }
+
+    #[test]
+    fn close_issue_without_payload_is_an_error() {
+        assert!(matches!(
+            closed_issue(r#"{ "data": { "closeIssue": null } }"#),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn close_issue_with_payload_is_ok() {
+        assert!(
+            closed_issue(r#"{ "data": { "closeIssue": { "clientMutationId": null } } }"#).is_ok()
+        );
+    }
+
+    #[test]
+    fn add_assignees_without_payload_is_an_error() {
+        assert!(matches!(
+            added_assignees(r#"{ "data": { "addAssigneesToAssignable": null } }"#),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn add_assignees_with_payload_is_ok() {
+        assert!(
+            added_assignees(
+                r#"{ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }"#
+            )
+            .is_ok()
+        );
     }
 
     fn merge_outcome(json: &str) -> Result<()> {
@@ -184,12 +365,53 @@ mod tests {
         assert!(merge_outcome(json).is_ok());
     }
 
+    fn added_comment(json: &str) -> Result<CommentRef> {
+        let envelope: Envelope<AddCommentData> = serde_json::from_str(json).unwrap();
+        comment_ref(envelope.into_data(Utc::now())?.data.add_comment)
+    }
+
     #[test]
     fn add_comment_null_payload_is_an_error() {
-        let envelope: Envelope<AddCommentData> =
-            serde_json::from_str(r#"{ "data": { "addComment": null } }"#).unwrap();
-        let data = envelope.into_data(Utc::now()).unwrap().data;
-        assert!(require_payload(data.add_comment, "addComment").is_err());
+        assert!(matches!(
+            added_comment(r#"{ "data": { "addComment": null } }"#),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn add_comment_payload_without_comment_edge_is_unconfirmed() {
+        for json in [
+            r#"{ "data": { "addComment": { "commentEdge": null } } }"#,
+            r#"{ "data": { "addComment": { "commentEdge": { "node": null } } } }"#,
+        ] {
+            assert!(
+                matches!(added_comment(json), Err(GithubError::Unconfirmed(_))),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn add_comment_reads_the_created_comment_from_the_edge() {
+        let json = r#"{ "data": { "addComment": { "commentEdge": { "node": {
+            "id": "IC_kwDOOrbita77",
+            "url": "https://github.com/orbita-health/atlas/issues/101#issuecomment-77"
+        } } } } }"#;
+        assert_eq!(
+            added_comment(json).unwrap(),
+            CommentRef {
+                id: "IC_kwDOOrbita77".to_string(),
+                url: "https://github.com/orbita-health/atlas/issues/101#issuecomment-77"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn add_comment_document_asks_for_the_comment_edge_node() {
+        assert!(ADD_COMMENT_QUERY.contains("commentEdge"));
+        assert!(ADD_COMMENT_QUERY.contains("node {"));
+        assert!(ADD_COMMENT_QUERY.contains("url"));
     }
 
     #[test]

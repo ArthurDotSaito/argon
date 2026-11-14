@@ -5,11 +5,12 @@ use gpui_kit::{AppContext as _, Entity};
 use crate::agents::{AgentsView, SessionTab};
 use crate::center::{CenterContent, CenterContentFactory, CenterItem};
 use crate::inbox::{InboxModel, InboxPane};
+use crate::issue::IssueView;
 use crate::pr::PrView;
 use crate::settings::{self, SettingsView};
 
 pub fn content_factory(inbox: Entity<InboxModel>) -> CenterContentFactory {
-    Rc::new(move |item, window, cx| match item {
+    Rc::new(move |item, origin, window, cx| match item {
         CenterItem::Inbox => {
             let pane = cx.new(|cx| InboxPane::new(inbox.clone(), window, cx));
             CenterContent::new(pane, cx)
@@ -17,6 +18,10 @@ pub fn content_factory(inbox: Entity<InboxModel>) -> CenterContentFactory {
         CenterItem::Pr(key) => {
             let view = cx.new(|cx| PrView::new(key.clone(), inbox.clone(), window, cx));
             settings::note_pr_opened(key.clone(), &view, cx);
+            CenterContent::new(view, cx)
+        }
+        CenterItem::Issue(key) => {
+            let view = cx.new(|cx| IssueView::new(key.clone(), inbox.clone(), origin, window, cx));
             CenterContent::new(view, cx)
         }
         CenterItem::Agents => {

@@ -13,6 +13,8 @@ pub(crate) fn new_session(id: &str) -> NewAgentSession {
         permission_mode: "supervised".to_owned(),
         nonce: "abcd".to_owned(),
         allowed_files: vec!["src/a.rs".to_owned(), "README.md".to_owned()],
+        kind: argon_core::SessionKind::Review,
+        base_sha: None,
     }
 }
 

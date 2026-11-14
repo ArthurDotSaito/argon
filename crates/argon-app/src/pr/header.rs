@@ -1,4 +1,4 @@
-use argon_core::{ChecksState, PrState, PullRequest, ReviewState};
+use argon_core::{ChecksState, IssueRef, PrState, PullRequest, ReviewState};
 use argon_github::{Label, PrDetail};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
@@ -8,13 +8,15 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, IntoElement as _,
-    ParentElement as _, Rgba, SharedString, StatefulInteractiveElement as _, Styled as _, div,
-    hsla, px, rgb,
+    ParentElement as _, Rgba, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    div, hsla, px, rgb,
 };
 
 use super::labels;
 use super::pr_view::{MergeState, PrView};
 use super::timeline_item::review_style;
+use crate::issue::destination::{self, Destination};
+use crate::issue::{self, IssueStatus};
 use crate::{agents, ui};
 
 const META_AVATAR: f32 = 18.;
@@ -22,9 +24,16 @@ const AI_BUTTON_HEIGHT: f32 = 24.;
 const BRANCH_MAX_WIDTH: f32 = 280.;
 const LIGHT_LABEL_LUMINANCE: f32 = 0.6;
 
+pub struct ClosingLink {
+    pub issue: IssueRef,
+    pub status: Option<IssueStatus>,
+    pub target: Destination,
+}
+
 pub struct HeaderProps<'a> {
     pub pr: &'a PullRequest,
     pub detail: Option<&'a PrDetail>,
+    pub closing: Vec<ClosingLink>,
     pub can_merge: bool,
     pub can_review_with_ai: bool,
     pub merge_state: &'a MergeState,
@@ -35,6 +44,7 @@ pub struct HeaderProps<'a> {
 pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
     let theme = cx.theme();
     let pr = props.pr;
+    let merged = pr.state == PrState::Merged || matches!(props.merge_state, MergeState::Merged);
     let title = h_flex()
         .gap_2()
         .items_baseline()
@@ -78,24 +88,19 @@ pub fn header(props: HeaderProps<'_>, cx: &mut Context<PrView>) -> Div {
                 .w_full()
                 .gap_2()
                 .items_center()
-                .child(breadcrumb(pr, cx))
+                .child(breadcrumb(&pr.repo, pr.number, cx))
                 .child(div().flex_1())
                 .child(actions(&props, cx)),
         )
         .child(title)
-        .child(meta(
-            pr,
-            matches!(props.merge_state, MergeState::Merged),
-            props.now,
-            cx,
-        ))
-        .child(stats(pr, props.detail, cx))
+        .child(meta(pr, merged, props.now, cx))
+        .child(stats(pr, props.detail, merged, props.closing, cx))
         .children(status)
 }
 
-fn breadcrumb(pr: &PullRequest, cx: &App) -> Div {
+pub fn breadcrumb(full_repo: &str, number: u64, cx: &App) -> Div {
     let theme = cx.theme();
-    let (owner, repo) = pr.repo.split_once('/').unwrap_or(("", pr.repo.as_str()));
+    let (owner, repo) = full_repo.split_once('/').unwrap_or(("", full_repo));
     let separator = || {
         div()
             .text_color(theme.muted_foreground.opacity(0.6))
@@ -114,7 +119,7 @@ fn breadcrumb(pr: &PullRequest, cx: &App) -> Div {
         .child(
             div()
                 .text_color(theme.foreground)
-                .child(format!("#{}", pr.number)),
+                .child(format!("#{number}")),
         )
 }
 
@@ -203,20 +208,6 @@ fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
     } else {
         ui::state_style(pr, cx)
     };
-    let pill = h_flex()
-        .gap_1()
-        .px_2()
-        .h(px(22.))
-        .items_center()
-        .rounded_full()
-        .bg(style.color.opacity(0.16))
-        .border_1()
-        .border_color(style.color.opacity(0.5))
-        .text_xs()
-        .font_semibold()
-        .text_color(style.color)
-        .child(Icon::new(style.icon).xsmall())
-        .child(style.label);
     h_flex()
         .w_full()
         .flex_wrap()
@@ -224,7 +215,7 @@ fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
         .items_center()
         .text_sm()
         .text_color(theme.muted_foreground)
-        .child(pill)
+        .child(state_pill(style.icon, style.color, style.label))
         .child(ui::avatar(&pr.author, META_AVATAR))
         .child(
             div()
@@ -237,6 +228,23 @@ fn meta(pr: &PullRequest, merged: bool, now: DateTime<Utc>, cx: &App) -> Div {
         .child(branch("pr-copy-base", &pr.base, cx))
         .child(div().text_color(theme.muted_foreground).child("←"))
         .child(branch("pr-copy-head", &pr.head, cx))
+}
+
+pub fn state_pill(icon: IconName, color: Hsla, label: &'static str) -> Div {
+    h_flex()
+        .gap_1()
+        .px_2()
+        .h(px(22.))
+        .items_center()
+        .rounded_full()
+        .bg(color.opacity(0.16))
+        .border_1()
+        .border_color(color.opacity(0.5))
+        .text_xs()
+        .font_semibold()
+        .text_color(color)
+        .child(Icon::new(icon).xsmall())
+        .child(label)
 }
 
 fn branch(id: &'static str, name: &str, cx: &App) -> Div {
@@ -272,7 +280,56 @@ fn branch(id: &'static str, name: &str, cx: &App) -> Div {
         )
 }
 
-fn stats(pr: &PullRequest, detail: Option<&PrDetail>, cx: &App) -> Div {
+fn closing_chip(
+    ix: usize,
+    pr: &PullRequest,
+    merged: bool,
+    link: ClosingLink,
+    cx: &mut Context<PrView>,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (icon, color) = match link.status {
+        Some(status) => issue::status_style(status, cx),
+        None => (IconName::CircleDot, theme.muted_foreground),
+    };
+    let target = link.target;
+    h_flex()
+        .id(("pr-closing-issue", ix))
+        .gap_1()
+        .px_2()
+        .h(px(22.))
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(theme.border)
+        .text_xs()
+        .text_color(theme.foreground)
+        .cursor_pointer()
+        .hover(|style| style.border_color(theme.primary))
+        .tooltip(|window, cx| Tooltip::new(labels::OPEN_ISSUE).build(window, cx))
+        .child(Icon::new(icon).xsmall().text_color(color))
+        .child(labels::closing_issue(&link.issue, &pr.repo, merged))
+        .on_click(
+            cx.listener(move |_, _: &ClickEvent, window, cx| {
+                destination::open(&target, window, cx)
+            }),
+        )
+}
+
+fn stats(
+    pr: &PullRequest,
+    detail: Option<&PrDetail>,
+    merged: bool,
+    closing: Vec<ClosingLink>,
+    cx: &mut Context<PrView>,
+) -> Div {
+    let abandoned = pr.state == PrState::Closed && !merged;
+    let closing = if abandoned { Vec::new() } else { closing };
+    let chips: Vec<_> = closing
+        .into_iter()
+        .enumerate()
+        .map(|(ix, link)| closing_chip(ix, pr, merged, link, cx))
+        .collect();
     let theme = cx.theme();
     let diff = ui::diff_stat(pr.additions, pr.deletions, cx);
     let files = h_flex()
@@ -296,6 +353,7 @@ fn stats(pr: &PullRequest, detail: Option<&PrDetail>, cx: &App) -> Div {
         .child(files)
         .child(reviewers(pr, detail, cx))
         .children(labels_row)
+        .children(chips)
 }
 
 fn checks_summary(checks: Option<ChecksState>, cx: &App) -> Div {
@@ -414,6 +472,10 @@ pub fn label_chip(name: &str, color: Option<&str>, cx: &App) -> Div {
         .font_medium()
         .text_color(fg)
         .child(name.to_string())
+}
+
+pub fn label_color(color: &str) -> Option<Hsla> {
+    parse_hex(color).map(Hsla::from)
 }
 
 fn parse_hex(color: &str) -> Option<Rgba> {

@@ -11,6 +11,7 @@ mod config_watch;
 mod content;
 mod dock_items;
 mod inbox;
+mod issue;
 mod keymap;
 mod layout_store;
 mod notify;

@@ -40,7 +40,12 @@ fn decide_acp(
     known_kind: Option<&str>,
     mode: PermissionMode,
 ) -> PermissionDecision {
-    decide(&acp_ask(request, known_kind), &cwd(), mode)
+    decide(
+        &acp_ask(request, known_kind),
+        &cwd(),
+        mode,
+        SessionKind::Review,
+    )
 }
 
 fn allowed(decision: &PermissionDecision) -> bool {
@@ -554,4 +559,92 @@ fn prompt_title_never_leaves_a_space_before_the_marker() {
         prompt_title(&title, "read"),
         format!("{} …", "w".repeat(299))
     );
+}
+
+fn decide_plan(request: &Value, mode: PermissionMode) -> PermissionDecision {
+    decide(&acp_ask(request, None), &cwd(), mode, SessionKind::Plan)
+}
+
+fn denied_with(decision: &PermissionDecision, expected: &str) -> bool {
+    matches!(decision, PermissionDecision::Deny { option_id } if option_id == expected)
+}
+
+const PLAN_DENIED_KINDS: [&str; 5] = ["edit", "delete", "move", "switch_mode", "permissions"];
+
+#[test]
+fn plan_sessions_deny_write_kinds_with_the_reject_option() {
+    for mode in [
+        PermissionMode::Supervised,
+        PermissionMode::AcceptEdits,
+        PermissionMode::FullAccess,
+    ] {
+        for kind in PLAN_DENIED_KINDS {
+            for paths in [
+                vec![inside("src/a.rs")],
+                vec![outside().to_string()],
+                vec![],
+            ] {
+                let decision = decide_plan(&request(Some(kind), &paths, json!({})), mode);
+                assert!(
+                    denied_with(&decision, "reject-once"),
+                    "{mode:?} {kind} {paths:?}: {decision:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn plan_sessions_ask_for_write_kinds_that_offer_no_reject_option() {
+    for kind in PLAN_DENIED_KINDS {
+        let mut req = request(Some(kind), &[inside("src/a.rs")], json!({}));
+        req["options"] = json!([
+            {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
+            {"optionId": "reject-always", "name": "Never", "kind": "reject_always"}
+        ]);
+        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            assert!(asks(&decide_plan(&req, mode)), "{mode:?} {kind}");
+        }
+    }
+}
+
+#[test]
+fn plan_sessions_keep_other_kinds_as_cards() {
+    for kind in ["execute", "fetch", "other", "think"] {
+        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            let req = request(Some(kind), &[], json!({"command": "ls"}));
+            assert!(asks(&decide_plan(&req, mode)), "{mode:?} {kind}");
+        }
+    }
+}
+
+#[test]
+fn plan_sessions_read_inside_the_worktree_and_ask_outside() {
+    let inside_read = request(Some("read"), &[inside("src/a.rs")], json!({}));
+    let outside_read = request(Some("read"), &[outside().to_string()], json!({}));
+    for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+        assert!(allowed(&decide_plan(&inside_read, mode)), "{mode:?}");
+        assert!(asks(&decide_plan(&outside_read, mode)), "{mode:?}");
+    }
+}
+
+#[test]
+fn review_sessions_never_deny_and_match_the_mode_rules() {
+    for mode in [
+        PermissionMode::Supervised,
+        PermissionMode::AcceptEdits,
+        PermissionMode::FullAccess,
+    ] {
+        for kind in ["read", "search", "edit", "execute", "fetch", "other"] {
+            let req = request(Some(kind), &[inside("src/a.rs")], json!({}));
+            let decision = decide_acp(&req, None, mode);
+            let auto = match mode {
+                PermissionMode::FullAccess => true,
+                PermissionMode::AcceptEdits => ["read", "search", "edit"].contains(&kind),
+                PermissionMode::Supervised => ["read", "search"].contains(&kind),
+            };
+            assert_eq!(allowed(&decision), auto, "{mode:?} {kind}: {decision:?}");
+            assert_eq!(asks(&decision), !auto, "{mode:?} {kind}: {decision:?}");
+        }
+    }
 }

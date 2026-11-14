@@ -1,15 +1,19 @@
-use argon_core::{PullRequest, Side};
+use std::collections::HashMap;
+
+use argon_core::{PullRequest, Side, mentions_login};
+use chrono::{DateTime, Utc};
 
 use crate::convert::{
-    checks_state, into_pull_request, login_or_ghost, review_state, reviewer_label,
+    checks_state, into_issue, into_pull_request, issue_state, login_or_ghost, review_state,
+    reviewer_label,
 };
 use crate::detail::{
-    CommitInfo, Label, PrDetail, ReviewComment, ReviewThread, ReviewerStatus, ThreadComment,
-    TimelineItem,
+    CommitInfo, IssueDetail, Label, PrDetail, ReviewComment, ReviewThread, ReviewerStatus,
+    SubIssueRow, ThreadComment, TimelineItem,
 };
 use crate::detail_wire::{
-    WireDetail, WireDetailCommit, WireDiffSide, WireGitActor, WireLabel, WireThread,
-    WireTimelineItem,
+    WireAssignee, WireDetail, WireDetailCommit, WireDiffSide, WireGitActor, WireIssueDetail,
+    WireLabel, WireMentionIssue, WireReferenced, WireThread, WireTimelineItem,
 };
 use crate::wire::Actor;
 
@@ -47,6 +51,80 @@ pub(crate) fn into_pr_detail(wire: WireDetail, host: &str) -> PrDetail {
             .map(|node| commit_info(node.commit))
             .collect(),
     }
+}
+
+pub(crate) fn into_issue_detail(wire: WireIssueDetail, host: &str) -> IssueDetail {
+    let truncated_timeline = wire.timeline_items.has_previous_page();
+    IssueDetail {
+        issue: into_issue(wire.issue, host),
+        body: wire.body.unwrap_or_default(),
+        timeline: wire
+            .timeline_items
+            .into_items()
+            .into_iter()
+            .filter_map(timeline_item)
+            .collect(),
+        linked_prs: wire
+            .linked_pull_requests
+            .into_items()
+            .into_iter()
+            .map(|pr| into_pull_request(pr, host))
+            .collect(),
+        sub_issues: wire
+            .sub_issues
+            .into_items()
+            .into_iter()
+            .map(|sub| SubIssueRow {
+                repo: sub.repository.name_with_owner,
+                number: sub.number,
+                title: sub.title,
+                state: issue_state(sub.state),
+            })
+            .collect(),
+        truncated_timeline,
+    }
+}
+
+pub(crate) fn latest_mention_times(
+    issues: impl IntoIterator<Item = WireMentionIssue>,
+    login: &str,
+    since: &HashMap<String, DateTime<Utc>>,
+) -> HashMap<String, DateTime<Utc>> {
+    issues
+        .into_iter()
+        .filter_map(|issue| {
+            let id = issue.id.clone();
+            let limit = since.get(&id).copied();
+            latest_mention_time(issue, login, limit).map(|at| (id, at))
+        })
+        .collect()
+}
+
+fn latest_mention_time(
+    issue: WireMentionIssue,
+    login: &str,
+    since: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    let counts = |author: &Option<Actor>, body: &str, at: DateTime<Utc>| {
+        since.is_none_or(|limit| at > limit)
+            && !author
+                .as_ref()
+                .is_some_and(|actor| actor.login.eq_ignore_ascii_case(login))
+            && mentions_login(body, login)
+    };
+    let from_comments = issue
+        .timeline_items
+        .into_items()
+        .into_iter()
+        .filter(|comment| counts(&comment.author, &comment.body, comment.created_at))
+        .map(|comment| comment.created_at);
+    let from_body = counts(
+        &issue.author,
+        issue.body.as_deref().unwrap_or_default(),
+        issue.created_at,
+    )
+    .then_some(issue.created_at);
+    from_comments.chain(from_body).max()
 }
 
 fn label(wire: WireLabel) -> Label {
@@ -148,6 +226,29 @@ fn thread(wire: WireThread) -> ReviewThread {
     }
 }
 
+fn assignee_login(assignee: Option<WireAssignee>) -> String {
+    login_or_ghost(assignee.and_then(|assignee| assignee.login))
+}
+
+fn cross_reference(
+    actor: Option<Actor>,
+    referenced: WireReferenced,
+    at: DateTime<Utc>,
+) -> Option<TimelineItem> {
+    let (item, is_pull_request) = match referenced {
+        WireReferenced::Issue(item) => (item, false),
+        WireReferenced::PullRequest(item) => (item, true),
+        WireReferenced::Unknown => return None,
+    };
+    Some(TimelineItem::CrossReferenced {
+        actor: actor_login(actor),
+        repo: item.repository.name_with_owner,
+        number: item.number,
+        is_pull_request,
+        at,
+    })
+}
+
 fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
     let item = match wire {
         WireTimelineItem::IssueComment(comment) => TimelineItem::Comment {
@@ -155,6 +256,7 @@ fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
             author: actor_login(comment.author),
             body: comment.body,
             created_at: comment.created_at,
+            url: comment.url,
         },
         WireTimelineItem::PullRequestReview(review) => TimelineItem::Review {
             id: review.id,
@@ -206,6 +308,36 @@ fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
             actor: actor_login(event.actor),
             at: event.created_at,
         },
+        WireTimelineItem::AssignedEvent(event) => TimelineItem::Assigned {
+            actor: actor_login(event.actor),
+            assignee: assignee_login(event.assignee),
+            at: event.created_at,
+        },
+        WireTimelineItem::UnassignedEvent(event) => TimelineItem::Unassigned {
+            actor: actor_login(event.actor),
+            assignee: assignee_login(event.assignee),
+            at: event.created_at,
+        },
+        WireTimelineItem::UnlabeledEvent(event) => TimelineItem::Unlabeled {
+            actor: actor_login(event.actor),
+            label: event.label.name,
+            at: event.created_at,
+        },
+        WireTimelineItem::ReopenedEvent(event) => TimelineItem::Reopened {
+            actor: actor_login(event.actor),
+            at: event.created_at,
+        },
+        WireTimelineItem::CrossReferencedEvent(event) => {
+            return cross_reference(event.actor, event.source, event.created_at);
+        }
+        WireTimelineItem::ConnectedEvent(event) => {
+            return cross_reference(event.actor, event.subject, event.created_at);
+        }
+        WireTimelineItem::MilestonedEvent(event) => TimelineItem::Milestoned {
+            actor: actor_login(event.actor),
+            milestone: event.milestone_title,
+            at: event.created_at,
+        },
         WireTimelineItem::Unknown => return None,
     };
     Some(item)
@@ -213,11 +345,11 @@ fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
 
 #[cfg(test)]
 mod tests {
-    use argon_core::{ChecksState, PrId, PrState, ReviewState};
+    use argon_core::{ChecksState, IssueState, PrId, PrState, ReviewState};
     use chrono::{DateTime, Utc};
 
     use super::*;
-    use crate::detail_wire::DetailData;
+    use crate::detail_wire::{DetailData, IssueDetailData, WireIssueNode, WireMentionsData};
     use crate::wire::Envelope;
 
     const DETAIL: &str = include_str!("../tests/fixtures/detail.json");
@@ -311,6 +443,7 @@ mod tests {
                 author: "mcouto".into(),
                 body: "Ready for a first pass.".into(),
                 created_at: at("2026-10-27T13:10:00Z"),
+                url: None,
             }
         );
         assert_eq!(
@@ -660,5 +793,322 @@ mod tests {
         let envelope: Envelope<DetailData> =
             serde_json::from_str(r#"{ "data": { "node": null } }"#).unwrap();
         assert!(envelope.into_data(Utc::now()).unwrap().data.node.is_none());
+    }
+
+    const ISSUE_DETAIL: &str = include_str!("../tests/fixtures/issue_detail.json");
+    const ISSUE_MENTIONS: &str = include_str!("../tests/fixtures/issue_mentions.json");
+    const LOGIN: &str = "arthur-saito";
+
+    fn issue_detail_from(json: &str) -> IssueDetail {
+        let envelope: Envelope<IssueDetailData> = serde_json::from_str(json).unwrap();
+        match envelope.into_data(Utc::now()).unwrap().data.node.unwrap() {
+            WireIssueNode::Issue(wire) => into_issue_detail(*wire, "github.com"),
+            WireIssueNode::Other => panic!("expected an issue node"),
+        }
+    }
+
+    fn issue_detail() -> IssueDetail {
+        issue_detail_from(ISSUE_DETAIL)
+    }
+
+    #[test]
+    fn issue_part_reuses_the_inbox_conversion() {
+        let detail = issue_detail();
+        assert_eq!(detail.issue.id, PrId("I_kwDOOrbita0101".into()));
+        assert_eq!(detail.issue.host, "github.com");
+        assert_eq!(detail.issue.repo, "orbita-health/atlas");
+        assert_eq!(detail.issue.number, 101);
+        assert_eq!(detail.issue.state, IssueState::Open);
+        assert_eq!(
+            detail.issue.state_reason,
+            Some(argon_core::IssueStateReason::Reopened)
+        );
+        assert_eq!(detail.issue.issue_type.as_deref(), Some("Bug"));
+        assert_eq!(detail.issue.milestone.as_deref(), Some("Q4 stability"));
+        assert_eq!(detail.issue.assignees, vec!["lfarias", "dnogueira"]);
+        assert_eq!(detail.issue.labels.len(), 2);
+        assert_eq!(detail.issue.comments, 3);
+        assert_eq!(detail.issue.sub_issues.map(|sub| sub.total), Some(3));
+        assert_eq!(detail.issue.linked_prs.len(), 1);
+        assert!(
+            detail
+                .body
+                .starts_with("Large clinics hit the 30s timeout.")
+        );
+        assert!(detail.body.contains("- seen on prod"));
+        assert!(detail.truncated_timeline);
+    }
+
+    #[test]
+    fn issue_timeline_maps_every_item_type_and_skips_unknown_and_null_nodes() {
+        let timeline = issue_detail().timeline;
+        assert_eq!(timeline.len(), 13);
+
+        assert_eq!(
+            timeline[0],
+            TimelineItem::Comment {
+                id: "IC_kwDOOrbita11".into(),
+                author: "lfarias".into(),
+                body: "I can take a look. cc @mcouto".into(),
+                created_at: at("2026-10-20T09:00:00Z"),
+                url: Some(
+                    "https://github.com/orbita-health/atlas/issues/101#issuecomment-11".into()
+                ),
+            }
+        );
+        assert_eq!(
+            timeline[1],
+            TimelineItem::Assigned {
+                actor: "mcouto".into(),
+                assignee: "lfarias".into(),
+                at: at("2026-10-20T09:05:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[2],
+            TimelineItem::Assigned {
+                actor: "ghost".into(),
+                assignee: "ghost".into(),
+                at: at("2026-10-20T09:06:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[3],
+            TimelineItem::Unassigned {
+                actor: "lfarias".into(),
+                assignee: "pbarros".into(),
+                at: at("2026-10-21T10:00:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[4],
+            TimelineItem::Labeled {
+                actor: "mcouto".into(),
+                label: "bug".into(),
+                at: at("2026-10-21T10:05:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[5],
+            TimelineItem::Unlabeled {
+                actor: "mcouto".into(),
+                label: "triage".into(),
+                at: at("2026-10-21T10:06:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[6],
+            TimelineItem::Milestoned {
+                actor: "dnogueira".into(),
+                milestone: "Q4 stability".into(),
+                at: at("2026-10-22T11:00:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[7],
+            TimelineItem::CrossReferenced {
+                actor: "mcouto".into(),
+                repo: "orbita-health/atlas".into(),
+                number: 412,
+                is_pull_request: true,
+                at: at("2026-10-27T13:05:12Z"),
+            }
+        );
+        assert_eq!(
+            timeline[8],
+            TimelineItem::CrossReferenced {
+                actor: "dnogueira".into(),
+                repo: "orbita-health/billing".into(),
+                number: 87,
+                is_pull_request: false,
+                at: at("2026-10-28T08:00:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[9],
+            TimelineItem::CrossReferenced {
+                actor: "lfarias".into(),
+                repo: "orbita-health/atlas".into(),
+                number: 430,
+                is_pull_request: true,
+                at: at("2026-10-29T08:00:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[10],
+            TimelineItem::Closed {
+                actor: "lfarias".into(),
+                at: at("2026-10-30T09:00:00Z"),
+            }
+        );
+        assert_eq!(
+            timeline[11],
+            TimelineItem::Reopened {
+                actor: "mcouto".into(),
+                at: at("2026-10-30T09:30:00Z"),
+            }
+        );
+        assert!(matches!(
+            &timeline[12],
+            TimelineItem::Comment { author, .. } if author == "ghost"
+        ));
+    }
+
+    #[test]
+    fn issue_linked_prs_are_hydrated_with_the_pull_request_fields() {
+        let linked = issue_detail().linked_prs;
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0].id, PrId("PR_kwDOOrbita0412".into()));
+        assert_eq!(linked[0].number, 412);
+        assert_eq!(linked[0].checks, Some(ChecksState::Failure));
+        assert_eq!(linked[0].host, "github.com");
+        assert_eq!(linked[0].assignees, vec!["mcouto"]);
+        assert_eq!(linked[0].closing_issues.len(), 1);
+    }
+
+    #[test]
+    fn issue_sub_issues_keep_repo_title_and_state() {
+        let sub_issues = issue_detail().sub_issues;
+        assert_eq!(
+            sub_issues,
+            vec![
+                SubIssueRow {
+                    repo: "orbita-health/atlas".into(),
+                    number: 102,
+                    title: "Cap concurrent slot lookups".into(),
+                    state: IssueState::Closed,
+                },
+                SubIssueRow {
+                    repo: "orbita-health/atlas".into(),
+                    number: 103,
+                    title: "Surface timeout in the clinic dashboard".into(),
+                    state: IssueState::Open,
+                },
+                SubIssueRow {
+                    repo: "orbita-health/observability".into(),
+                    number: 12,
+                    title: "Expose retry metrics".into(),
+                    state: IssueState::Open,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn issue_detail_defaults_when_connections_and_body_are_missing() {
+        let json = ISSUE_DETAIL
+            .replace("\"hasPreviousPage\": true", "\"hasPreviousPage\": false")
+            .replace(
+                "\"body\": \"Large clinics hit the 30s timeout.\\n\\n- repro: 500 slots\\n- seen on prod\"",
+                "\"body\": null",
+            )
+            .replace("\"subIssues\": {", "\"subIssuesGone\": {");
+        assert_ne!(json, ISSUE_DETAIL);
+        let detail = issue_detail_from(&json);
+        assert!(!detail.truncated_timeline);
+        assert_eq!(detail.body, "");
+        assert!(detail.sub_issues.is_empty());
+    }
+
+    #[test]
+    fn issue_node_of_another_type_is_not_an_issue() {
+        let envelope: Envelope<IssueDetailData> =
+            serde_json::from_str(r#"{ "data": { "node": { "__typename": "PullRequest" } } }"#)
+                .unwrap();
+        let node = envelope.into_data(Utc::now()).unwrap().data.node.unwrap();
+        assert!(matches!(node, WireIssueNode::Other));
+    }
+
+    #[test]
+    fn missing_issue_node_deserializes_to_none() {
+        let envelope: Envelope<IssueDetailData> =
+            serde_json::from_str(r#"{ "data": { "node": null } }"#).unwrap();
+        assert!(envelope.into_data(Utc::now()).unwrap().data.node.is_none());
+    }
+
+    fn mentions(since: &[(&str, &str)]) -> HashMap<String, DateTime<Utc>> {
+        let envelope: Envelope<WireMentionsData> = serde_json::from_str(ISSUE_MENTIONS).unwrap();
+        let issues = envelope.into_data(Utc::now()).unwrap().data.into_issues();
+        let since = since
+            .iter()
+            .map(|(id, value)| (id.to_string(), at(value)))
+            .collect();
+        latest_mention_times(issues, LOGIN, &since)
+    }
+
+    #[test]
+    fn mentions_by_someone_else_after_since_count() {
+        let found = mentions(&[("I_kwDOOrbita0101", "2026-11-02T00:00:00Z")]);
+        assert_eq!(
+            found.get("I_kwDOOrbita0101"),
+            Some(&at("2026-11-02T09:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn own_comments_old_mentions_and_non_mentions_do_not_count() {
+        let found = mentions(&[
+            ("I_kwDOOrbita0101", "2026-11-02T00:00:00Z"),
+            ("I_kwDOOrbita0087", "2026-10-12T00:00:00Z"),
+        ]);
+        assert!(!found.contains_key("I_kwDOOrbita0087"));
+        assert!(!found.contains_key("I_kwDOOrbita0130"));
+        assert!(!found.contains_key("I_kwDOOrbita0064"));
+    }
+
+    #[test]
+    fn latest_of_several_mentions_wins_over_later_own_and_plain_comments() {
+        let found = mentions(&[("I_kwDOOrbita0101", "2026-10-01T00:00:00Z")]);
+        assert_eq!(
+            found.get("I_kwDOOrbita0101"),
+            Some(&at("2026-11-02T09:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn issue_body_created_after_since_counts_and_missing_since_means_no_limit() {
+        let found = mentions(&[("I_kwDOOrbita0087", "2026-10-05T00:00:00Z")]);
+        assert_eq!(
+            found.get("I_kwDOOrbita0087"),
+            Some(&at("2026-10-11T09:00:00Z"))
+        );
+        assert_eq!(
+            found.get("I_kwDOOrbita0092"),
+            Some(&at("2026-11-02T07:30:00Z"))
+        );
+    }
+
+    #[test]
+    fn issue_body_alone_is_enough_when_it_is_newer_than_since() {
+        let found = mentions(&[("I_kwDOOrbita0092", "2026-11-01T00:00:00Z")]);
+        assert_eq!(
+            found.get("I_kwDOOrbita0092"),
+            Some(&at("2026-11-02T07:30:00Z"))
+        );
+        let found = mentions(&[("I_kwDOOrbita0092", "2026-11-03T00:00:00Z")]);
+        assert!(!found.contains_key("I_kwDOOrbita0092"));
+    }
+
+    #[test]
+    fn malformed_and_empty_nodes_are_skipped_in_the_mentions_page() {
+        let envelope: Envelope<WireMentionsData> = serde_json::from_str(ISSUE_MENTIONS).unwrap();
+        let ids: Vec<String> = envelope
+            .into_data(Utc::now())
+            .unwrap()
+            .data
+            .into_issues()
+            .into_iter()
+            .map(|issue| issue.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "I_kwDOOrbita0101",
+                "I_kwDOOrbita0087",
+                "I_kwDOOrbita0130",
+                "I_kwDOOrbita0092",
+                "I_kwDOOrbita0064",
+            ]
+        );
     }
 }

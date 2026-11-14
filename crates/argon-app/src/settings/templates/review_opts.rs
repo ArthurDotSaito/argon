@@ -1,3 +1,4 @@
+use argon_core::TemplateKind;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
@@ -25,6 +26,7 @@ impl TemplatesSection {
         let choices: Vec<Choice> = self
             .saved_templates()
             .iter()
+            .filter(|template| template.kind == TemplateKind::Review)
             .map(|template| Choice::new(template.id.clone(), template.name.clone()))
             .collect();
         let selected = self.config.review.default_template.clone();

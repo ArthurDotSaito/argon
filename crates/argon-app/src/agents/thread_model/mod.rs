@@ -1,13 +1,14 @@
 mod actions;
 mod diff;
 mod feed;
+mod plans;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use argon_agents::{AgentSessionHandle, ModelInfo};
-use argon_core::{PermissionMode, PrKey};
+use argon_core::{PermissionMode, PrKey, SessionKind};
 use argon_store::SessionStatus;
 use chrono::{DateTime, TimeDelta, Utc};
 use gpui_kit::{App, Context, EventEmitter, SharedString, Subscription, Task};
@@ -18,12 +19,16 @@ use super::finding_set::{FindingSet, SeverityCounts};
 use super::lifecycle::APP_CLOSED_REASON;
 use super::transcript::Transcript;
 use crate::review::{DraftsBus, DraftsChanged};
+
 use crate::services::{AppServices, Services, flatten};
+pub use plans::PlanBusy;
+use plans::PlanDrafts;
 
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub session_id: String,
     pub pr: PrKey,
+    pub kind: SessionKind,
     pub number: Option<u64>,
     pub agent_label: &'static str,
     pub model: String,
@@ -49,6 +54,7 @@ pub struct ThreadModel {
     closed: bool,
     transcript: Transcript,
     findings: FindingSet,
+    plans: PlanDrafts,
     models: Vec<ModelInfo>,
     loading: bool,
     load_error: Option<SharedString>,
@@ -94,6 +100,7 @@ impl ThreadModel {
             closed: false,
             transcript: Transcript::default(),
             findings: FindingSet::default(),
+            plans: PlanDrafts::default(),
             models: Vec::new(),
             loading: true,
             load_error: None,
@@ -146,6 +153,10 @@ impl ThreadModel {
 
     pub fn is_changing_model(&self) -> bool {
         self.changing_model
+    }
+
+    pub fn is_permission_mode_locked(&self) -> bool {
+        self.info.kind == SessionKind::Plan
     }
 
     pub fn is_changing_permission_mode(&self) -> bool {
@@ -255,8 +266,12 @@ impl ThreadModel {
     fn watch_drafts(&mut self, cx: &mut Context<Self>) {
         let bus = DraftsBus::global(cx);
         self._drafts = Some(cx.subscribe(&bus, |this, _, event: &DraftsChanged, cx| {
-            if event.pr == this.info.pr {
-                this.reload_findings(cx);
+            if event.pr != this.info.pr {
+                return;
+            }
+            match this.info.kind {
+                SessionKind::Review => this.reload_findings(cx),
+                SessionKind::Plan => this.reload_plans(cx),
             }
         }));
     }

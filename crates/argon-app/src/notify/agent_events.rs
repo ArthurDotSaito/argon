@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use argon_core::PrKey;
+use argon_core::{PrKey, SessionKind};
 use argon_store::SessionStatus;
 
 use super::toast::{Channel, ToastSpec, ToastTarget};
@@ -33,6 +33,7 @@ pub struct SessionSnapshot {
     pub pr: PrKey,
     pub number: Option<u64>,
     pub agent_label: String,
+    pub kind: SessionKind,
     pub phase: Phase,
     pub findings: usize,
 }
@@ -87,30 +88,39 @@ pub fn toast(signal: Signal, session: &SessionSnapshot) -> ToastSpec {
             format!(
                 "O {} pede permissão{}",
                 session.agent_label,
-                pr_suffix("em", session.number)
+                number_suffix("em", session.number)
             ),
         ),
-        Signal::Completed => (
-            Channel::AgentOutcome,
-            format!(
-                "Review{} concluída — {}",
-                pr_suffix("de", session.number),
-                findings_text(session.findings)
-            ),
-        ),
-        Signal::Failed => (
-            Channel::AgentOutcome,
-            format!("Review{} falhou", pr_suffix("de", session.number)),
-        ),
+        Signal::Completed => (Channel::AgentOutcome, completed_text(session)),
+        Signal::Failed => (Channel::AgentOutcome, failed_text(session)),
     };
     ToastSpec {
         channel,
         body,
-        target: ToastTarget::AgentReview(session.pr.clone()),
+        target: ToastTarget::AgentSession(session.pr.clone(), session.kind),
     }
 }
 
-fn pr_suffix(preposition: &str, number: Option<u64>) -> String {
+fn completed_text(session: &SessionSnapshot) -> String {
+    let subject = number_suffix("de", session.number);
+    match session.kind {
+        SessionKind::Review => format!(
+            "Review{subject} concluída — {}",
+            findings_text(session.findings)
+        ),
+        SessionKind::Plan => format!("Agent Plan{subject} concluído — rascunho pronto"),
+    }
+}
+
+fn failed_text(session: &SessionSnapshot) -> String {
+    let subject = number_suffix("de", session.number);
+    match session.kind {
+        SessionKind::Review => format!("Review{subject} falhou"),
+        SessionKind::Plan => format!("Agent Plan{subject} falhou"),
+    }
+}
+
+fn number_suffix(preposition: &str, number: Option<u64>) -> String {
     number
         .map(|n| format!(" {preposition} #{n}"))
         .unwrap_or_default()
@@ -134,6 +144,7 @@ mod tests {
             pr: PrKey::new("github.com", "pr"),
             number: Some(42),
             agent_label: "Claude Code".to_string(),
+            kind: SessionKind::Review,
             phase,
             findings: 3,
         }
@@ -210,6 +221,42 @@ mod tests {
             "Review de #42 concluída — 3 achados"
         );
         assert_eq!(toast(Signal::Failed, &session).body, "Review de #42 falhou");
+    }
+
+    #[test]
+    fn plan_toasts_describe_the_draft_and_open_the_issue() {
+        let session = SessionSnapshot {
+            kind: SessionKind::Plan,
+            ..snapshot("a", Phase::Running)
+        };
+        let done = toast(Signal::Completed, &session);
+        assert_eq!(done.body, "Agent Plan de #42 concluído — rascunho pronto");
+        assert_eq!(
+            done.target,
+            ToastTarget::AgentSession(PrKey::new("github.com", "pr"), SessionKind::Plan)
+        );
+        assert_eq!(
+            toast(Signal::Failed, &session).body,
+            "Agent Plan de #42 falhou"
+        );
+        assert_eq!(
+            toast(Signal::Permission, &session).body,
+            "O Claude Code pede permissão em #42"
+        );
+    }
+
+    #[test]
+    fn plan_toasts_without_an_issue_number() {
+        let session = SessionSnapshot {
+            kind: SessionKind::Plan,
+            number: None,
+            ..snapshot("a", Phase::Running)
+        };
+        assert_eq!(
+            toast(Signal::Completed, &session).body,
+            "Agent Plan concluído — rascunho pronto"
+        );
+        assert_eq!(toast(Signal::Failed, &session).body, "Agent Plan falhou");
     }
 
     #[test]

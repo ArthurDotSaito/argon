@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use argon_agents::defaults::agent_defaults;
 use argon_agents::{AgentSessionHandle, WorktreeManager};
-use argon_core::{AgentKind, Paths, PrKey};
+use argon_core::{AgentKind, Paths, PrKey, SessionKind};
 use chrono::{DateTime, Utc};
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Global, Subscription};
 
@@ -34,6 +34,7 @@ impl ActiveSession {
         SessionInfo {
             session_id: self.session_id.clone(),
             pr: self.pr.clone(),
+            kind: self.handle.kind(),
             number: self.number,
             agent_label: self.agent_label,
             model: self.model.clone(),
@@ -56,8 +57,14 @@ pub struct Activity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentsEvent {
-    SessionStarted { session_id: String, pr: PrKey },
-    SessionArchived { session_id: String },
+    SessionStarted {
+        session_id: String,
+        pr: PrKey,
+        kind: SessionKind,
+    },
+    SessionArchived {
+        session_id: String,
+    },
 }
 
 pub struct AgentSessions {
@@ -235,12 +242,14 @@ impl AgentSessions {
         let event = AgentsEvent::SessionStarted {
             session_id: session.session_id.clone(),
             pr: session.pr.clone(),
+            kind: session.handle.kind(),
         };
         tracing::info!(
             session = %session.session_id,
             agent = ?session.agent,
             model = %session.model,
-            "agent review session started"
+            kind = session.handle.kind().as_str(),
+            "agent session started"
         );
         self.last_agent = Some(session.agent);
         let kind = session.agent;

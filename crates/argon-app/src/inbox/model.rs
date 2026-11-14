@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use argon_core::{PrKey, PullRequest, ViewSet};
+use argon_core::{Issue, PrKey, PullRequest, SubjectKind, ViewSet};
 use argon_store::Store;
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, Utc};
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task};
 
 use super::InboxView;
-use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, load_items};
+use super::filter::{self, KindFilter};
+use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, Subject, load_items};
 use super::labels;
 use super::sections::{InboxRow, Sections};
 use crate::services::{Services, SyncEvent, flatten};
@@ -14,6 +15,7 @@ use crate::sync_status::SyncStatus;
 
 pub enum InboxEvent {
     OpenPr { key: PrKey, preview: bool },
+    OpenIssue { key: PrKey, preview: bool },
     ShowList,
 }
 
@@ -30,6 +32,7 @@ pub struct InboxModel {
     accounts: Vec<AccountEntry>,
     view: InboxView,
     org: Option<OrgKey>,
+    kind: KindFilter,
     query: String,
     sections: Sections,
     selected: usize,
@@ -68,6 +71,7 @@ impl InboxModel {
             accounts: Vec::new(),
             view: InboxView::Inbox,
             org: None,
+            kind: KindFilter::All,
             query: String::new(),
             sections: Sections::default(),
             selected: 0,
@@ -162,9 +166,20 @@ impl InboxModel {
         self.rows_revision
     }
 
+    pub fn item(&self, key: &PrKey) -> Option<&InboxItem> {
+        self.items.get(*self.index.get(key)?)
+    }
+
+    pub(super) fn subject(&self, key: &PrKey) -> Option<&Subject> {
+        Some(&self.item(key)?.subject)
+    }
+
     pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
-        let ix = *self.index.get(key)?;
-        self.items.get(ix).map(|item| &item.pr)
+        self.subject(key)?.as_pr()
+    }
+
+    pub fn issue(&self, key: &PrKey) -> Option<&Issue> {
+        self.subject(key)?.as_issue()
     }
 
     pub fn is_loading_more(&self) -> bool {
@@ -235,6 +250,18 @@ impl InboxModel {
         cx.notify();
     }
 
+    pub fn kind_filter(&self) -> KindFilter {
+        self.kind
+    }
+
+    pub fn set_kind_filter(&mut self, filter: KindFilter, cx: &mut Context<Self>) {
+        if self.kind != filter {
+            self.kind = filter;
+            self.refilter(true);
+            cx.notify();
+        }
+    }
+
     pub fn clear_org(&mut self, cx: &mut Context<Self>) {
         if self.org.take().is_some() {
             self.refilter(true);
@@ -276,7 +303,7 @@ impl InboxModel {
         self.open(self.selected, preview, cx);
     }
 
-    pub fn open_pr(&mut self, key: &PrKey, preview: bool, cx: &mut Context<Self>) {
+    pub fn open_subject(&mut self, key: &PrKey, preview: bool, cx: &mut Context<Self>) {
         if let Some(position) = self.position_of(key) {
             self.open(position, preview, cx);
         }
@@ -295,13 +322,28 @@ impl InboxModel {
         };
         self.selected = position;
         let item = &mut self.items[ix];
-        let key = item.pr.key();
+        let (key, kind) = (item.subject.key(), item.subject.kind());
         if item.unread {
             item.unread = false;
-            let (seen, updated_at) = (key.clone(), item.pr.updated_at);
+            let (seen, updated_at) = (key.clone(), item.subject.updated_at());
             self.persist(move |store| store.mark_seen(&seen, updated_at), cx);
         }
-        cx.emit(InboxEvent::OpenPr { key, preview });
+        cx.emit(match kind {
+            SubjectKind::Pr => InboxEvent::OpenPr { key, preview },
+            SubjectKind::Issue => InboxEvent::OpenIssue { key, preview },
+        });
+        cx.notify();
+    }
+
+    pub fn mark_seen(&mut self, key: &PrKey, updated_at: DateTime<Utc>, cx: &mut Context<Self>) {
+        if let Some(&ix) = self.index.get(key)
+            && let Some(item) = self.items.get_mut(ix)
+            && item.subject.updated_at() <= updated_at
+        {
+            item.unread = false;
+        }
+        let key = key.clone();
+        self.persist(move |store| store.mark_seen(&key, updated_at), cx);
         cx.notify();
     }
 
@@ -312,9 +354,9 @@ impl InboxModel {
         let neighbour = [self.selected + 1, self.selected.wrapping_sub(1)]
             .into_iter()
             .find_map(|position| self.item_at(position))
-            .map(|item| item.pr.key());
+            .map(|item| item.subject.key());
         let item = self.items.remove(ix);
-        let (key, updated_at) = (item.pr.key(), item.pr.updated_at);
+        let (key, updated_at) = (item.subject.key(), item.subject.updated_at());
         self.reindex();
         self.recount();
         self.rebuild(neighbour, false);
@@ -328,7 +370,7 @@ impl InboxModel {
         };
         let item = &mut self.items[ix];
         item.unread = !item.unread;
-        let (key, updated_at) = (item.pr.key(), item.pr.updated_at);
+        let (key, updated_at) = (item.subject.key(), item.subject.updated_at());
         if item.unread {
             self.persist(move |store| store.mark_unread(&key), cx);
         } else {
@@ -452,7 +494,7 @@ impl InboxModel {
             .items
             .iter()
             .enumerate()
-            .map(|(ix, item)| (item.pr.key(), ix))
+            .map(|(ix, item)| (item.subject.key(), ix))
             .collect();
     }
 
@@ -474,7 +516,7 @@ impl InboxModel {
     }
 
     fn refilter(&mut self, reset_scroll: bool) {
-        let kept = self.item_at(self.selected).map(|item| item.pr.key());
+        let kept = self.item_at(self.selected).map(|item| item.subject.key());
         self.rebuild(kept, reset_scroll);
     }
 
@@ -485,6 +527,7 @@ impl InboxModel {
             .iter()
             .enumerate()
             .filter(|(_, item)| item.views.contains(set))
+            .filter(|(_, item)| filter::passes(item.subject.kind(), self.kind, self.view))
             .filter(|(_, item)| self.org.as_ref().is_none_or(|org| item.belongs_to(org)))
             .filter(|(_, item)| item.matches(&self.query))
             .map(|(ix, _)| ix)

@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use argon_core::{Finding, PermissionMode};
-use argon_store::{NewAgentSession, SessionStatus, SessionWrite, Store, StoredFinding};
+use argon_core::{Finding, PermissionMode, PrKey};
+use argon_store::{NewAgentSession, PlanDraft, SessionStatus, SessionWrite, Store, StoredFinding};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 use super::events::AgentEvent;
@@ -45,6 +45,17 @@ pub(crate) enum Op {
         session: String,
         findings: Vec<Finding>,
         reply: Reply<Vec<StoredFinding>>,
+    },
+    RecordPlan {
+        session: String,
+        subject: PrKey,
+        markdown: String,
+        base_sha: String,
+        reply: Reply<PlanDraft>,
+    },
+    HasPlan {
+        session: String,
+        reply: Reply<bool>,
     },
     EventsSince {
         session: String,
@@ -166,6 +177,26 @@ impl Worker {
                 self.count();
                 let _ = reply.send(text(self.store.save_findings(&session, &findings)));
             }
+            Op::RecordPlan {
+                session,
+                subject,
+                markdown,
+                base_sha,
+                reply,
+            } => {
+                self.count();
+                let _ = reply.send(text(self.store.record_plan(
+                    &subject.host,
+                    &subject.id.0,
+                    &session,
+                    &markdown,
+                    &base_sha,
+                )));
+            }
+            Op::HasPlan { session, reply } => {
+                let plans = self.store.plans_for_session(&session);
+                let _ = reply.send(text(plans).map(|plans| !plans.is_empty()));
+            }
             Op::EventsSince {
                 session,
                 after,
@@ -263,6 +294,15 @@ impl SessionWriter {
         Ok(SessionWriter { ops, transactions })
     }
 
+    #[cfg(test)]
+    pub(crate) fn stopped() -> SessionWriter {
+        let (ops, _) = mpsc::channel();
+        SessionWriter {
+            ops,
+            transactions: Arc::default(),
+        }
+    }
+
     pub fn transactions(&self) -> u64 {
         self.transactions.load(Ordering::Relaxed)
     }
@@ -306,6 +346,32 @@ impl SessionWriter {
             reply,
         })
         .await
+    }
+
+    pub(crate) async fn record_plan(
+        &self,
+        session: &str,
+        subject: &PrKey,
+        markdown: &str,
+        base_sha: &str,
+    ) -> Result<PlanDraft, String> {
+        let session = session.to_owned();
+        let subject = subject.clone();
+        let markdown = markdown.to_owned();
+        let base_sha = base_sha.to_owned();
+        self.ask(|reply| Op::RecordPlan {
+            session,
+            subject,
+            markdown,
+            base_sha,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn has_plan(&self, session: &str) -> Result<bool, String> {
+        let session = session.to_owned();
+        self.ask(|reply| Op::HasPlan { session, reply }).await
     }
 
     pub async fn events_since(
