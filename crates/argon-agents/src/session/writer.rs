@@ -53,6 +53,10 @@ pub(crate) enum Op {
         base_sha: String,
         reply: Reply<PlanDraft>,
     },
+    HasPlan {
+        session: String,
+        reply: Reply<bool>,
+    },
     EventsSince {
         session: String,
         after: u64,
@@ -189,6 +193,10 @@ impl Worker {
                     &base_sha,
                 )));
             }
+            Op::HasPlan { session, reply } => {
+                let plans = self.store.plans_for_session(&session);
+                let _ = reply.send(text(plans).map(|plans| !plans.is_empty()));
+            }
             Op::EventsSince {
                 session,
                 after,
@@ -286,6 +294,15 @@ impl SessionWriter {
         Ok(SessionWriter { ops, transactions })
     }
 
+    #[cfg(test)]
+    pub(crate) fn stopped() -> SessionWriter {
+        let (ops, _) = mpsc::channel();
+        SessionWriter {
+            ops,
+            transactions: Arc::default(),
+        }
+    }
+
     pub fn transactions(&self) -> u64 {
         self.transactions.load(Ordering::Relaxed)
     }
@@ -336,12 +353,12 @@ impl SessionWriter {
         session: &str,
         subject: &PrKey,
         markdown: &str,
-        base_sha: Option<&str>,
+        base_sha: &str,
     ) -> Result<PlanDraft, String> {
         let session = session.to_owned();
         let subject = subject.clone();
         let markdown = markdown.to_owned();
-        let base_sha = base_sha.unwrap_or_default().to_owned();
+        let base_sha = base_sha.to_owned();
         self.ask(|reply| Op::RecordPlan {
             session,
             subject,
@@ -350,6 +367,11 @@ impl SessionWriter {
             reply,
         })
         .await
+    }
+
+    pub(crate) async fn has_plan(&self, session: &str) -> Result<bool, String> {
+        let session = session.to_owned();
+        self.ask(|reply| Op::HasPlan { session, reply }).await
     }
 
     pub async fn events_since(

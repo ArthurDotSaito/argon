@@ -81,6 +81,18 @@ mod tests {
     }
 
     #[test]
+    fn three_backtick_fence_is_cut_at_the_inner_code_block_close() {
+        let message = format!(
+            "```argon-plan-{NONCE}\n## Passos\n\n```rust\nfn main() {{}}\n```\n\nFim.\n```\n"
+        );
+
+        assert_eq!(
+            parse_plan(&message, NONCE).as_deref(),
+            Some("## Passos\n\n```rust\nfn main() {}")
+        );
+    }
+
+    #[test]
     fn plan_marker_inside_another_fenced_block_is_ignored() {
         let message = format!(
             "{}\n\n````md\n{}\n````\n",

@@ -85,6 +85,7 @@ pub enum AgentEvent {
         skipped: Vec<String>,
     },
     PlanDraft {
+        draft_id: i64,
         markdown: String,
     },
     ModelsAvailable(Vec<ModelInfo>),

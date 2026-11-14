@@ -45,21 +45,30 @@ async fn shared_of(
         .unwrap();
     let (events, _) = broadcast::channel(capacity);
     let shared = Shared::new(
-        SharedConfig {
-            id: "s1".into(),
-            subject,
-            kind,
-            base_sha: base_sha.map(str::to_owned),
-            cwd: PathBuf::from("repo"),
-            nonce: NONCE.into(),
-            allowed_files: vec!["src/lib.rs".into()],
-            writer: writer.clone(),
-            stderr: Arc::default(),
-        },
+        config(subject, writer.clone(), kind, base_sha),
         PermissionMode::Supervised,
         events,
     );
     (shared, writer)
+}
+
+fn config(
+    subject: PrKey,
+    writer: SessionWriter,
+    kind: SessionKind,
+    base_sha: Option<&str>,
+) -> SharedConfig {
+    SharedConfig {
+        id: "s1".into(),
+        subject,
+        kind,
+        base_sha: base_sha.map(str::to_owned),
+        cwd: PathBuf::from("repo"),
+        nonce: NONCE.into(),
+        allowed_files: vec!["src/lib.rs".into()],
+        writer,
+        stderr: Arc::default(),
+    }
 }
 
 fn chunk(text: &str) -> Value {
@@ -162,13 +171,13 @@ struct PlanSession {
 }
 
 impl PlanSession {
-    async fn start(name: &str) -> PlanSession {
+    async fn start(name: &str, base_sha: Option<&str>) -> PlanSession {
         let dir = std::env::temp_dir().join(format!("argon-driver-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let writer =
             SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
-        let (shared, writer) = shared_of(writer, 64, SessionKind::Plan, Some("abc123")).await;
+        let (shared, writer) = shared_of(writer, 64, SessionKind::Plan, base_sha).await;
         shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
         PlanSession {
             dir,
@@ -181,13 +190,19 @@ impl PlanSession {
         self.shared.begin_turn("planeje");
         self.shared.emit_all(map_update(&chunk(message)));
         self.shared.end_turn("end_turn").await;
-        self.writer
+        let events: Vec<AgentEvent> = self
+            .writer
             .events_since("s1", 0)
             .await
             .unwrap()
             .into_iter()
             .map(|(_, event)| event)
-            .collect()
+            .collect();
+        let start = events
+            .iter()
+            .rposition(|event| matches!(event, AgentEvent::UserMessage(_)))
+            .unwrap();
+        events[start..].to_vec()
     }
 
     fn drafts(&self) -> Vec<argon_store::PlanDraft> {
@@ -208,19 +223,23 @@ impl PlanSession {
     }
 }
 
+fn plan_message(markdown: &str) -> String {
+    format!("Pronto.\n```argon-plan-{NONCE}\n{markdown}\n```")
+}
+
+const PLAN_MISSING: &str = "O agente não devolveu um plano no formato esperado.";
+
 #[tokio::test]
 async fn plan_turn_records_the_draft_and_then_emits_it() {
-    let session = PlanSession::start("plan-recorded").await;
+    let session = PlanSession::start("plan-recorded", Some("abc123")).await;
 
-    let events = session
-        .turn(&format!(
-            "Pronto.\n```argon-plan-{NONCE}\n## Passos\n\n1. Ler\n```"
-        ))
-        .await;
+    let events = session.turn(&plan_message("## Passos\n\n1. Ler")).await;
 
+    let drafts = session.drafts();
     assert_eq!(
         events.last(),
         Some(&AgentEvent::PlanDraft {
+            draft_id: drafts[0].id,
             markdown: "## Passos\n\n1. Ler".into()
         })
     );
@@ -229,7 +248,6 @@ async fn plan_turn_records_the_draft_and_then_emits_it() {
             .iter()
             .any(|event| matches!(event, AgentEvent::Findings { .. }))
     );
-    let drafts = session.drafts();
     assert_eq!(drafts.len(), 1);
     assert_eq!(drafts[0].host, "github.com");
     assert_eq!(drafts[0].issue_id, "PR_1");
@@ -245,14 +263,50 @@ async fn plan_turn_records_the_draft_and_then_emits_it() {
 
 #[tokio::test]
 async fn plan_turn_without_block_reports_an_error_and_records_nothing() {
-    let session = PlanSession::start("plan-missing").await;
+    let session = PlanSession::start("plan-missing", Some("abc123")).await;
 
     let events = session.turn(&findings_message("t")).await;
+
+    assert_eq!(events.last(), Some(&AgentEvent::Error(PLAN_MISSING.into())));
+    assert!(session.drafts().is_empty());
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    session.finish();
+}
+
+#[tokio::test]
+async fn missing_plan_warns_only_until_the_session_has_a_draft() {
+    let session = PlanSession::start("plan-follow-up", Some("abc123")).await;
+
+    let before = session.turn("Ainda lendo o código.").await;
+    let with_plan = session.turn(&plan_message("## Plano")).await;
+    let follow_up = session.turn("Respondido sem plano novo.").await;
+
+    assert_eq!(before.last(), Some(&AgentEvent::Error(PLAN_MISSING.into())));
+    assert!(matches!(
+        with_plan.last(),
+        Some(AgentEvent::PlanDraft { markdown, .. }) if markdown == "## Plano"
+    ));
+    assert!(
+        matches!(follow_up.last(), Some(AgentEvent::TurnEnded { .. })),
+        "{follow_up:?}"
+    );
+    assert_eq!(session.drafts().len(), 1);
+    session.finish();
+}
+
+#[tokio::test]
+async fn plan_session_without_base_sha_reports_the_save_failure_and_continues() {
+    let session = PlanSession::start("plan-no-base", None).await;
+
+    let events = session.turn(&plan_message("## Plano")).await;
 
     assert_eq!(
         events.last(),
         Some(&AgentEvent::Error(
-            "O agente não devolveu um plano no formato esperado.".into()
+            "não consegui gravar o plano: a sessão de plano não tem o commit base".into()
         ))
     );
     assert!(session.drafts().is_empty());
@@ -260,7 +314,44 @@ async fn plan_turn_without_block_reports_an_error_and_records_nothing() {
         session.shared.subscribe().0.status,
         SessionStatus::Completed
     );
+    assert!(session.shared.try_acquire());
     session.finish();
+}
+
+#[tokio::test]
+async fn failed_plan_save_reports_an_error_and_keeps_the_session() {
+    let (events, mut receiver) = broadcast::channel(64);
+    let shared = Shared::new(
+        config(
+            PrKey::new("github.com", "I_1"),
+            SessionWriter::stopped(),
+            SessionKind::Plan,
+            Some("abc123"),
+        ),
+        PermissionMode::Supervised,
+        events,
+    );
+    shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
+    assert!(shared.try_acquire());
+
+    shared.begin_turn("planeje");
+    shared.emit_all(map_update(&chunk(&plan_message("## Plano"))));
+    shared.end_turn("end_turn").await;
+
+    let emitted = drained(&mut receiver);
+    assert_eq!(
+        emitted.last(),
+        Some(&AgentEvent::Error(
+            "não consegui gravar o plano: o gravador de sessões parou".into()
+        ))
+    );
+    assert!(
+        !emitted
+            .iter()
+            .any(|event| matches!(event, AgentEvent::PlanDraft { .. }))
+    );
+    assert_eq!(shared.subscribe().0.status, SessionStatus::Completed);
+    assert!(shared.try_acquire());
 }
 
 #[tokio::test]

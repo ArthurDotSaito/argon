@@ -16,6 +16,7 @@ use crate::registry::ModelInfo;
 use crate::util::lock;
 
 pub(super) const ENDED_BEFORE_ACTIVATION: &str = "o agente encerrou antes de abrir a sessão";
+const MISSING_BASE_SHA: &str = "a sessão de plano não tem o commit base";
 
 #[path = "driver_permissions.rs"]
 mod permission_flow;
@@ -48,6 +49,7 @@ struct State {
     tool_kinds: HashMap<String, String>,
     next_permission: u64,
     permission_mode: PermissionMode,
+    plan_recorded: bool,
 }
 
 pub(super) struct SharedConfig {
@@ -94,6 +96,7 @@ impl Shared {
                 tool_kinds: HashMap::new(),
                 next_permission: 0,
                 permission_mode,
+                plan_recorded: false,
             }),
         }
     }
@@ -304,8 +307,12 @@ impl Shared {
         self.status_locked(&mut state, SessionStatus::Running);
     }
 
+    pub(super) fn mark_plan_recorded(&self) {
+        self.lock().plan_recorded = true;
+    }
+
     pub async fn end_turn(&self, stop_reason: &str) {
-        let outcome = {
+        let (outcome, plan_recorded) = {
             let mut state = self.lock();
             self.cancel_pending_locked(&mut state);
             let text = state.buffer.take();
@@ -315,16 +322,19 @@ impl Shared {
                     stop_reason: stop_reason.to_owned(),
                 },
             );
-            finish_turn(
+            let outcome = finish_turn(
                 &text,
                 stop_reason,
                 &self.config.nonce,
                 &self.config.allowed_files,
                 self.config.kind,
-            )
+            );
+            (outcome, state.plan_recorded)
         };
         match outcome {
             TurnOutcome::NotFinished => {}
+            TurnOutcome::Unreadable(_)
+                if self.config.kind == SessionKind::Plan && plan_recorded => {}
             TurnOutcome::Unreadable(message) => self.emit(AgentEvent::Error(message)),
             TurnOutcome::Findings(parsed) => self.save_findings(parsed).await,
             TurnOutcome::Plan(markdown) => self.record_plan(markdown).await,
@@ -367,20 +377,25 @@ impl Shared {
     }
 
     async fn record_plan(&self, markdown: String) {
-        let recorded = self
-            .config
-            .writer
-            .record_plan(
-                &self.config.id,
-                &self.config.subject,
-                &markdown,
-                self.config.base_sha.as_deref(),
-            )
-            .await;
+        let recorded = match self.config.base_sha.as_deref() {
+            Some(base_sha) => {
+                self.config
+                    .writer
+                    .record_plan(&self.config.id, &self.config.subject, &markdown, base_sha)
+                    .await
+            }
+            None => Err(MISSING_BASE_SHA.to_owned()),
+        };
         match recorded {
-            Ok(_) => self.emit(AgentEvent::PlanDraft { markdown }),
+            Ok(draft) => {
+                self.mark_plan_recorded();
+                self.emit(AgentEvent::PlanDraft {
+                    draft_id: draft.id,
+                    markdown,
+                });
+            }
             Err(error) => {
-                tracing::error!(%error, "failed to save plan draft");
+                tracing::error!(session = %self.config.id, %error, "failed to save plan draft");
                 self.emit(AgentEvent::Error(format!(
                     "não consegui gravar o plano: {error}"
                 )));

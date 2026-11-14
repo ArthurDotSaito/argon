@@ -195,12 +195,13 @@ fn permission_events_round_trip_through_json() {
 #[test]
 fn plan_draft_round_trips_under_its_own_tag() {
     let event = AgentEvent::PlanDraft {
+        draft_id: 7,
         markdown: "## Passos\n\n1. Ler".into(),
     };
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(
         value,
-        json!({"type": "plan_draft", "data": {"markdown": "## Passos\n\n1. Ler"}})
+        json!({"type": "plan_draft", "data": {"draft_id": 7, "markdown": "## Passos\n\n1. Ler"}})
     );
     assert_eq!(serde_json::from_value::<AgentEvent>(value).unwrap(), event);
 }

@@ -119,12 +119,13 @@ async fn plan_is_recorded_under_the_issue_key_and_base_sha() {
     writer.create_session(session("s1")).await.unwrap();
     let issue = PrKey::new("ghe.example.com", "I_42");
 
+    assert!(!writer.has_plan("s1").await.unwrap());
     let first = writer
-        .record_plan("s1", &issue, "## v1", Some("abc123"))
+        .record_plan("s1", &issue, "## v1", "abc123")
         .await
         .unwrap();
     let second = writer
-        .record_plan("s1", &issue, "## v2", None)
+        .record_plan("s1", &issue, "## v2", "def456")
         .await
         .unwrap();
 
@@ -135,5 +136,18 @@ async fn plan_is_recorded_under_the_issue_key_and_base_sha() {
     assert_eq!(first.base_sha, "abc123");
     assert_eq!(second.id, first.id);
     assert_eq!(second.body, "## v2");
-    assert_eq!(second.base_sha, "");
+    assert_eq!(second.base_sha, "def456");
+    assert!(writer.has_plan("s1").await.unwrap());
+    assert!(!writer.has_plan("s2").await.unwrap());
+}
+
+#[tokio::test]
+async fn stopped_writer_fails_plan_requests() {
+    let writer = SessionWriter::stopped();
+    let issue = PrKey::new("github.com", "I_1");
+
+    let recorded = writer.record_plan("s1", &issue, "## v1", "abc").await;
+
+    assert_eq!(recorded, Err("o gravador de sessões parou".to_owned()));
+    assert!(writer.has_plan("s1").await.is_err());
 }
