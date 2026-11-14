@@ -569,44 +569,52 @@ fn denied_with(decision: &PermissionDecision, expected: &str) -> bool {
     matches!(decision, PermissionDecision::Deny { option_id } if option_id == expected)
 }
 
+const PLAN_DENIED_KINDS: [&str; 5] = ["edit", "delete", "move", "switch_mode", "permissions"];
+
 #[test]
-fn plan_sessions_deny_edits_with_the_reject_option() {
+fn plan_sessions_deny_write_kinds_with_the_reject_option() {
     for mode in [
         PermissionMode::Supervised,
         PermissionMode::AcceptEdits,
         PermissionMode::FullAccess,
     ] {
-        for paths in [
-            vec![inside("src/a.rs")],
-            vec![outside().to_string()],
-            vec![],
-        ] {
-            let decision = decide_plan(&request(Some("edit"), &paths, json!({})), mode);
-            assert!(
-                denied_with(&decision, "reject-once"),
-                "{mode:?} {paths:?}: {decision:?}"
-            );
+        for kind in PLAN_DENIED_KINDS {
+            for paths in [
+                vec![inside("src/a.rs")],
+                vec![outside().to_string()],
+                vec![],
+            ] {
+                let decision = decide_plan(&request(Some(kind), &paths, json!({})), mode);
+                assert!(
+                    denied_with(&decision, "reject-once"),
+                    "{mode:?} {kind} {paths:?}: {decision:?}"
+                );
+            }
         }
     }
 }
 
 #[test]
-fn plan_sessions_ask_for_edits_that_offer_no_reject_option() {
-    let mut req = request(Some("edit"), &[inside("src/a.rs")], json!({}));
-    req["options"] = json!([
-        {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
-        {"optionId": "reject-always", "name": "Never", "kind": "reject_always"}
-    ]);
-    for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
-        assert!(asks(&decide_plan(&req, mode)), "{mode:?}");
+fn plan_sessions_ask_for_write_kinds_that_offer_no_reject_option() {
+    for kind in PLAN_DENIED_KINDS {
+        let mut req = request(Some(kind), &[inside("src/a.rs")], json!({}));
+        req["options"] = json!([
+            {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
+            {"optionId": "reject-always", "name": "Never", "kind": "reject_always"}
+        ]);
+        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            assert!(asks(&decide_plan(&req, mode)), "{mode:?} {kind}");
+        }
     }
 }
 
 #[test]
-fn plan_sessions_keep_commands_as_cards() {
-    for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
-        let req = request(Some("execute"), &[], json!({"command": "ls"}));
-        assert!(asks(&decide_plan(&req, mode)), "{mode:?}");
+fn plan_sessions_keep_other_kinds_as_cards() {
+    for kind in ["execute", "fetch", "other", "think"] {
+        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            let req = request(Some(kind), &[], json!({"command": "ls"}));
+            assert!(asks(&decide_plan(&req, mode)), "{mode:?} {kind}");
+        }
     }
 }
 

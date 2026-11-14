@@ -8,7 +8,8 @@ use crate::util::json_text;
 
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
-const EDIT_KIND: &str = "edit";
+pub(crate) const PERMISSIONS_KIND: &str = "permissions";
+const DENIED_IN_PLAN_KINDS: &[&str] = &["edit", "delete", "move", "switch_mode", PERMISSIONS_KIND];
 pub(crate) const ALLOW_ONCE: &str = "allow_once";
 pub(crate) const ALLOW_ALWAYS: &str = "allow_always";
 pub(crate) const REJECT_ONCE: &str = "reject_once";
@@ -315,7 +316,7 @@ fn option_of_kind(ask: &PermissionAsk, kind: &str) -> Option<String> {
 }
 
 fn denied_in_plan(ask: &PermissionAsk) -> Option<String> {
-    if ask.kind == EDIT_KIND {
+    if DENIED_IN_PLAN_KINDS.contains(&ask.kind.as_str()) {
         option_of_kind(ask, REJECT_ONCE)
     } else {
         None

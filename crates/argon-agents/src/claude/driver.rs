@@ -43,6 +43,8 @@ const STREAM_ARGS: [&str; 13] = [
     "user",
     "--strict-mcp-config",
 ];
+const DISALLOWED_TOOLS_FLAG: &str = "--disallowedTools";
+const PLAN_DISALLOWED_TOOLS: &str = "Edit,Write,MultiEdit,NotebookEdit";
 const SESSION_ID_FLAG: &str = "--session-id";
 const RESUME_FLAG: &str = "--resume";
 const MODEL_FLAG: &str = "--model";
@@ -53,6 +55,7 @@ const STDERR_GRACE: Duration = Duration::from_secs(2);
 const ALLOW_ONCE: &str = "allow_once";
 const ALLOW_ALWAYS: &str = "allow_always";
 const DENIED: &str = "Negado no Argon.";
+const PLAN_DENIED: &str = "Agent Plan é somente leitura: não edite arquivos.";
 const CANCELLED: &str = "Cancelado no Argon.";
 const END_TURN: &str = "end_turn";
 const CANCELLED_REASON: &str = "cancelled";
@@ -74,9 +77,15 @@ enum Start<'a> {
     Resume(&'a str),
 }
 
-fn launch_args(base: &[String], start: Start<'_>, model: &str) -> Vec<String> {
+fn launch_args(base: &[String], start: Start<'_>, model: &str, kind: SessionKind) -> Vec<String> {
     let mut args = base.to_vec();
     args.extend(STREAM_ARGS.map(str::to_owned));
+    if kind == SessionKind::Plan {
+        args.extend([
+            DISALLOWED_TOOLS_FLAG.to_owned(),
+            PLAN_DISALLOWED_TOOLS.to_owned(),
+        ]);
+    }
     let (flag, id) = match start {
         Start::New(id) => (SESSION_ID_FLAG, id),
         Start::Resume(id) => (RESUME_FLAG, id),
@@ -128,6 +137,13 @@ fn auto_allowed(
         PermissionDecision::Allow { .. } => true,
         PermissionDecision::Deny { .. } => false,
         PermissionDecision::Ask(_) => always.contains(tool_name) && session_grant_applies(ask, cwd),
+    }
+}
+
+fn denial_message(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Plan => PLAN_DENIED,
+        SessionKind::Review => DENIED,
     }
 }
 
@@ -213,22 +229,16 @@ impl Claude {
         spec: &AgentSpec,
         cwd: &Path,
         start: Start<'_>,
-        model: &str,
         tail: Arc<StderrTail>,
         generation: u64,
         outputs: &mpsc::UnboundedSender<Tagged>,
     ) -> Result<Claude> {
-        let args = launch_args(&spec.args, start, model);
-        let spec = AgentSpec {
-            args,
-            ..spec.clone()
-        };
         let Started {
             child,
             stdin,
             stdout,
             stderr,
-        } = start_tracked(&spec, cwd, tail)?;
+        } = start_tracked(spec, cwd, tail)?;
         spawn_reader(stdout, generation, outputs.clone());
         Ok(Claude {
             child,
@@ -374,11 +384,19 @@ impl Session {
         };
         self.tail.clear();
         self.generation += 1;
+        let spec = AgentSpec {
+            args: launch_args(
+                &self.spec.args,
+                start,
+                &self.launch_model,
+                self.shared.kind(),
+            ),
+            ..self.spec.clone()
+        };
         self.claude = Some(Claude::spawn(
-            &self.spec,
+            &spec,
             &self.cwd,
             start,
-            &self.launch_model,
             Arc::clone(&self.tail),
             self.generation,
             &self.outputs,
@@ -586,7 +604,7 @@ impl Session {
             PermissionAnswer::Selected(option) if option == ALLOW_ONCE => {
                 allow(&request_id, &ask.input)
             }
-            PermissionAnswer::Selected(_) => deny(&request_id, DENIED),
+            PermissionAnswer::Selected(_) => deny(&request_id, denial_message(self.shared.kind())),
             PermissionAnswer::Cancelled => deny(&request_id, CANCELLED),
         };
         self.send(line);

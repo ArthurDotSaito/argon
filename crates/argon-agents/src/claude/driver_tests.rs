@@ -68,7 +68,12 @@ fn granted(tools: &[&str]) -> HashSet<String> {
 
 #[test]
 fn new_session_args_pin_the_session_id_and_model() {
-    let args = launch_args(&strings(&["--debug"]), Start::New(ID), "sonnet");
+    let args = launch_args(
+        &strings(&["--debug"]),
+        Start::New(ID),
+        "sonnet",
+        SessionKind::Review,
+    );
 
     let mut expected = strings(&["--debug"]);
     expected.extend(stream_args());
@@ -78,7 +83,7 @@ fn new_session_args_pin_the_session_id_and_model() {
 
 #[test]
 fn resume_args_use_the_resume_flag() {
-    let args = launch_args(&[], Start::Resume(ID), "opus");
+    let args = launch_args(&[], Start::Resume(ID), "opus", SessionKind::Review);
 
     let mut expected = stream_args();
     expected.extend(strings(&["--resume", ID, "--model", "opus"]));
@@ -86,8 +91,35 @@ fn resume_args_use_the_resume_flag() {
 }
 
 #[test]
+fn plan_args_forbid_the_write_tools_and_review_args_do_not() {
+    let plan = launch_args(&[], Start::New(ID), "", SessionKind::Plan);
+    let review = launch_args(&[], Start::New(ID), "", SessionKind::Review);
+
+    let mut expected = stream_args();
+    expected.extend(strings(&[
+        "--disallowedTools",
+        "Edit,Write,MultiEdit,NotebookEdit",
+        "--session-id",
+        ID,
+    ]));
+    assert_eq!(plan, expected);
+    assert!(!review.contains(&"--disallowedTools".to_owned()));
+    let resumed = launch_args(&[], Start::Resume(ID), "", SessionKind::Plan);
+    assert!(resumed.contains(&"--disallowedTools".to_owned()));
+}
+
+#[test]
+fn only_plan_sessions_use_the_read_only_refusal_message() {
+    assert_eq!(denial_message(SessionKind::Review), "Negado no Argon.");
+    assert_eq!(
+        denial_message(SessionKind::Plan),
+        "Agent Plan é somente leitura: não edite arquivos."
+    );
+}
+
+#[test]
 fn args_ignore_worktree_settings_and_mcp_config() {
-    let args = launch_args(&[], Start::New(ID), "");
+    let args = launch_args(&[], Start::New(ID), "", SessionKind::Review);
 
     let sources = args.iter().position(|arg| arg == "--setting-sources");
     assert_eq!(sources.map(|index| args[index + 1].as_str()), Some("user"));
@@ -96,7 +128,7 @@ fn args_ignore_worktree_settings_and_mcp_config() {
 
 #[test]
 fn args_pin_the_default_permission_mode() {
-    let args = launch_args(&[], Start::Resume(ID), "");
+    let args = launch_args(&[], Start::Resume(ID), "", SessionKind::Review);
 
     let mode = args.iter().position(|arg| arg == "--permission-mode");
     assert_eq!(mode.map(|index| args[index + 1].as_str()), Some("default"));
@@ -105,7 +137,7 @@ fn args_pin_the_default_permission_mode() {
 #[test]
 fn default_or_empty_model_omits_the_model_flag() {
     for model in ["default", ""] {
-        let args = launch_args(&[], Start::New(ID), model);
+        let args = launch_args(&[], Start::New(ID), model, SessionKind::Review);
 
         assert!(!args.contains(&"--model".to_owned()), "{model}");
         assert_eq!(args.last().map(String::as_str), Some(ID));

@@ -63,6 +63,7 @@ fn config(
         subject,
         kind,
         base_sha: base_sha.map(str::to_owned),
+        denial_ends_turn: false,
         cwd: PathBuf::from("repo"),
         nonce: NONCE.into(),
         allowed_files: vec!["src/lib.rs".into()],
@@ -494,6 +495,45 @@ async fn plan_session_answers_edits_with_the_reject_option_and_keeps_commands_as
     let (snapshot, _) = shared.subscribe();
     assert_eq!(snapshot.pending_permissions.len(), 1);
     assert_eq!(snapshot.pending_permissions[0].kind, "execute");
+}
+
+async fn denial_notice(denial_ends_turn: bool) -> Vec<AgentEvent> {
+    let writer = writer();
+    let shared = Shared::new(
+        SharedConfig {
+            denial_ends_turn,
+            ..config(
+                PrKey::new("github.com", "PR_1"),
+                writer,
+                SessionKind::Plan,
+                Some("abc"),
+            )
+        },
+        PermissionMode::Supervised,
+        broadcast::channel(64).0,
+    );
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    let (_, mut events) = shared.subscribe();
+    let (reply, _) = recording_reply();
+    shared.on_permission(ask("delete", &["repo/src/lib.rs"]), reply);
+    drained(&mut events)
+}
+
+#[tokio::test]
+async fn plan_denial_is_announced_in_the_session() {
+    assert_eq!(
+        denial_notice(false).await,
+        [AgentEvent::Error(
+            "Edição negada: Agent Plan é somente leitura.".into()
+        )]
+    );
+    assert_eq!(
+        denial_notice(true).await,
+        [AgentEvent::Error(
+            "Edição negada: Agent Plan é somente leitura. Mande outra mensagem para continuar."
+                .into()
+        )]
+    );
 }
 
 #[tokio::test]

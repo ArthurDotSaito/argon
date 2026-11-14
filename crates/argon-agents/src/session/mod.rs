@@ -33,8 +33,8 @@ pub(crate) use failure::{STDERR_LINES, explain_failure, with_stderr};
 #[cfg(test)]
 pub(crate) use permissions::prompt_title;
 pub(crate) use permissions::{
-    ALLOW_ALWAYS, ALLOW_ONCE, PermissionAnswer, PermissionReply, REJECT_ONCE, input_paths,
-    native_options_for, native_options_with_session, session_grant_applies,
+    ALLOW_ALWAYS, ALLOW_ONCE, PERMISSIONS_KIND, PermissionAnswer, PermissionReply, REJECT_ONCE,
+    input_paths, native_options_for, native_options_with_session, session_grant_applies,
 };
 pub use permissions::{
     PermissionAsk, PermissionDecision, PermissionPrompt, decide as decide_permission,

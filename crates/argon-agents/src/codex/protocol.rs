@@ -6,8 +6,8 @@ use serde_json::{Map, Value, json};
 
 use crate::registry::ModelInfo;
 use crate::session::{
-    ALLOW_ALWAYS, ALLOW_ONCE, AgentEvent, PermissionAnswer, PermissionAsk, PermissionOption,
-    REJECT_ONCE, ToolStatus, native_options_for, native_options_with_session,
+    ALLOW_ALWAYS, ALLOW_ONCE, AgentEvent, PERMISSIONS_KIND, PermissionAnswer, PermissionAsk,
+    PermissionOption, REJECT_ONCE, ToolStatus, native_options_for, native_options_with_session,
 };
 use crate::util::json_text;
 
@@ -740,10 +740,10 @@ fn permissions_approval(method: &str, params: &Value) -> CodexRequest {
     };
     ask(
         approval_item_id(params),
-        "other",
+        PERMISSIONS_KIND,
         with_reason(title, params),
         Vec::new(),
-        native_options_for("other"),
+        native_options_for(PERMISSIONS_KIND),
     )
 }
 

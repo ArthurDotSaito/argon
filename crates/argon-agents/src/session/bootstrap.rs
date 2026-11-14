@@ -14,6 +14,7 @@ use super::{
     SessionOptions,
 };
 use crate::AgentEvent;
+use crate::Transport;
 use crate::registry::{AgentSpec, ModelInfo};
 
 const EVENT_CAPACITY: usize = 4096;
@@ -145,6 +146,7 @@ pub(super) async fn launch(
             subject: ctx.pr.clone(),
             kind: ctx.kind,
             base_sha: ctx.base_sha.clone(),
+            denial_ends_turn: spec.transport == Transport::OpencodeServe,
             cwd: ctx.cwd.clone(),
             nonce: ctx.nonce.clone(),
             allowed_files: ctx.allowed_files.clone(),
@@ -542,6 +544,28 @@ mod tests {
             drop(writer);
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    #[tokio::test]
+    async fn plan_sessions_refuse_to_leave_supervised() {
+        let (dir, writer) = temp_store("plan-refuse");
+        let agent = launch_replying(&dir, &writer, None).await;
+
+        for mode in [PermissionMode::AcceptEdits, PermissionMode::FullAccess] {
+            let refused = agent.set_permission_mode(mode).await;
+            assert!(
+                matches!(&refused, Err(SessionError::SetPermissionMode { mode: shown, .. })
+                    if shown == mode.as_str()),
+                "{mode:?}: {refused:?}"
+            );
+        }
+        assert_eq!(
+            agent.shared.subscribe().0.permission_mode,
+            PermissionMode::Supervised
+        );
+        agent.shutdown().await;
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
