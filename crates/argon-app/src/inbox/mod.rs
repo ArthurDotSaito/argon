@@ -1,3 +1,4 @@
+mod browse;
 mod filter;
 mod inbox_view;
 mod items;

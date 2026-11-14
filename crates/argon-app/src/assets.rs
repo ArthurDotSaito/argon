@@ -29,6 +29,7 @@ gpui_kit::assets::icon_assets!(
         Hand,
         Lightbulb,
         Link,
+        List,
         ListChecks,
         ListTree,
         Lock,

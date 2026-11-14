@@ -11,6 +11,7 @@ pub enum InboxRow {
     Header { title: SharedString, count: usize },
     Item { position: usize },
     LoadMore,
+    BrowseMore,
 }
 
 #[derive(Default)]

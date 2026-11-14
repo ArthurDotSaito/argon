@@ -2,19 +2,22 @@ use std::time::Duration;
 
 use chrono::Utc;
 use gpui_kit::assets::IconName as AppIconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, Side, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ListAlignment, ListOffset, ListState, ParentElement as _,
-    Render, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity, Window,
-    div, list, px,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    WeakEntity, Window, div, list, px,
 };
 
+use super::browse::IssueScope;
 use super::filter::{self, KindFilter};
 use super::labels;
 use super::model::InboxModel;
@@ -24,6 +27,7 @@ use crate::actions::{
     ArchiveSelected, ClearFilter, FocusFilter, OpenSelected, SelectNext, SelectPrevious, ToggleRead,
 };
 use crate::keymap::{INBOX_CONTEXT, INBOX_LIST_CONTEXT};
+use crate::pr::labels as pr_labels;
 use crate::theme::density;
 
 const LIST_OVERDRAW: f32 = 260.;
@@ -226,10 +230,28 @@ impl InboxPane {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let view = self.model.read(cx).view();
-        let kind_segment = filter::applies_to(view).then(|| self.kind_segment(cx));
-        let theme = cx.theme();
         let model = self.model.read(cx);
+        let view = model.view();
+        let can_browse = model.can_browse();
+        let browsing = can_browse && model.issue_scope() == IssueScope::AllOpen;
+        let kind = model.kind_filter();
+        let scope = model.issue_scope();
+        let kind_segment = filter::applies_to(view).then(|| {
+            self.segment(
+                "inbox-kind",
+                KIND_OPTIONS,
+                kind,
+                InboxModel::set_kind_filter,
+                cx,
+            )
+        });
+        let scope_menu = can_browse.then(|| self.scope_menu(scope, model.closed_window_days(), cx));
+        let refresh = browsing.then(|| self.refresh_button(cx));
+        let theme = cx.theme();
+        let count = match model.browse_list() {
+            Some(list) if list.loaded => labels::browse_count(model.visible_count(), list.total),
+            _ => model.visible_count().to_string(),
+        };
         let org_chip = model.org_filter().map(|org| {
             let inbox = self.model.downgrade();
             h_flex()
@@ -265,11 +287,9 @@ impl InboxPane {
                     .text_color(theme.foreground)
                     .child(labels::view_title(view)),
             )
-            .child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child(model.visible_count().to_string()),
-            )
+            .child(div().text_color(theme.muted_foreground).child(count))
+            .children(scope_menu)
+            .children(refresh)
             .children(org_chip)
             .children(kind_segment)
             .child(div().flex_1())
@@ -292,9 +312,15 @@ impl InboxPane {
             )
     }
 
-    fn kind_segment(&self, cx: &Context<Self>) -> Div {
+    fn segment<T: Copy + PartialEq + 'static>(
+        &self,
+        id: &'static str,
+        options: impl IntoIterator<Item = (T, &'static str, Option<AppIconName>)>,
+        current: T,
+        select: fn(&mut InboxModel, T, &mut Context<InboxModel>),
+        cx: &Context<Self>,
+    ) -> Div {
         let theme = cx.theme();
-        let current = self.model.read(cx).kind_filter();
         h_flex()
             .h(px(KIND_SEGMENT_HEIGHT))
             .flex_none()
@@ -303,13 +329,13 @@ impl InboxPane {
             .border_color(theme.border)
             .overflow_hidden()
             .children(
-                KIND_OPTIONS
+                options
                     .into_iter()
                     .enumerate()
-                    .map(|(ix, (kind, label, icon))| {
-                        let selected = kind == current;
+                    .map(|(ix, (value, label, icon))| {
+                        let selected = value == current;
                         h_flex()
-                            .id(("inbox-kind", ix))
+                            .id((id, ix))
                             .px(px(9.))
                             .gap(px(5.))
                             .items_center()
@@ -327,17 +353,86 @@ impl InboxPane {
                             .children(icon.map(|icon| Icon::new(icon).xsmall()))
                             .child(label)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.model
-                                    .update(cx, |model, cx| model.set_kind_filter(kind, cx));
+                                this.model.update(cx, |model, cx| select(model, value, cx));
                                 this.focus_handle.focus(window, cx);
                             }))
                     }),
             )
     }
 
+    fn scope_menu(
+        &self,
+        scope: IssueScope,
+        window_days: i64,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let pane = cx.weak_entity();
+        Button::new("inbox-scope-menu")
+            .label(labels::scope_menu_label(scope))
+            .child(Icon::new(IconName::ChevronDown).xsmall())
+            .xsmall()
+            .ghost()
+            .text_color(cx.theme().muted_foreground)
+            .dropdown_menu(move |menu, _, _| {
+                menu.check_side(Side::Right)
+                    .item(scope_item(
+                        &pane,
+                        IssueScope::Recent,
+                        scope,
+                        AppIconName::Clock,
+                        labels::SCOPE_RECENT,
+                        labels::scope_recent_hint(window_days),
+                    ))
+                    .item(scope_item(
+                        &pane,
+                        IssueScope::AllOpen,
+                        scope,
+                        AppIconName::List,
+                        labels::SCOPE_ALL_OPEN,
+                        labels::SCOPE_ALL_OPEN_HINT.to_string(),
+                    ))
+            })
+    }
+
+    fn refresh_button(&self, cx: &Context<Self>) -> Button {
+        Button::new("inbox-browse-refresh")
+            .icon(Icon::new(AppIconName::RefreshCw))
+            .xsmall()
+            .ghost()
+            .loading(self.model.read(cx).is_browse_loading())
+            .tooltip(pr_labels::REFRESH)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.model.update(cx, |model, cx| model.browse_refresh(cx));
+                this.focus_handle.focus(window, cx);
+            }))
+    }
+
+    fn browse_banner(&self, error: SharedString, cx: &Context<Self>) -> Div {
+        banner(cx)
+            .child(div().flex_1().min_w_0().truncate().child(error))
+            .child(
+                Button::new("inbox-browse-retry")
+                    .label(pr_labels::RETRY)
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.model.update(cx, |model, cx| model.browse_retry(cx));
+                        this.focus_handle.focus(window, cx);
+                    })),
+            )
+    }
+
     fn body(&self, cx: &mut Context<Self>) -> AnyElement {
         let model = self.model.read(cx);
-        let message = if !model.is_loaded() && model.error().is_none() {
+        let message = if let Some(list) = model.browse_list() {
+            (model.rows().is_empty() && list.error.is_none()).then(|| {
+                if list.loaded {
+                    labels::empty_browse(model.has_query())
+                } else {
+                    labels::LOADING
+                }
+            })
+        } else if !model.is_loaded() && model.error().is_none() {
             Some(labels::LOADING)
         } else if model.rows().is_empty() && model.error().is_none() {
             Some(if model.has_query() {
@@ -400,18 +495,73 @@ fn render_list_row(
                 .into_any_element()
         }
         Some(InboxRow::LoadMore) => {
-            let target = inbox.downgrade();
-            row::load_more(
-                model.is_loading_more(),
-                move |_, _, cx| {
-                    _ = target.update(cx, |model, cx| model.load_more(cx));
-                },
-                cx,
-            )
-            .into_any_element()
+            more_row(inbox, model.is_loading_more(), InboxModel::load_more, cx)
         }
+        Some(InboxRow::BrowseMore) => more_row(
+            inbox,
+            model.is_browse_loading(),
+            InboxModel::browse_more,
+            cx,
+        ),
         None => div().into_any_element(),
     }
+}
+
+fn more_row(
+    inbox: &Entity<InboxModel>,
+    loading: bool,
+    load: fn(&mut InboxModel, &mut Context<InboxModel>),
+    cx: &App,
+) -> AnyElement {
+    let target = inbox.downgrade();
+    row::load_more(
+        loading,
+        move |_, _, cx| {
+            _ = target.update(cx, load);
+        },
+        cx,
+    )
+    .into_any_element()
+}
+
+fn scope_item(
+    pane: &WeakEntity<InboxPane>,
+    target: IssueScope,
+    current: IssueScope,
+    icon: AppIconName,
+    title: &'static str,
+    hint: String,
+) -> PopupMenuItem {
+    let pane = pane.clone();
+    PopupMenuItem::element(move |_, cx| {
+        v_flex().child(title).child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(hint.clone()),
+        )
+    })
+    .icon(Icon::new(icon))
+    .checked(target == current)
+    .on_click(move |_, window, cx| {
+        _ = pane.update(cx, |this, cx| {
+            this.model
+                .update(cx, |model, cx| model.set_issue_scope(target, cx));
+            this.focus_handle.focus(window, cx);
+        });
+    })
+}
+
+fn banner(cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .px_3()
+        .py_1()
+        .gap_2()
+        .items_center()
+        .text_xs()
+        .bg(theme.danger.opacity(0.15))
+        .text_color(theme.danger)
 }
 
 impl Focusable for InboxPane {
@@ -422,24 +572,20 @@ impl Focusable for InboxPane {
 
 impl Render for InboxPane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let model = self.model.read(cx);
+        let error = model.error().cloned();
+        let browse_error = model.browse_list().and_then(|list| list.error.clone());
+        let error_banner = error.map(|error| banner(cx).child(error));
+        let browse_banner = browse_error.map(|error| self.browse_banner(error, cx));
         let theme = cx.theme();
-        let error = self.model.read(cx).error().cloned();
-        let banner = error.map(|error| {
-            div()
-                .px_3()
-                .py_1()
-                .text_xs()
-                .bg(theme.danger.opacity(0.15))
-                .text_color(theme.danger)
-                .child(error)
-        });
         v_flex()
             .key_context(INBOX_CONTEXT)
             .size_full()
             .bg(theme.background)
             .on_action(cx.listener(Self::on_clear_filter))
             .child(self.header(cx))
-            .children(banner)
+            .children(error_banner)
+            .children(browse_banner)
             .child(
                 v_flex()
                     .key_context(INBOX_LIST_CONTEXT)
