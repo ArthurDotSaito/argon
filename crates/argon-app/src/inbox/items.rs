@@ -87,6 +87,10 @@ impl Subject {
         }
     }
 
+    pub fn has_key(&self, key: &PrKey) -> bool {
+        self.node_id() == key.id.0 && self.host() == key.host
+    }
+
     fn node_id(&self) -> &str {
         match self {
             Self::Pr(pr) => &pr.id.0,
@@ -119,7 +123,7 @@ pub struct InboxItem {
 }
 
 impl InboxItem {
-    fn new(subject: Subject, state: LocalState, context: &LoadContext) -> Self {
+    pub(super) fn new(subject: Subject, state: LocalState, context: &LoadContext) -> Self {
         let me = context
             .logins
             .get(&subject.host().to_lowercase())
@@ -171,6 +175,14 @@ impl OrgKey {
             owner: owner.to_lowercase(),
         }
     }
+
+    pub(super) fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub(super) fn owner(&self) -> &str {
+        &self.owner
+    }
 }
 
 pub struct OrgEntry {
@@ -211,12 +223,7 @@ pub(super) fn load_items(
         .chain(issues)
         .filter(|(_, state)| !state.archived)
         .collect();
-    for viewer in store.viewers()? {
-        context
-            .logins
-            .entry(viewer.host.to_lowercase())
-            .or_insert(viewer.login);
-    }
+    add_viewer_logins(store, context)?;
     let mut items: Vec<InboxItem> = subjects
         .into_iter()
         .map(|(subject, state)| InboxItem::new(subject, state, context))
@@ -229,4 +236,17 @@ pub(super) fn load_items(
             .then_with(|| a.node_id().cmp(b.node_id()))
     });
     Ok(items)
+}
+
+pub(super) fn add_viewer_logins(
+    store: &Store,
+    context: &mut LoadContext,
+) -> argon_store::Result<()> {
+    for viewer in store.viewers()? {
+        context
+            .logins
+            .entry(viewer.host.to_lowercase())
+            .or_insert(viewer.login);
+    }
+    Ok(())
 }

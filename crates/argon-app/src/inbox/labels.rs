@@ -89,6 +89,10 @@ pub fn load_failed(error: &str) -> String {
     format!("Falha ao carregar a inbox: {error}")
 }
 
+pub fn browse_failed(error: &str) -> String {
+    format!("Falha ao buscar as issues abertas: {error}")
+}
+
 pub fn action_failed(error: &str) -> String {
     format!("Falha ao gravar no banco local: {error}")
 }
