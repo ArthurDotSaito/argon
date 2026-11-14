@@ -1,6 +1,6 @@
 # Argon
 
-Aplicativo desktop nativo (Rust + GPUI Kit) que mostra os Pull Requests do GitHub como uma caixa de e-mail.
+Aplicativo desktop nativo (Rust + GPUI Kit) que mostra os Pull Requests e as issues do GitHub como uma caixa de e-mail.
 
 ## Pré-requisitos
 
@@ -16,7 +16,7 @@ cargo run -p argon-app
 
 ## Agentes
 
-O Argon abre uma sessão de revisão por agente de código instalado na máquina. Cada agente precisa do CLI correspondente instalado e autenticado; as versões abaixo são as validadas nesta branch.
+O Argon abre uma sessão de revisão por agente de código instalado na máquina, pelo botão **Agent Review** no PR. Cada agente precisa do CLI correspondente instalado e autenticado; as versões abaixo são as validadas nesta branch.
 
 | Agente | Protocolo | CLI exigido | Versão validada |
 | --- | --- | --- | --- |
@@ -50,6 +50,16 @@ Modos de permissão, por agente:
 - **Acesso total**: aprova tudo sem mostrar o card. O agente lê código de PR de terceiros, então use só se aceitar o risco. No Codex exige a sandbox do Windows pronta; sem ela a sessão abre em Supervisionado. Sair do Acesso total no meio de um turno do Codex interrompe o turno e encerra o processo do Codex, com os processos em segundo plano que ele abriu; a próxima mensagem retoma a conversa já no modo mais restrito.
 
 "Permitir nesta sessão" vale só para a sessão aberta, fica em memória (não é gravado em disco) e só vale para leituras, buscas e edições dentro da worktree da revisão. A exceção são os comandos do Codex, descritos acima.
+
+### Agent Plan
+
+Na aba da issue, o botão **Agent Plan** (também na paleta e no atalho `a`) abre o mesmo diálogo do Agent Review, com agente, modelo e um template de plano. O agente lê a issue e o código numa worktree da branch padrão do repositório e propõe um plano de solução.
+
+- **Somente leitura**: edição, apagar ou mover arquivo, troca de modo e pedido de permissão extra são negados sem card. Comandos pedem card. O modo fica fixo em Supervisionado.
+- **Rascunho**: o plano aparece num cartão editável na aba da sessão e num aviso na aba da issue. Nada vai para o GitHub sem o clique em "Publicar na issue".
+- **Publicação**: cada publicação é um comentário novo na issue, com um rodapé que diz que o plano saiu do Agent Plan, com qual agente e modelo, e quem revisou. O rascunho publicado fica travado; uma versão nova do agente vira outro rascunho.
+
+Limitação: as regras `allow` do próprio usuário em `~/.codex/rules` e as regras `Bash(...)` em `~/.claude/settings.json` continuam valendo na sessão de plano. Os comandos que elas liberam rodam sem card e podem escrever na worktree.
 
 ### Uso do plano
 
@@ -86,6 +96,8 @@ Os formatos dos protocolos nativos foram adaptados de [albertofa/cw-code](https:
 O instalador (`argon_<versão>_x64-setup.exe`) fica na página de Releases do repositório. Ele instala por usuário, sem pedir administrador, em `%LOCALAPPDATA%\Programs\Argon`, cria o atalho "Argon" no menu Iniciar e registra o desinstalador em "Aplicativos instalados". O atalho carrega o identificador `br.com.nuria.argon`, que é o que faz as notificações do Windows aparecerem como "Argon".
 
 Os dados do usuário (`%APPDATA%\Argon` e `%LOCALAPPDATA%\Argon`) não são apagados ao desinstalar.
+
+Nota de atualização: depois de abrir a versão com issues e Agent Plan, voltar para uma versão anterior (v0.1.5 ou antes) deixa o app antigo sem conseguir abrir o banco local. Ele mostra a inbox vazia até você atualizar de novo; nenhum dado se perde.
 
 Gerar o instalador localmente:
 
