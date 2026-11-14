@@ -89,7 +89,7 @@ fn comment_ref(payload: Option<AddCommentPayload>) -> Result<CommentRef> {
     let node = payload
         .comment_edge
         .and_then(|edge| edge.node)
-        .ok_or_else(|| GithubError::GraphQl(vec!["addComment returned no comment".to_string()]))?;
+        .ok_or_else(|| GithubError::Unconfirmed("addComment".to_string()))?;
     Ok(CommentRef {
         id: node.id,
         url: node.url,
@@ -274,20 +274,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn issue_mutation_envelopes_without_payload_are_errors() {
-        let close: Envelope<CloseIssueData> =
-            serde_json::from_str(r#"{ "data": { "closeIssue": null } }"#).unwrap();
-        let data = close.into_data(Utc::now()).unwrap().data;
-        assert!(require_payload(data.close_issue, "closeIssue").is_err());
-
-        let assign: Envelope<AddAssigneesData> = serde_json::from_str(
-            r#"{ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }"#,
+    fn closed_issue(json: &str) -> Result<()> {
+        let envelope: Envelope<CloseIssueData> = serde_json::from_str(json).unwrap();
+        require_payload(
+            envelope.into_data(Utc::now())?.data.close_issue,
+            "closeIssue",
         )
-        .unwrap();
-        let data = assign.into_data(Utc::now()).unwrap().data;
+    }
+
+    fn added_assignees(json: &str) -> Result<()> {
+        let envelope: Envelope<AddAssigneesData> = serde_json::from_str(json).unwrap();
+        require_payload(
+            envelope
+                .into_data(Utc::now())?
+                .data
+                .add_assignees_to_assignable,
+            "addAssigneesToAssignable",
+        )
+    }
+
+    #[test]
+    fn close_issue_without_payload_is_an_error() {
+        assert!(matches!(
+            closed_issue(r#"{ "data": { "closeIssue": null } }"#),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn close_issue_with_payload_is_ok() {
         assert!(
-            require_payload(data.add_assignees_to_assignable, "addAssigneesToAssignable").is_ok()
+            closed_issue(r#"{ "data": { "closeIssue": { "clientMutationId": null } } }"#).is_ok()
+        );
+    }
+
+    #[test]
+    fn add_assignees_without_payload_is_an_error() {
+        assert!(matches!(
+            added_assignees(r#"{ "data": { "addAssigneesToAssignable": null } }"#),
+            Err(GithubError::GraphQl(_))
+        ));
+    }
+
+    #[test]
+    fn add_assignees_with_payload_is_ok() {
+        assert!(
+            added_assignees(
+                r#"{ "data": { "addAssigneesToAssignable": { "clientMutationId": null } } }"#
+            )
+            .is_ok()
         );
     }
 
@@ -337,16 +372,23 @@ mod tests {
 
     #[test]
     fn add_comment_null_payload_is_an_error() {
-        assert!(added_comment(r#"{ "data": { "addComment": null } }"#).is_err());
+        assert!(matches!(
+            added_comment(r#"{ "data": { "addComment": null } }"#),
+            Err(GithubError::GraphQl(_))
+        ));
     }
 
     #[test]
-    fn add_comment_without_comment_edge_is_an_error() {
-        assert!(added_comment(r#"{ "data": { "addComment": { "commentEdge": null } } }"#).is_err());
-        assert!(
-            added_comment(r#"{ "data": { "addComment": { "commentEdge": { "node": null } } } }"#)
-                .is_err()
-        );
+    fn add_comment_payload_without_comment_edge_is_unconfirmed() {
+        for json in [
+            r#"{ "data": { "addComment": { "commentEdge": null } } }"#,
+            r#"{ "data": { "addComment": { "commentEdge": { "node": null } } } }"#,
+        ] {
+            assert!(
+                matches!(added_comment(json), Err(GithubError::Unconfirmed(_))),
+                "{json}"
+            );
+        }
     }
 
     #[test]

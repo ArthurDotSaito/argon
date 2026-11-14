@@ -313,6 +313,8 @@ pub(crate) struct WireIssueComment {
     pub(crate) author: Option<Actor>,
     pub(crate) body: String,
     pub(crate) created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
 }
 
 #[derive(Deserialize)]

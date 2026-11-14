@@ -43,7 +43,8 @@
             "id": "IC_kwDOOrbita11",
             "author": { "login": "lfarias" },
             "body": "I can take a look. cc @mcouto",
-            "createdAt": "2026-10-20T09:00:00Z"
+            "createdAt": "2026-10-20T09:00:00Z",
+            "url": "https://github.com/orbita-health/atlas/issues/101#issuecomment-11"
           },
           {
             "__typename": "AssignedEvent",

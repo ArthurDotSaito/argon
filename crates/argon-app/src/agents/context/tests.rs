@@ -111,6 +111,7 @@ fn previous_reviews_include_state_body_and_code_comments() {
             author: "ana".into(),
             body: "comentário solto".into(),
             created_at: fixtures::now(),
+            url: None,
         },
     ]);
     let text = previous_reviews(&detail);

@@ -14,7 +14,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
-use super::comment_check::{SentComment, is_transport_error};
+use super::comment_check::{SentComment, may_have_landed};
 use super::labels;
 use super::timeline_item::{self, Entry, MarkdownBlock, card, card_body, card_text, timeline_item};
 use crate::services::AppServices;
@@ -144,7 +144,7 @@ impl Composer {
                     Err(error) => {
                         tracing::warn!(%error, ?kind, "failed to add comment");
                         this.error = Some(labels::comment_failed(&error.to_string()).into());
-                        if let Some(author) = author.filter(|_| is_transport_error(&error)) {
+                        if let Some(author) = author.filter(|_| may_have_landed(&error)) {
                             this.unconfirmed = Some(SentComment::new(author, sent_body));
                             cx.emit(ComposerEvent::Recheck);
                         }

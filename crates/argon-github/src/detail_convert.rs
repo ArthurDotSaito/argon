@@ -256,6 +256,7 @@ fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
             author: actor_login(comment.author),
             body: comment.body,
             created_at: comment.created_at,
+            url: comment.url,
         },
         WireTimelineItem::PullRequestReview(review) => TimelineItem::Review {
             id: review.id,
@@ -442,6 +443,7 @@ mod tests {
                 author: "mcouto".into(),
                 body: "Ready for a first pass.".into(),
                 created_at: at("2026-10-27T13:10:00Z"),
+                url: None,
             }
         );
         assert_eq!(
@@ -849,6 +851,9 @@ mod tests {
                 author: "lfarias".into(),
                 body: "I can take a look. cc @mcouto".into(),
                 created_at: at("2026-10-20T09:00:00Z"),
+                url: Some(
+                    "https://github.com/orbita-health/atlas/issues/101#issuecomment-11".into()
+                ),
             }
         );
         assert_eq!(

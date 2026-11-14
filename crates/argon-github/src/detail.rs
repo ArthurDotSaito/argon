@@ -68,6 +68,7 @@ pub enum TimelineItem {
         author: String,
         body: String,
         created_at: DateTime<Utc>,
+        url: Option<String>,
     },
     Review {
         id: String,
@@ -274,6 +275,16 @@ mod tests {
             ISSUE_DETAIL_QUERY
                 .contains("linkedPullRequests: closedByPullRequestsReferences(first: 10)")
         );
+    }
+
+    #[test]
+    fn issue_detail_query_asks_for_the_comment_url() {
+        let comment = ISSUE_DETAIL_QUERY
+            .split("... on IssueComment {")
+            .nth(1)
+            .and_then(|rest| rest.split("... on").next())
+            .unwrap();
+        assert!(comment.contains("url"));
     }
 
     #[test]

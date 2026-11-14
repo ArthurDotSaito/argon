@@ -97,6 +97,7 @@ mod tests {
                 author: "bruno".into(),
                 body: "Acontece no Windows.".into(),
                 created_at: at,
+                url: None,
             },
             TimelineItem::Labeled {
                 actor: "ana".into(),
@@ -108,6 +109,7 @@ mod tests {
                 author: "carla".into(),
                 body: "Confirmo.".into(),
                 created_at: at + Duration::minutes(5),
+                url: None,
             },
         ];
         let context = plan_context(&detail(timeline), "main", "abc123");

@@ -6,6 +6,8 @@ pub enum GithubError {
     Http(#[from] reqwest::Error),
     #[error("graphql errors: {}", .0.join("; "))]
     GraphQl(Vec<String>),
+    #[error("{0} ran but did not return its result")]
+    Unconfirmed(String),
     #[error("no gh authentication for host {host}")]
     AuthMissing { host: String },
     #[error("rate limited until {reset_at}")]

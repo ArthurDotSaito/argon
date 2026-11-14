@@ -7,7 +7,7 @@ use super::ThreadModel;
 use crate::agents::panel_labels as labels;
 use crate::agents::plan_card::plan_comment_body;
 use crate::inbox::InboxModel;
-use crate::pr::{SentComment, is_transport_error};
+use crate::pr::{SentComment, may_have_landed};
 use crate::review::DraftsBus;
 use crate::services::{Services, flatten};
 use crate::workspace::Workspace;
@@ -344,7 +344,7 @@ async fn deliver(services: &Services, key: &PrKey, sent: SentComment) -> Deliver
                 issue_updated_at: None,
             });
         }
-        Err(error) if is_transport_error(&error) => error.to_string(),
+        Err(error) if may_have_landed(&error) => error.to_string(),
         Err(error) => return Delivery::Failed(error.to_string()),
     };
     tracing::warn!(%error, "plan comment may have landed; checking the issue");
@@ -359,10 +359,10 @@ async fn deliver(services: &Services, key: &PrKey, sent: SentComment) -> Deliver
             return Delivery::Unconfirmed(error);
         }
     };
-    match sent.landed_id(&detail.timeline).map(str::to_owned) {
-        Some(comment_id) => Delivery::Landed(Published {
-            comment_id,
-            comment_url: detail.issue.url.clone(),
+    match sent.landed(&detail.timeline) {
+        Some(landed) => Delivery::Landed(Published {
+            comment_id: landed.id.to_owned(),
+            comment_url: landed.url.unwrap_or(&detail.issue.url).to_owned(),
             issue_updated_at: Some(detail.issue.updated_at),
         }),
         None => Delivery::Failed(error),
