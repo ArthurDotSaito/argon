@@ -63,8 +63,12 @@ impl IssueView {
         });
         self.detail = Some(Rc::new(detail));
         self.settle_action(epoch, cx);
-        if self.read_after_epoch.is_some_and(|after| epoch >= after) {
+        let opened_now = std::mem::take(&mut self.read_on_load);
+        let read_requested = self.read_after_epoch.is_some_and(|after| epoch >= after);
+        if read_requested {
             self.read_after_epoch = None;
+        }
+        if opened_now || read_requested {
             self.mark_read(cx);
         }
         cx.notify();

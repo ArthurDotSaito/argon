@@ -18,6 +18,7 @@ use super::header::header;
 use super::labels;
 use super::tabs::IssueTab;
 use super::timeline::Timeline;
+use crate::center::ContentOrigin;
 use crate::inbox::{ISSUE_FALLBACK_TITLE, InboxModel};
 use crate::keymap::ISSUE_VIEW_CONTEXT;
 use crate::pr::{self, CONTENT_MAX_WIDTH, Composer, ComposerEvent};
@@ -43,6 +44,7 @@ pub struct IssueView {
     pub(super) applied_epoch: u64,
     pub(super) seen_updated_at: Option<DateTime<Utc>>,
     pub(super) read_after_epoch: Option<u64>,
+    pub(super) read_on_load: bool,
     pub(super) load_task: Option<Task<()>>,
     pub(super) action: ActionState,
     pub(super) action_task: Option<Task<()>>,
@@ -61,6 +63,7 @@ impl IssueView {
     pub fn new(
         key: PrKey,
         inbox: Entity<InboxModel>,
+        origin: ContentOrigin,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -95,6 +98,7 @@ impl IssueView {
             applied_epoch: 0,
             seen_updated_at,
             read_after_epoch: None,
+            read_on_load: origin == ContentOrigin::Opened,
             load_task: None,
             action: ActionState::Idle,
             action_task: None,

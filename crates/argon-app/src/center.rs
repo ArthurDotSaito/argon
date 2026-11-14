@@ -15,7 +15,14 @@ use crate::inbox::{self, InboxModel};
 
 pub const CENTER_PANEL: &str = "argon.center";
 
-pub type CenterContentFactory = Rc<dyn Fn(&CenterItem, &mut Window, &mut App) -> CenterContent>;
+pub type CenterContentFactory =
+    Rc<dyn Fn(&CenterItem, ContentOrigin, &mut Window, &mut App) -> CenterContent>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentOrigin {
+    Opened,
+    Restored,
+}
 
 pub struct CenterContent {
     view: AnyView,
@@ -84,7 +91,25 @@ impl CenterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let content = content_factory(&item, window, cx);
+        Self::create(
+            item,
+            preview,
+            ContentOrigin::Opened,
+            content_factory,
+            window,
+            cx,
+        )
+    }
+
+    fn create(
+        item: CenterItem,
+        preview: bool,
+        origin: ContentOrigin,
+        content_factory: CenterContentFactory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let content = content_factory(&item, origin, window, cx);
         let focus_subscription = Self::watch_focus(&content, window, cx);
         let inbox_subscription = InboxModel::global(cx).map(|model| {
             cx.observe_in(&model, window, |this, _, window, cx| {
@@ -143,7 +168,14 @@ impl CenterPanel {
         let (item, preview) = state
             .map(|state| (state.item, state.preview))
             .unwrap_or((CenterItem::Inbox, false));
-        Self::new(item, preview, content_factory, window, cx)
+        Self::create(
+            item,
+            preview,
+            ContentOrigin::Restored,
+            content_factory,
+            window,
+            cx,
+        )
     }
 
     pub fn view(&self) -> &AnyView {
@@ -167,7 +199,7 @@ impl CenterPanel {
     }
 
     pub fn replace(&mut self, item: CenterItem, window: &mut Window, cx: &mut Context<Self>) {
-        self.content = (self.content_factory)(&item, window, cx);
+        self.content = (self.content_factory)(&item, ContentOrigin::Opened, window, cx);
         self._focus_subscription = Self::watch_focus(&self.content, window, cx);
         self.title = item.title(cx);
         self._catalog_subscription = Self::watch_catalog(&item, window, cx);
