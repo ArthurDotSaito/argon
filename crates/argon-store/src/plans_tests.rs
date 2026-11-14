@@ -1,5 +1,5 @@
 use argon_core::{PrKey, SessionKind};
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::params;
 
 use super::*;
@@ -20,6 +20,22 @@ fn backdate(store: &Store, id: i64) {
 
 fn record(store: &mut Store, session: &str, body: &str, sha: &str) -> PlanDraft {
     store.record_plan(HOST, ISSUE, session, body, sha).unwrap()
+}
+
+fn publish(store: &mut Store, plan: &PlanDraft, comment_id: &str, url: &str, at: DateTime<Utc>) {
+    assert!(store.reserve_plan_publish(plan.id, &plan.body, at).unwrap());
+    store
+        .complete_plan_publish(plan.id, comment_id, url)
+        .unwrap();
+}
+
+fn stored(store: &Store, id: i64) -> PlanDraft {
+    store
+        .plans_for_session("s1")
+        .unwrap()
+        .into_iter()
+        .find(|plan| plan.id == id)
+        .unwrap()
 }
 
 #[test]
@@ -82,9 +98,13 @@ fn published_draft_is_locked_and_the_next_plan_is_a_new_row() {
     let mut store = Store::open_in_memory().unwrap();
     let first = record(&mut store, "s1", "v1", "sha1");
     let at = Utc.timestamp_millis_opt(5_000).unwrap();
-    store
-        .mark_plan_published(first.id, "IC_1", "https://github.com/o/r/issues/1#c1", at)
-        .unwrap();
+    publish(
+        &mut store,
+        &first,
+        "IC_1",
+        "https://github.com/o/r/issues/1#c1",
+        at,
+    );
 
     let error = store.edit_plan(first.id, "late edit").unwrap_err();
     assert!(matches!(error, StoreError::PlanPublished(id) if id == first.id));
@@ -113,7 +133,8 @@ fn editing_an_unknown_draft_fails() {
     let mut store = Store::open_in_memory().unwrap();
     assert!(store.edit_plan(99, "x").is_err());
     assert!(store.resolve_agent_version(99, true).is_err());
-    assert!(store.mark_plan_published(99, "c", "u", Utc::now()).is_err());
+    assert!(!store.reserve_plan_publish(99, "x", Utc::now()).unwrap());
+    assert!(store.complete_plan_publish(99, "c", "u").is_err());
 }
 
 #[test]
@@ -204,37 +225,164 @@ fn session_kind_and_base_sha_round_trip() {
 }
 
 #[test]
-fn publishing_twice_fails_and_keeps_the_first_publication() {
+fn reserving_twice_fails_and_keeps_the_first_publication() {
     let mut store = Store::open_in_memory().unwrap();
     let plan = record(&mut store, "s1", "v1", "sha1");
     let first_at = Utc.timestamp_millis_opt(5_000).unwrap();
-    store
-        .mark_plan_published(plan.id, "IC_1", "https://example.test/1", first_at)
+    publish(
+        &mut store,
+        &plan,
+        "IC_1",
+        "https://example.test/1",
+        first_at,
+    );
+
+    let again = store
+        .reserve_plan_publish(plan.id, "v1", Utc.timestamp_millis_opt(9_000).unwrap())
         .unwrap();
 
-    let error = store
-        .mark_plan_published(
-            plan.id,
-            "IC_2",
-            "https://example.test/2",
-            Utc.timestamp_millis_opt(9_000).unwrap(),
-        )
-        .unwrap_err();
-
-    assert!(matches!(error, StoreError::PlanPublished(id) if id == plan.id));
-    let kept = &store.plans_for_session("s1").unwrap()[0];
+    assert!(!again);
+    let kept = stored(&store, plan.id);
     assert_eq!(kept.published_at, Some(first_at));
     assert_eq!(kept.comment_id.as_deref(), Some("IC_1"));
     assert_eq!(kept.comment_url.as_deref(), Some("https://example.test/1"));
 }
 
 #[test]
-fn using_the_agent_version_of_a_published_draft_fails() {
+fn reservation_locks_the_draft_without_a_comment() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    let at = Utc.timestamp_millis_opt(5_000).unwrap();
+
+    assert!(store.reserve_plan_publish(plan.id, "v1", at).unwrap());
+
+    let reserved = stored(&store, plan.id);
+    assert_eq!(reserved.published_at, Some(at));
+    assert_eq!(reserved.comment_id, None);
+    assert_eq!(reserved.comment_url, None);
+    assert_eq!(reserved.updated_at, plan.updated_at);
+    let error = store.edit_plan(plan.id, "late edit").unwrap_err();
+    assert!(matches!(error, StoreError::PlanPublished(id) if id == plan.id));
+}
+
+#[test]
+fn reservation_fails_when_the_body_changed() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    record(&mut store, "s1", "v2", "sha2");
+
+    assert!(
+        !store
+            .reserve_plan_publish(plan.id, "v1", Utc::now())
+            .unwrap()
+    );
+    assert_eq!(stored(&store, plan.id).published_at, None);
+}
+
+#[test]
+fn reservation_fails_while_an_agent_version_is_pending() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    store.edit_plan(plan.id, "mine").unwrap();
+    record(&mut store, "s1", "agent v2", "sha2");
+
+    assert!(
+        !store
+            .reserve_plan_publish(plan.id, "mine", Utc::now())
+            .unwrap()
+    );
+    assert_eq!(stored(&store, plan.id).published_at, None);
+}
+
+#[test]
+fn completing_fills_the_comment_and_keeps_the_reservation_time() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    let at = Utc.timestamp_millis_opt(5_000).unwrap();
+    store.reserve_plan_publish(plan.id, "v1", at).unwrap();
+
+    store
+        .complete_plan_publish(plan.id, "IC_1", "https://example.test/1")
+        .unwrap();
+
+    let published = stored(&store, plan.id);
+    assert_eq!(published.published_at, Some(at));
+    assert_eq!(published.comment_id.as_deref(), Some("IC_1"));
+    assert_eq!(
+        published.comment_url.as_deref(),
+        Some("https://example.test/1")
+    );
+}
+
+#[test]
+fn completing_without_a_reservation_fails() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+
+    let error = store
+        .complete_plan_publish(plan.id, "IC_1", "https://example.test/1")
+        .unwrap_err();
+
+    assert!(matches!(error, StoreError::PlanNotReserved(id) if id == plan.id));
+    assert_eq!(stored(&store, plan.id).comment_id, None);
+}
+
+#[test]
+fn releasing_reopens_a_reserved_draft() {
     let mut store = Store::open_in_memory().unwrap();
     let plan = record(&mut store, "s1", "v1", "sha1");
     store
-        .mark_plan_published(plan.id, "IC_1", "u", Utc::now())
+        .reserve_plan_publish(plan.id, "v1", Utc::now())
         .unwrap();
+
+    store.release_plan_publish(plan.id).unwrap();
+
+    assert_eq!(stored(&store, plan.id).published_at, None);
+    store
+        .edit_plan(plan.id, "edited after a failed send")
+        .unwrap();
+    assert!(
+        store
+            .reserve_plan_publish(plan.id, "edited after a failed send", Utc::now())
+            .unwrap()
+    );
+}
+
+#[test]
+fn releasing_never_reopens_a_published_draft() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    let at = Utc.timestamp_millis_opt(5_000).unwrap();
+    publish(&mut store, &plan, "IC_1", "https://example.test/1", at);
+
+    store.release_plan_publish(plan.id).unwrap();
+
+    let kept = stored(&store, plan.id);
+    assert_eq!(kept.published_at, Some(at));
+    assert_eq!(kept.comment_id.as_deref(), Some("IC_1"));
+}
+
+#[test]
+fn plan_recorded_after_a_reservation_is_a_new_draft() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    store
+        .reserve_plan_publish(plan.id, "v1", Utc::now())
+        .unwrap();
+
+    let next = record(&mut store, "s1", "v2", "sha2");
+
+    assert_ne!(next.id, plan.id);
+    assert_eq!(next.body, "v2");
+    assert_eq!(next.published_at, None);
+    assert_eq!(stored(&store, plan.id).body, "v1");
+}
+
+#[test]
+fn using_the_agent_version_of_a_published_draft_fails() {
+    let mut store = Store::open_in_memory().unwrap();
+    let plan = record(&mut store, "s1", "v1", "sha1");
+    publish(&mut store, &plan, "IC_1", "u", Utc::now());
 
     let error = store.resolve_agent_version(plan.id, true).unwrap_err();
 

@@ -1,7 +1,6 @@
-use argon_core::{PrId, PrKey, SessionKind};
-use argon_github::IssueDetail;
+use argon_core::{PrKey, SessionKind};
 use argon_store::PlanDraft;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use gpui_kit::{App, Context, SharedString, Task};
 
 use super::ThreadModel;
@@ -29,10 +28,15 @@ pub struct PlanDrafts {
 struct Published {
     comment_id: String,
     comment_url: String,
-    detail: Option<IssueDetail>,
+    issue_updated_at: Option<DateTime<Utc>>,
 }
 
-fn mark_issue_read(services: &Services, key: PrKey, detail: Option<IssueDetail>, cx: &mut App) {
+fn mark_issue_read(
+    services: &Services,
+    key: PrKey,
+    updated_at: Option<DateTime<Utc>>,
+    cx: &mut App,
+) {
     let view = Workspace::global(cx)
         .and_then(|workspace| workspace.upgrade())
         .and_then(|workspace| workspace.read(cx).issue_view(&key, cx));
@@ -43,8 +47,7 @@ fn mark_issue_read(services: &Services, key: PrKey, detail: Option<IssueDetail>,
     let Some(inbox) = InboxModel::global(cx) else {
         return;
     };
-    if let Some(detail) = detail {
-        let updated_at = detail.issue.updated_at;
+    if let Some(updated_at) = updated_at {
         inbox.update(cx, |inbox, cx| inbox.mark_seen(&key, updated_at, cx));
         services.sync_now();
         return;
@@ -135,18 +138,26 @@ impl ThreadModel {
             return Task::ready(Err(labels::SERVICES_UNAVAILABLE.into()));
         };
         cx.spawn(async move |this, cx| {
+            let saved_body = body.clone();
             let saved = flatten(
                 services
                     .store()
-                    .call(move |store| store.edit_plan(id, &body))
+                    .call(move |store| store.edit_plan(id, &saved_body))
                     .await,
             );
             match saved {
                 Ok(()) => {
                     _ = this.update(cx, |this, cx| {
+                        if let Some(draft) =
+                            this.plans.drafts.iter_mut().find(|draft| draft.id == id)
+                        {
+                            draft.body = body;
+                            draft.edited = true;
+                        }
                         if this.plan_error(id).is_some() {
                             this.plans.error = None;
                         }
+                        cx.notify();
                         this.plans_changed(cx);
                     });
                     Ok(())
@@ -220,7 +231,7 @@ impl ThreadModel {
             );
             return;
         };
-        let body = plan_comment_body(
+        let comment = plan_comment_body(
             &draft.body,
             self.info.agent_label,
             &self.info.model_label,
@@ -230,79 +241,130 @@ impl ThreadModel {
         self.plans.error = None;
         cx.notify();
         let key = PrKey::new(&draft.host, &draft.issue_id);
-        let sent = SentComment::new(login, body.clone());
-        let issue = PrId(draft.issue_id.clone());
-        let send = services.spawn_github(cx, draft.host.clone(), move |client| async move {
-            client.add_comment(&issue, &body).await
-        });
+        let body_sent = draft.body;
         cx.spawn(async move |this, cx| {
-            let published = match send.await {
-                Ok(comment) => Ok(Published {
-                    comment_id: comment.id,
-                    comment_url: comment.url,
-                    detail: None,
-                }),
-                Err(error) if is_transport_error(&error) => {
-                    tracing::warn!(%error, "plan comment may have landed; checking the issue");
-                    let issue_id = key.id.clone();
-                    let check = this.update(cx, |_, cx| {
-                        services.spawn_github(cx, key.host.clone(), move |client| async move {
-                            client.issue_detail(&issue_id).await
-                        })
-                    });
-                    let detail = match check {
-                        Ok(check) => check.await.ok(),
-                        Err(_) => None,
-                    };
-                    let landed = detail.as_ref().and_then(|detail| {
-                        sent.landed_id(&detail.timeline)
-                            .map(|comment_id| (comment_id.to_owned(), detail.issue.url.clone()))
-                    });
-                    match landed {
-                        Some((comment_id, comment_url)) => Ok(Published {
-                            comment_id,
-                            comment_url,
-                            detail,
-                        }),
-                        None => Err(labels::publish_failed(&error.to_string())),
-                    }
-                }
-                Err(error) => Err(labels::publish_failed(&error.to_string())),
-            };
-            let published = match published {
-                Ok(published) => published,
-                Err(error) => {
-                    tracing::warn!(%error, "failed to publish the plan");
-                    _ = this.update(cx, |this, cx| this.fail_plan(id, error, cx));
-                    return;
-                }
-            };
-            tracing::info!(draft = id, "plan published as an issue comment");
-            let (comment_id, comment_url) =
-                (published.comment_id.clone(), published.comment_url.clone());
-            let recorded = flatten(
+            let reserved = flatten(
                 services
                     .store()
-                    .call(move |store| {
-                        store.mark_plan_published(id, &comment_id, &comment_url, Utc::now())
-                    })
+                    .call(move |store| store.reserve_plan_publish(id, &body_sent, Utc::now()))
                     .await,
             );
-            _ = this.update(cx, |this, cx| {
-                mark_issue_read(&services, key, published.detail, cx);
-                match recorded {
-                    Ok(()) => {
-                        this.plans.busy = None;
-                        cx.notify();
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "failed to record the published plan");
-                        this.fail_plan(id, labels::published_not_recorded(&error), cx);
-                    }
+            match reserved {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::info!(draft = id, "plan draft changed before publishing");
+                    _ = this.update(cx, |this, cx| {
+                        this.fail_plan(id, labels::PLAN_CHANGED.to_owned(), cx);
+                        this.reload_plans(cx);
+                    });
+                    return;
                 }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to reserve the plan draft for publishing");
+                    _ = this.update(cx, |this, cx| {
+                        this.fail_plan(id, labels::publish_failed(&error), cx)
+                    });
+                    return;
+                }
+            }
+            let sent = SentComment::new(login, comment);
+            let error = match deliver(&services, &key, sent).await {
+                Delivery::Landed(published) => {
+                    tracing::info!(draft = id, "plan published as an issue comment");
+                    let (comment_id, comment_url) =
+                        (published.comment_id.clone(), published.comment_url.clone());
+                    let recorded = flatten(
+                        services
+                            .store()
+                            .call(move |store| {
+                                store.complete_plan_publish(id, &comment_id, &comment_url)
+                            })
+                            .await,
+                    );
+                    _ = this.update(cx, |this, cx| {
+                        mark_issue_read(&services, key, published.issue_updated_at, cx);
+                        match recorded {
+                            Ok(()) => {
+                                this.plans.busy = None;
+                                cx.notify();
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to record the published plan");
+                                this.fail_plan(id, labels::published_not_recorded(&error), cx);
+                            }
+                        }
+                        this.plans_changed(cx);
+                    });
+                    return;
+                }
+                Delivery::Unconfirmed(error) => {
+                    tracing::warn!(%error, "could not confirm whether the plan was published");
+                    labels::publish_unconfirmed(&error)
+                }
+                Delivery::Failed(error) => {
+                    tracing::warn!(%error, "failed to publish the plan");
+                    let released = flatten(
+                        services
+                            .store()
+                            .call(move |store| store.release_plan_publish(id))
+                            .await,
+                    );
+                    if let Err(release_error) = released {
+                        tracing::warn!(error = %release_error, "failed to release the plan draft");
+                    }
+                    labels::publish_failed(&error)
+                }
+            };
+            _ = this.update(cx, |this, cx| {
+                this.fail_plan(id, error, cx);
                 this.plans_changed(cx);
             });
         })
         .detach();
+    }
+}
+
+enum Delivery {
+    Landed(Published),
+    Failed(String),
+    Unconfirmed(String),
+}
+
+async fn deliver(services: &Services, key: &PrKey, sent: SentComment) -> Delivery {
+    let issue = key.id.clone();
+    let body = sent.body().to_owned();
+    let send = services.spawn_github_detached(key.host.clone(), move |client| async move {
+        client.add_comment(&issue, &body).await
+    });
+    let error = match send.await {
+        Ok(comment) => {
+            return Delivery::Landed(Published {
+                comment_id: comment.id,
+                comment_url: comment.url,
+                issue_updated_at: None,
+            });
+        }
+        Err(error) if is_transport_error(&error) => error.to_string(),
+        Err(error) => return Delivery::Failed(error.to_string()),
+    };
+    tracing::warn!(%error, "plan comment may have landed; checking the issue");
+    let issue = key.id.clone();
+    let check = services.spawn_github_detached(key.host.clone(), move |client| async move {
+        client.issue_detail(&issue).await
+    });
+    let detail = match check.await {
+        Ok(detail) => detail,
+        Err(check_error) => {
+            tracing::warn!(error = %check_error, "failed to check the issue for the plan comment");
+            return Delivery::Unconfirmed(error);
+        }
+    };
+    match sent.landed_id(&detail.timeline).map(str::to_owned) {
+        Some(comment_id) => Delivery::Landed(Published {
+            comment_id,
+            comment_url: detail.issue.url.clone(),
+            issue_updated_at: Some(detail.issue.updated_at),
+        }),
+        None => Delivery::Failed(error),
     }
 }

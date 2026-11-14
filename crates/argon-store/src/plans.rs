@@ -149,22 +149,44 @@ impl Store {
         Ok(())
     }
 
-    pub fn mark_plan_published(
+    pub fn reserve_plan_publish(
+        &mut self,
+        id: i64,
+        body_sent: &str,
+        at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE plan_drafts SET published_at = ?1
+             WHERE id = ?2 AND published_at IS NULL AND body = ?3 AND agent_body IS NULL",
+            params![at.timestamp_millis(), id, body_sent],
+        )?;
+        Ok(changed == 1)
+    }
+
+    pub fn complete_plan_publish(
         &mut self,
         id: i64,
         comment_id: &str,
         comment_url: &str,
-        at: DateTime<Utc>,
     ) -> Result<()> {
         let changed = self.conn.execute(
-            "UPDATE plan_drafts
-             SET published_at = ?1, comment_id = ?2, comment_url = ?3, updated_at = ?1
-             WHERE id = ?4 AND published_at IS NULL",
-            params![at.timestamp_millis(), comment_id, comment_url, id],
+            "UPDATE plan_drafts SET comment_id = ?1, comment_url = ?2
+             WHERE id = ?3 AND published_at IS NOT NULL",
+            params![comment_id, comment_url, id],
         )?;
         if changed == 0 {
-            ensure_open(&self.conn, id)?;
+            plan_by_id(&self.conn, id)?;
+            return Err(StoreError::PlanNotReserved(id));
         }
+        Ok(())
+    }
+
+    pub fn release_plan_publish(&mut self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE plan_drafts SET published_at = NULL
+             WHERE id = ?1 AND comment_id IS NULL",
+            params![id],
+        )?;
         Ok(())
     }
 
