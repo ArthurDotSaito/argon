@@ -305,22 +305,24 @@ impl SyncLoop {
             Ok(orgs_with_more) => orgs_with_more,
             Err(outcome) => return outcome,
         };
-        let (issue_more, issue_error) =
+        let (issue_more, issue_error, mention_error) =
             match self.sync_issues(session, &pages, window, outdated).await {
                 Ok(synced) => {
                     if outdated {
                         self.record_hydration_version(host).await;
                     }
-                    (synced.orgs_with_more, synced.mention_error)
+                    (synced.orgs_with_more, None, synced.mention_error)
                 }
-                Err(error) => (Vec::new(), Some(error)),
+                Err(error) => (Vec::new(), Some(error), None),
             };
         self.worker
             .shared
             .set_orgs_with_more(host, &combine_orgs_with_more(&pr_more, &issue_more));
-        issue_error.map_or(AccountOutcome::Synced, |error| {
-            self.report_issues(host, error)
-        })
+        match (issue_error, mention_error) {
+            (Some(error), _) => self.report_issues(host, error),
+            (None, Some(error)) => report_mentions(host, error),
+            (None, None) => AccountOutcome::Synced,
+        }
     }
 
     async fn sync_orgs(
@@ -832,6 +834,23 @@ impl SyncLoop {
     }
 }
 
+fn report_mentions(host: &str, error: IssueError) -> AccountOutcome {
+    match error {
+        IssueError::Github(GithubError::RateLimited { reset_at }) => {
+            warn!(host, %reset_at, "github rate limit reached while checking issue mentions");
+            AccountOutcome::SyncedThenRateLimited(reset_at)
+        }
+        IssueError::Github(error) => {
+            warn!(host, %error, "issue mention check failed");
+            AccountOutcome::Synced
+        }
+        IssueError::Store(error) => {
+            warn!(host, %error, "issue mention check failed to read the local store");
+            AccountOutcome::Synced
+        }
+    }
+}
+
 fn hydration_outdated(stored: Option<u32>) -> bool {
     stored != Some(HYDRATION_VERSION)
 }
@@ -916,6 +935,29 @@ mod tests {
         assert!(hydration_outdated(Some(HYDRATION_VERSION + 1)));
         assert!(hydration_outdated(Some(0)));
         assert!(!hydration_outdated(Some(HYDRATION_VERSION)));
+    }
+
+    #[test]
+    fn a_failed_mention_check_still_counts_as_synced() {
+        for error in [
+            IssueError::Github(GithubError::GraphQl(vec!["boom".into()])),
+            IssueError::Store("locked".into()),
+        ] {
+            assert!(matches!(
+                report_mentions("github.com", error),
+                AccountOutcome::Synced
+            ));
+        }
+    }
+
+    #[test]
+    fn a_rate_limited_mention_check_blocks_the_host_without_failing() {
+        let reset_at = DateTime::from_timestamp(9_000, 0).unwrap();
+        let error = IssueError::Github(GithubError::RateLimited { reset_at });
+        assert!(matches!(
+            report_mentions("github.com", error),
+            AccountOutcome::SyncedThenRateLimited(at) if at == reset_at
+        ));
     }
 
     #[test]
