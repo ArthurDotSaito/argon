@@ -4,9 +4,10 @@ use chrono::Utc;
 use gpui_kit::assets::IconName as AppIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme as _, Icon, IconName, Side, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -44,10 +45,6 @@ const KIND_OPTIONS: [(KindFilter, &str, Option<AppIconName>); 3] = [
         labels::KIND_ISSUES,
         Some(AppIconName::CircleDot),
     ),
-];
-const SCOPE_OPTIONS: [(IssueScope, &str, Option<AppIconName>); 2] = [
-    (IssueScope::Recent, labels::SCOPE_RECENT, None),
-    (IssueScope::AllOpen, labels::SCOPE_ALL_OPEN, None),
 ];
 const SINGLE_CLICK_DELAY: Duration = Duration::from_millis(300);
 
@@ -248,15 +245,7 @@ impl InboxPane {
                 cx,
             )
         });
-        let scope_segment = can_browse.then(|| {
-            self.segment(
-                "inbox-scope",
-                SCOPE_OPTIONS,
-                scope,
-                InboxModel::set_issue_scope,
-                cx,
-            )
-        });
+        let scope_menu = can_browse.then(|| self.scope_menu(scope, model.closed_window_days(), cx));
         let refresh = browsing.then(|| self.refresh_button(cx));
         let theme = cx.theme();
         let count = match model.browse_list() {
@@ -299,10 +288,10 @@ impl InboxPane {
                     .child(labels::view_title(view)),
             )
             .child(div().text_color(theme.muted_foreground).child(count))
+            .children(scope_menu)
+            .children(refresh)
             .children(org_chip)
             .children(kind_segment)
-            .children(scope_segment)
-            .children(refresh)
             .child(div().flex_1())
             .child(
                 div().w(px(FILTER_WIDTH)).child(
@@ -369,6 +358,40 @@ impl InboxPane {
                             }))
                     }),
             )
+    }
+
+    fn scope_menu(
+        &self,
+        scope: IssueScope,
+        window_days: i64,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let pane = cx.weak_entity();
+        Button::new("inbox-scope-menu")
+            .label(labels::scope_menu_label(scope))
+            .child(Icon::new(IconName::ChevronDown).xsmall())
+            .xsmall()
+            .ghost()
+            .text_color(cx.theme().muted_foreground)
+            .dropdown_menu(move |menu, _, _| {
+                menu.check_side(Side::Right)
+                    .item(scope_item(
+                        &pane,
+                        IssueScope::Recent,
+                        scope,
+                        AppIconName::Clock,
+                        labels::SCOPE_RECENT,
+                        labels::scope_recent_hint(window_days),
+                    ))
+                    .item(scope_item(
+                        &pane,
+                        IssueScope::AllOpen,
+                        scope,
+                        AppIconName::List,
+                        labels::SCOPE_ALL_OPEN,
+                        labels::SCOPE_ALL_OPEN_HINT.to_string(),
+                    ))
+            })
     }
 
     fn refresh_button(&self, cx: &Context<Self>) -> Button {
@@ -499,6 +522,34 @@ fn more_row(
         cx,
     )
     .into_any_element()
+}
+
+fn scope_item(
+    pane: &WeakEntity<InboxPane>,
+    target: IssueScope,
+    current: IssueScope,
+    icon: AppIconName,
+    title: &'static str,
+    hint: String,
+) -> PopupMenuItem {
+    let pane = pane.clone();
+    PopupMenuItem::element(move |_, cx| {
+        v_flex().child(title).child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(hint.clone()),
+        )
+    })
+    .icon(Icon::new(icon))
+    .checked(target == current)
+    .on_click(move |_, window, cx| {
+        _ = pane.update(cx, |this, cx| {
+            this.model
+                .update(cx, |model, cx| model.set_issue_scope(target, cx));
+            this.focus_handle.focus(window, cx);
+        });
+    })
 }
 
 fn banner(cx: &App) -> Div {

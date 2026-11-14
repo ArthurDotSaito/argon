@@ -304,6 +304,10 @@ impl InboxModel {
         }
     }
 
+    pub fn closed_window_days(&self) -> i64 {
+        self.services.config().sync.closed_window_days
+    }
+
     pub fn can_browse(&self) -> bool {
         self.target.is_some()
     }
@@ -615,7 +619,7 @@ impl InboxModel {
         LoadContext {
             logins,
             now: Utc::now(),
-            closed_window_days: self.services.config().sync.closed_window_days,
+            closed_window_days: self.closed_window_days(),
         }
     }
 

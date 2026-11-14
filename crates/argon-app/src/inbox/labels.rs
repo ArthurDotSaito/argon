@@ -2,6 +2,7 @@ use argon_core::{DateBucket, IssueLabel, Reason};
 use chrono::{DateTime, Utc};
 
 use super::InboxView;
+use super::browse::IssueScope;
 use super::filter::KindFilter;
 use crate::ui;
 
@@ -31,6 +32,7 @@ pub const KIND_PRS: &str = "PRs";
 pub const KIND_ISSUES: &str = "Issues";
 pub const SCOPE_RECENT: &str = "Recentes";
 pub const SCOPE_ALL_OPEN: &str = "Todas abertas";
+pub const SCOPE_ALL_OPEN_HINT: &str = "Busca no GitHub agora, sem limite de data";
 pub const NEEDS_YOU_SECTION: &str = "Needs you";
 pub const PR_FALLBACK_TITLE: &str = "PR";
 pub const ISSUE_FALLBACK_TITLE: &str = "Issue";
@@ -75,6 +77,21 @@ pub fn empty_view(view: InboxView, kind: KindFilter) -> &'static str {
 
 pub fn empty_browse(filtered: bool) -> &'static str {
     if filtered { EMPTY_FILTER } else { EMPTY_BROWSE }
+}
+
+pub fn scope_menu_label(scope: IssueScope) -> String {
+    let name = match scope {
+        IssueScope::Recent => SCOPE_RECENT,
+        IssueScope::AllOpen => SCOPE_ALL_OPEN,
+    };
+    format!("· {name}")
+}
+
+pub fn scope_recent_hint(days: i64) -> String {
+    match days {
+        1 => "Atualizadas no último dia".to_string(),
+        _ => format!("Atualizadas nos últimos {days} dias"),
+    }
 }
 
 pub fn browse_count(shown: usize, total: u32) -> String {
@@ -204,6 +221,19 @@ mod tests {
     fn browse_empty_says_nothing_matched_only_when_filtering() {
         assert_eq!(empty_browse(false), EMPTY_BROWSE);
         assert_eq!(empty_browse(true), EMPTY_FILTER);
+    }
+
+    #[test]
+    fn scope_menu_label_prefixes_the_active_scope() {
+        assert_eq!(scope_menu_label(IssueScope::Recent), "· Recentes");
+        assert_eq!(scope_menu_label(IssueScope::AllOpen), "· Todas abertas");
+    }
+
+    #[test]
+    fn recent_hint_names_the_configured_window() {
+        assert_eq!(scope_recent_hint(7), "Atualizadas nos últimos 7 dias");
+        assert_eq!(scope_recent_hint(14), "Atualizadas nos últimos 14 dias");
+        assert_eq!(scope_recent_hint(1), "Atualizadas no último dia");
     }
 
     #[test]
