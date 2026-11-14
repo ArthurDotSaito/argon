@@ -1,4 +1,5 @@
 mod items;
+mod plan;
 mod tools;
 
 use std::collections::HashSet;
@@ -27,6 +28,7 @@ pub struct ThreadView {
     model: Entity<ThreadModel>,
     composer: Option<Entity<Composer>>,
     expanded: HashSet<SharedString>,
+    plan_editor: Option<plan::PlanEditor>,
     list: ListState,
     rows: usize,
     _subscriptions: Vec<Subscription>,
@@ -45,6 +47,7 @@ impl ThreadView {
             model,
             composer,
             expanded: HashSet::new(),
+            plan_editor: None,
             list,
             rows: 0,
             _subscriptions: subscriptions,

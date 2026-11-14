@@ -70,7 +70,7 @@ impl IssueView {
         cx.notify();
     }
 
-    pub(super) fn reload_and_mark_read(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reload_and_mark_read(&mut self, cx: &mut Context<Self>) {
         self.reload(cx);
         self.read_after_epoch = Some(self.epoch);
     }

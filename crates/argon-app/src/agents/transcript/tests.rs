@@ -150,6 +150,53 @@ fn plan_updates_replace_the_plan_of_the_current_turn() {
     assert_eq!(plans, [2, 1]);
 }
 
+fn plan_draft(id: i64) -> AgentEvent {
+    AgentEvent::PlanDraft {
+        draft_id: id,
+        markdown: "## Plano".into(),
+    }
+}
+
+#[test]
+fn a_redrafted_plan_moves_to_the_latest_turn() {
+    let transcript = replay(&[
+        user("planeje"),
+        message("a"),
+        plan_draft(1),
+        ended("end_turn"),
+        user("ajuste"),
+        AgentEvent::Plan(vec!["ler".into()]),
+        message("b"),
+        plan_draft(1),
+        AgentEvent::Plan(vec!["ler".into(), "testar".into()]),
+        ended("end_turn"),
+    ]);
+    assert_eq!(
+        transcript.items(),
+        [
+            Item::User("planeje".into()),
+            Item::Agent("a".into()),
+            Item::User("ajuste".into()),
+            Item::Plan(vec!["ler".into(), "testar".into()]),
+            Item::Agent("b".into()),
+            Item::PlanDraft(1),
+        ]
+    );
+}
+
+#[test]
+fn a_new_draft_after_publishing_gets_its_own_card() {
+    let transcript = replay(&[user("planeje"), plan_draft(1), plan_draft(2)]);
+    assert_eq!(
+        transcript.items(),
+        [
+            Item::User("planeje".into()),
+            Item::PlanDraft(1),
+            Item::PlanDraft(2),
+        ]
+    );
+}
+
 #[test]
 fn status_follows_turn_and_pending_permissions() {
     let mut transcript = replay(&[user("go"), permission("perm-1")]);

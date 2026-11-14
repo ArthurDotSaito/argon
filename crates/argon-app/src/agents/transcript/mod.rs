@@ -80,6 +80,7 @@ pub enum Item {
         outside: usize,
         unreadable: usize,
     },
+    PlanDraft(i64),
     Interrupted(String),
     Error(String),
 }
@@ -222,9 +223,8 @@ impl Transcript {
                 });
             }
             AgentEvent::Error(message) => self.items.push(Item::Error(message.clone())),
-            AgentEvent::PlanDraft { .. }
-            | AgentEvent::ModelsAvailable(_)
-            | AgentEvent::Resync { .. } => {}
+            AgentEvent::PlanDraft { draft_id, .. } => self.push_plan_draft(*draft_id),
+            AgentEvent::ModelsAvailable(_) | AgentEvent::Resync { .. } => {}
         }
     }
 
@@ -330,6 +330,19 @@ impl Transcript {
             }
             None => self.items.push(Item::Tool(tool)),
         }
+    }
+
+    fn push_plan_draft(&mut self, id: i64) {
+        let draft = Item::PlanDraft(id);
+        if let Some(ix) = self.items.iter().position(|item| *item == draft) {
+            self.items.remove(ix);
+            if let Some(plan) = self.plan.as_mut()
+                && *plan > ix
+            {
+                *plan -= 1;
+            }
+        }
+        self.items.push(draft);
     }
 
     fn tool_mut(&mut self, id: &str) -> Option<&mut ToolItem> {

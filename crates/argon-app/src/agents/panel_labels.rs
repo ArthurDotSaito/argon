@@ -63,6 +63,42 @@ pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
 pub const SESSION_ARCHIVED: &str = "esta sessão foi arquivada";
 pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
 
+pub const EDIT_PLAN: &str = "Editar";
+pub const EDIT_PLAN_CAPTION: &str = "Editando o plano — o texto salvo é o que será publicado";
+pub const PUBLISH_PLAN: &str = "Publicar na issue";
+pub const PUBLISHED_PLAN: &str = "Publicado · ver no GitHub";
+pub const PLAN_EDITED: &str = "editado por você";
+pub const NEW_PLAN_VERSION: &str = "O agente gerou uma nova versão do plano";
+pub const USE_NEW_VERSION: &str = "Usar a nova versão";
+pub const KEEP_MINE: &str = "Manter a minha";
+pub const PLAN_LOADING: &str = "carregando o plano…";
+
+pub fn plan_footer(agent: &str, model: &str, login: &str) -> String {
+    format!("_Plano preparado com Agent Plan ({agent} · {model}) e revisado por @{login}._")
+}
+
+pub fn no_account(host: &str) -> String {
+    format!("nenhuma conta do GitHub conectada em {host}")
+}
+
+pub fn publish_failed(error: &str) -> String {
+    format!("Falha ao publicar o plano: {error}")
+}
+
+pub fn published_not_recorded(error: &str) -> String {
+    format!(
+        "O comentário foi publicado, mas não consegui marcar o rascunho como publicado: {error}"
+    )
+}
+
+pub fn plan_save_failed(error: &str) -> String {
+    format!("Falha ao salvar o plano: {error}")
+}
+
+pub fn plan_update_failed(error: &str) -> String {
+    format!("Falha ao atualizar o plano: {error}")
+}
+
 pub fn unknown_subject(kind: SessionKind) -> &'static str {
     match kind {
         SessionKind::Review => UNKNOWN_PR,

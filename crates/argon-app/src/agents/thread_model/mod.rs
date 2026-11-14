@@ -1,6 +1,7 @@
 mod actions;
 mod diff;
 mod feed;
+mod plans;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -18,7 +19,10 @@ use super::finding_set::{FindingSet, SeverityCounts};
 use super::lifecycle::APP_CLOSED_REASON;
 use super::transcript::Transcript;
 use crate::review::{DraftsBus, DraftsChanged};
+
 use crate::services::{AppServices, Services, flatten};
+pub use plans::PlanBusy;
+use plans::PlanDrafts;
 
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
@@ -50,6 +54,7 @@ pub struct ThreadModel {
     closed: bool,
     transcript: Transcript,
     findings: FindingSet,
+    plans: PlanDrafts,
     models: Vec<ModelInfo>,
     loading: bool,
     load_error: Option<SharedString>,
@@ -95,6 +100,7 @@ impl ThreadModel {
             closed: false,
             transcript: Transcript::default(),
             findings: FindingSet::default(),
+            plans: PlanDrafts::default(),
             models: Vec::new(),
             loading: true,
             load_error: None,
@@ -260,8 +266,12 @@ impl ThreadModel {
     fn watch_drafts(&mut self, cx: &mut Context<Self>) {
         let bus = DraftsBus::global(cx);
         self._drafts = Some(cx.subscribe(&bus, |this, _, event: &DraftsChanged, cx| {
-            if event.pr == this.info.pr {
-                this.reload_findings(cx);
+            if event.pr != this.info.pr {
+                return;
+            }
+            match this.info.kind {
+                SessionKind::Review => this.reload_findings(cx),
+                SessionKind::Plan => this.reload_plans(cx),
             }
         }));
     }

@@ -18,6 +18,7 @@ mod message_text;
 mod model_listing;
 mod panel_labels;
 mod permission_card;
+mod plan_card;
 mod recovery;
 mod resume;
 mod safe_markdown;

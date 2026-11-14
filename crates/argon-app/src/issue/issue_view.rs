@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use argon_core::{Issue, PrKey, SubjectKind};
 use argon_github::IssueDetail;
+use argon_store::PlanDraft;
 use chrono::{DateTime, Utc};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -20,6 +21,7 @@ use super::timeline::Timeline;
 use crate::inbox::{ISSUE_FALLBACK_TITLE, InboxModel};
 use crate::keymap::ISSUE_VIEW_CONTEXT;
 use crate::pr::{self, CONTENT_MAX_WIDTH, Composer, ComposerEvent};
+use crate::review::{DraftsBus, DraftsChanged};
 
 pub(super) enum Load {
     Loading,
@@ -46,6 +48,8 @@ pub struct IssueView {
     pub(super) action_task: Option<Task<()>>,
     pub(super) viewer_id: Option<String>,
     pub(super) pending_plan: bool,
+    pub(super) plan_drafts: Vec<PlanDraft>,
+    pub(super) plans_task: Option<Task<()>>,
     pub(super) linked_scroll: ScrollHandle,
     pub(super) sub_scroll: ScrollHandle,
     scroll: ScrollHandle,
@@ -61,7 +65,13 @@ impl IssueView {
         cx: &mut Context<Self>,
     ) -> Self {
         let composer = cx.new(|cx| Composer::new(key.clone(), SubjectKind::Issue, window, cx));
+        let drafts = DraftsBus::global(cx);
         let subscriptions = vec![
+            cx.subscribe(&drafts, |this, _, event: &DraftsChanged, cx| {
+                if event.pr == this.key {
+                    this.reload_plans(cx);
+                }
+            }),
             cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
             cx.subscribe(&composer, |this, _, event, cx| match event {
                 ComposerEvent::Commented => this.reload_and_mark_read(cx),
@@ -90,6 +100,8 @@ impl IssueView {
             action_task: None,
             viewer_id: None,
             pending_plan: false,
+            plan_drafts: Vec::new(),
+            plans_task: None,
             linked_scroll: ScrollHandle::new(),
             sub_scroll: ScrollHandle::new(),
             scroll: ScrollHandle::new(),
@@ -97,6 +109,7 @@ impl IssueView {
             _subscriptions: subscriptions,
         };
         this.reload(cx);
+        this.reload_plans(cx);
         this
     }
 
@@ -223,6 +236,7 @@ impl Render for IssueView {
         };
         let banner = self.error_banner(cx);
         let action_banner = self.action_banner(cx);
+        let plan_banner = self.plan_banner(cx);
         let tab_bar = self.tab_bar(cx);
         let body = self.body(detail.as_deref(), now, cx);
         let theme = cx.theme();
@@ -232,6 +246,7 @@ impl Render for IssueView {
             .size_full()
             .bg(theme.background)
             .child(head)
+            .children(plan_banner)
             .children(banner)
             .children(action_banner)
             .child(

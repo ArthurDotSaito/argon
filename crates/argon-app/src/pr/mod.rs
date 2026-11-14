@@ -8,6 +8,7 @@ mod merge_dialog;
 mod pr_view;
 mod timeline_item;
 
+pub(crate) use comment_check::{SentComment, is_transport_error};
 pub(crate) use conversation::{CONTENT_MAX_WIDTH, Composer, ComposerEvent, truncated_notice};
 pub(crate) use header::{breadcrumb, label_chip, label_color, state_pill};
 pub use pr_view::PrView;

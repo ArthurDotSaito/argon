@@ -8,6 +8,7 @@ use gpui_kit::Context;
 use super::{ThreadEvent, ThreadModel};
 use crate::agents::finding_set::FindingSet;
 use crate::agents::transcript::Transcript;
+use crate::review::DraftsBus;
 use crate::services::{Services, flatten};
 
 const EVENT_BATCH: usize = 64;
@@ -157,6 +158,7 @@ impl ThreadModel {
                 }
                 cx.emit(ThreadEvent::Activity);
                 this.ensure_diff(cx);
+                this.reload_plans(cx);
                 cx.notify();
             });
         }));
@@ -192,15 +194,18 @@ impl ThreadModel {
             self.models = snapshot.models;
         }
         self.set_model_id(snapshot.model);
+        self.reload_plans(cx);
         self.notify_activity(before, cx);
     }
 
     fn apply_batch(&mut self, batch: Vec<(u64, AgentEvent)>, cx: &mut Context<Self>) {
         let before = self.activity();
         let now = Instant::now();
+        let mut plans_changed = false;
         for (_, event) in batch {
             match &event {
                 AgentEvent::Findings { findings, .. } => self.findings.insert_saved(findings),
+                AgentEvent::PlanDraft { .. } => plans_changed = true,
                 AgentEvent::ModelsAvailable(models) => {
                     self.models = models.clone();
                     let model = self.info.model.clone();
@@ -218,6 +223,9 @@ impl ThreadModel {
             {
                 self.transcript.mark_failed();
             }
+        }
+        if plans_changed {
+            DraftsBus::notify(self.info.pr.clone(), cx);
         }
         self.notify_activity(before, cx);
     }
