@@ -140,10 +140,15 @@ fn auto_allowed(
     }
 }
 
-fn denial_message(kind: SessionKind) -> &'static str {
-    match kind {
-        SessionKind::Plan => PLAN_DENIED,
-        SessionKind::Review => DENIED,
+fn denial_message(
+    ask: &PermissionAsk,
+    cwd: &Path,
+    mode: PermissionMode,
+    kind: SessionKind,
+) -> &'static str {
+    match decide_permission(ask, cwd, mode, kind) {
+        PermissionDecision::Deny { .. } => PLAN_DENIED,
+        PermissionDecision::Allow { .. } | PermissionDecision::Ask(_) => DENIED,
     }
 }
 
@@ -270,6 +275,7 @@ impl Claude {
 struct Ask {
     tool_name: String,
     input: Value,
+    denial: &'static str,
 }
 
 enum Wake {
@@ -585,8 +591,15 @@ impl Session {
             self.send(allow(&request_id, &input));
             return;
         }
-        self.asks
-            .insert(request_id.clone(), Ask { tool_name, input });
+        let denial = denial_message(&ask, &self.cwd, self.mode, self.shared.kind());
+        self.asks.insert(
+            request_id.clone(),
+            Ask {
+                tool_name,
+                input,
+                denial,
+            },
+        );
         self.shared
             .on_permission(ask, reply_to(&self.answers, request_id));
     }
@@ -604,7 +617,7 @@ impl Session {
             PermissionAnswer::Selected(option) if option == ALLOW_ONCE => {
                 allow(&request_id, &ask.input)
             }
-            PermissionAnswer::Selected(_) => deny(&request_id, denial_message(self.shared.kind())),
+            PermissionAnswer::Selected(_) => deny(&request_id, ask.denial),
             PermissionAnswer::Cancelled => deny(&request_id, CANCELLED),
         };
         self.send(line);

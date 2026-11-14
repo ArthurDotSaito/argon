@@ -109,12 +109,19 @@ fn plan_args_forbid_the_write_tools_and_review_args_do_not() {
 }
 
 #[test]
-fn only_plan_sessions_use_the_read_only_refusal_message() {
-    assert_eq!(denial_message(SessionKind::Review), "Negado no Argon.");
+fn only_automatic_plan_denials_use_the_read_only_refusal_message() {
+    let edit = native_ask("edit", &[inside("src/a.rs")]);
+    let command = native_ask("execute", &[]);
+    let refusal =
+        |ask: &PermissionAsk, kind| denial_message(ask, &cwd(), PermissionMode::Supervised, kind);
+
     assert_eq!(
-        denial_message(SessionKind::Plan),
+        refusal(&edit, SessionKind::Plan),
         "Agent Plan é somente leitura: não edite arquivos."
     );
+    assert_eq!(refusal(&command, SessionKind::Plan), "Negado no Argon.");
+    assert_eq!(refusal(&edit, SessionKind::Review), "Negado no Argon.");
+    assert_eq!(refusal(&command, SessionKind::Review), "Negado no Argon.");
 }
 
 #[test]

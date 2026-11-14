@@ -34,20 +34,10 @@ pub(super) fn open_target(target: ToastTarget, cx: &mut App) {
                     workspace.open_item(CenterItem::Issue(key), false, window, cx);
                 }
                 ToastTarget::AppUpdate => workspace.show_about(window, cx),
-                ToastTarget::AgentReview(key) => {
-                    let catalog = SessionCatalog::global(cx);
-                    let latest = catalog
-                        .as_ref()
+                ToastTarget::AgentSession(key, kind) => {
+                    let latest = SessionCatalog::global(cx)
                         .and_then(|catalog| catalog.read(cx).latest_for(&key, cx));
-                    let subject = latest
-                        .as_ref()
-                        .zip(catalog)
-                        .and_then(|(id, catalog)| catalog.read(cx).subject_of(id, cx))
-                        .map_or_else(
-                            || CenterItem::Pr(key.clone()),
-                            |(key, kind)| subject_item(key, kind),
-                        );
-                    workspace.open_item(subject, false, window, cx);
+                    workspace.open_item(subject_item(key, kind), false, window, cx);
                     if let Some(id) = latest {
                         workspace.open_session(id, SessionPlacement::BesideSubject, window, cx);
                     }

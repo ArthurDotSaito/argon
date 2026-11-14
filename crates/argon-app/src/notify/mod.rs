@@ -198,6 +198,7 @@ fn read_snapshots(
                 pr: info.pr.clone(),
                 number: info.number,
                 agent_label: info.agent_label.to_string(),
+                kind: info.kind,
                 phase: phase_of(
                     thread.is_live(),
                     thread.status(),
