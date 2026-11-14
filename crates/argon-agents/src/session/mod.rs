@@ -45,6 +45,7 @@ pub use writer::SessionWriter;
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const SESSION_ID_BYTES: usize = 16;
+const PLAN_MODE_LOCKED: &str = "a sessão de plano roda só em Supervisionado";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -179,6 +180,10 @@ impl AgentSessionHandle {
             .map_err(|_| SessionError::Closed)
     }
 
+    pub fn kind(&self) -> SessionKind {
+        self.shared.kind()
+    }
+
     pub fn prompt(&self, text: impl Into<String>) -> Result<()> {
         if !self.shared.try_acquire() {
             return Err(SessionError::Busy);
@@ -211,6 +216,12 @@ impl AgentSessionHandle {
     }
 
     pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
+        if self.shared.kind() == SessionKind::Plan && mode != PermissionMode::Supervised {
+            return Err(SessionError::SetPermissionMode {
+                mode: mode.as_str().to_owned(),
+                reason: PLAN_MODE_LOCKED.to_owned(),
+            });
+        }
         let (reply, response) = oneshot::channel();
         self.send(Command::SetPermissionMode { mode, reply })?;
         response.await.map_err(|_| SessionError::Closed)?

@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use serde_json::Value;
 
 use super::events::PermissionOption;
@@ -8,6 +8,7 @@ use crate::util::json_text;
 
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
+const EDIT_KIND: &str = "edit";
 pub(crate) const ALLOW_ONCE: &str = "allow_once";
 pub(crate) const ALLOW_ALWAYS: &str = "allow_always";
 pub(crate) const REJECT_ONCE: &str = "reject_once";
@@ -57,6 +58,7 @@ pub(crate) type PermissionReply =
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     Allow { option_id: String },
+    Deny { option_id: String },
     Ask(PermissionPrompt),
 }
 
@@ -305,13 +307,37 @@ pub(crate) fn prompt_title(title: &str, kind: &str) -> String {
     format!("{}{TITLE_CUT_MARKER}", cut.trim_end())
 }
 
-pub fn decide(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> PermissionDecision {
-    let allow_once = ask
-        .options
+fn option_of_kind(ask: &PermissionAsk, kind: &str) -> Option<String> {
+    ask.options
         .iter()
-        .find(|option| option.kind == ALLOW_ONCE)
-        .map(|option| option.id.clone());
-    match allow_once {
+        .find(|option| option.kind == kind)
+        .map(|option| option.id.clone())
+}
+
+fn denied_in_plan(ask: &PermissionAsk) -> Option<String> {
+    if ask.kind == EDIT_KIND {
+        option_of_kind(ask, REJECT_ONCE)
+    } else {
+        None
+    }
+}
+
+pub fn decide(
+    ask: &PermissionAsk,
+    cwd: &Path,
+    mode: PermissionMode,
+    kind: SessionKind,
+) -> PermissionDecision {
+    let mode = match kind {
+        SessionKind::Review => mode,
+        SessionKind::Plan => PermissionMode::Supervised,
+    };
+    if kind == SessionKind::Plan
+        && let Some(option_id) = denied_in_plan(ask)
+    {
+        return PermissionDecision::Deny { option_id };
+    }
+    match option_of_kind(ask, ALLOW_ONCE) {
         Some(option_id) if auto_allowed(ask, cwd, mode) => PermissionDecision::Allow { option_id },
         _ => PermissionDecision::Ask(PermissionPrompt {
             title: ask.title.clone(),

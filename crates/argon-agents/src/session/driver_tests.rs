@@ -477,6 +477,26 @@ async fn local_read_is_allowed_without_asking() {
 }
 
 #[tokio::test]
+async fn plan_session_answers_edits_with_the_reject_option_and_keeps_commands_as_cards() {
+    let (shared, _writer) = shared_of(writer(), 64, SessionKind::Plan, Some("abc")).await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (edit_reply, edit_answers) = recording_reply();
+    shared.on_permission(ask("edit", &["repo/src/lib.rs"]), edit_reply);
+    let (exec_reply, exec_answers) = recording_reply();
+    shared.on_permission(ask("execute", &[]), exec_reply);
+
+    assert_eq!(
+        *edit_answers.lock().unwrap(),
+        [PermissionAnswer::Selected("reject_once".into())]
+    );
+    assert!(exec_answers.lock().unwrap().is_empty());
+    let (snapshot, _) = shared.subscribe();
+    assert_eq!(snapshot.pending_permissions.len(), 1);
+    assert_eq!(snapshot.pending_permissions[0].kind, "execute");
+}
+
+#[tokio::test]
 async fn asked_permission_waits_and_replies_on_respond() {
     let (shared, _writer) = shared_with(64).await;
     shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());

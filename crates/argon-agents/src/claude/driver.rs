@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
@@ -121,10 +121,12 @@ fn auto_allowed(
     tool_name: &str,
     cwd: &Path,
     mode: PermissionMode,
+    kind: SessionKind,
     always: &HashSet<String>,
 ) -> bool {
-    match decide_permission(ask, cwd, mode) {
+    match decide_permission(ask, cwd, mode, kind) {
         PermissionDecision::Allow { .. } => true,
+        PermissionDecision::Deny { .. } => false,
         PermissionDecision::Ask(_) => always.contains(tool_name) && session_grant_applies(ask, cwd),
     }
 }
@@ -554,7 +556,14 @@ impl Session {
     }
 
     fn ask(&mut self, request_id: String, tool_name: String, ask: PermissionAsk, input: Value) {
-        if auto_allowed(&ask, &tool_name, &self.cwd, self.mode, &self.always) {
+        if auto_allowed(
+            &ask,
+            &tool_name,
+            &self.cwd,
+            self.mode,
+            self.shared.kind(),
+            &self.always,
+        ) {
             self.send(allow(&request_id, &input));
             return;
         }

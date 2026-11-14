@@ -409,7 +409,7 @@ impl Session {
     }
 
     fn ask(&mut self, id: Value, method: String, params: Value, ask: PermissionAsk) {
-        if auto_allowed(&ask, &self.cwd, self.mode, &self.grants) {
+        if auto_allowed(&ask, &self.cwd, self.mode, self.shared.kind(), &self.grants) {
             let allowed = PermissionAnswer::Selected(ALLOW_ONCE.to_owned());
             self.respond(id, approval_response(&method, &params, &allowed));
             return;

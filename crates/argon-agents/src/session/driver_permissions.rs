@@ -32,10 +32,20 @@ pub(crate) fn validate_option(permission: &PendingPermission, option_id: &str) -
 impl Shared {
     pub fn on_permission(&self, ask: PermissionAsk, reply: PermissionReply) {
         let mut state = self.lock();
-        match decide(&ask, &self.config.cwd, state.permission_mode) {
+        match decide(
+            &ask,
+            &self.config.cwd,
+            state.permission_mode,
+            self.config.kind,
+        ) {
             PermissionDecision::Allow { option_id } => {
                 if let Err(error) = reply(PermissionAnswer::Selected(option_id)) {
                     tracing::warn!(%error, "failed to auto-allow permission");
+                }
+            }
+            PermissionDecision::Deny { option_id } => {
+                if let Err(error) = reply(PermissionAnswer::Selected(option_id)) {
+                    tracing::warn!(%error, "failed to auto-deny permission");
                 }
             }
             PermissionDecision::Ask(prompt) => {
@@ -69,10 +79,11 @@ impl Shared {
             self.emit_locked(&mut state, AgentEvent::PermissionModeChanged(mode));
         }
         for pending in std::mem::take(&mut state.pending) {
-            match decide(&pending.ask, &self.config.cwd, mode) {
-                PermissionDecision::Allow { option_id } => {
+            match decide(&pending.ask, &self.config.cwd, mode, self.config.kind) {
+                PermissionDecision::Allow { option_id }
+                | PermissionDecision::Deny { option_id } => {
                     if let Err(error) = (pending.reply)(PermissionAnswer::Selected(option_id)) {
-                        tracing::warn!(%error, "failed to auto-allow pending permission");
+                        tracing::warn!(%error, "failed to answer pending permission");
                     }
                     let event = AgentEvent::permission_resolved(&pending.permission);
                     self.emit_locked(&mut state, event);

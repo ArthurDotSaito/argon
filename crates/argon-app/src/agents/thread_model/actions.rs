@@ -114,7 +114,10 @@ impl ThreadModel {
         let (Some(handle), Some(services)) = (self.handle.clone(), self.services.clone()) else {
             return;
         };
-        if self.changing_permission_mode || self.permission_mode() == Some(mode) {
+        if self.is_permission_mode_locked()
+            || self.changing_permission_mode
+            || self.permission_mode() == Some(mode)
+        {
             return;
         }
         self.changing_permission_mode = true;

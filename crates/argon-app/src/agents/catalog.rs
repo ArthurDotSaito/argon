@@ -48,6 +48,7 @@ pub(super) fn session_info(row: &SessionRow, worktree_present: bool, cx: &App) -
     SessionInfo {
         session_id: row.id.clone(),
         pr: row.pr.clone(),
+        kind: row.kind,
         number,
         agent_label: agent_defaults(row.agent).label,
         model: row.model.clone(),

@@ -118,6 +118,16 @@ async fn restore_plan_state(writer: &SessionWriter, shared: &Shared, ctx: &Sessi
     }
 }
 
+fn pinned_mode(ctx: SessionContext) -> SessionContext {
+    match ctx.kind {
+        SessionKind::Plan => SessionContext {
+            permission_mode: PermissionMode::Supervised,
+            ..ctx
+        },
+        SessionKind::Review => ctx,
+    }
+}
+
 pub(super) async fn launch(
     spec: &AgentSpec,
     ctx: SessionContext,
@@ -126,6 +136,7 @@ pub(super) async fn launch(
     options: SessionOptions,
     run: fn(DriverRun) -> DriverFuture,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
+    let ctx = pinned_mode(ctx);
     let tail = Arc::new(StderrTail::default());
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let shared = Arc::new(Shared::new(
@@ -481,6 +492,79 @@ mod tests {
             matches!(after_resume.last(), Some(AgentEvent::TurnEnded { .. })),
             "{after_resume:?}"
         );
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn plan_sessions_run_supervised_whatever_mode_was_configured() {
+        for mode in [PermissionMode::AcceptEdits, PermissionMode::FullAccess] {
+            let (dir, writer) = temp_store(&format!("plan-mode-{}", mode.as_str()));
+            let configured = SessionContext {
+                permission_mode: mode,
+                ..plan_context("s1", dir.clone())
+            };
+            let (_, started) = launch(
+                &stream_spec(),
+                configured.clone(),
+                writer.clone(),
+                None,
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            writer.flush().await;
+            let row = Store::open(&dir.join("argon.db"))
+                .unwrap()
+                .session("s1")
+                .unwrap()
+                .unwrap();
+            let started_mode = started.shared.subscribe().0.permission_mode;
+            started.shutdown().await;
+
+            let (_, resumed) = launch(
+                &stream_spec(),
+                configured,
+                writer.clone(),
+                Some("agent".into()),
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            let resumed_mode = resumed.shared.subscribe().0.permission_mode;
+            resumed.shutdown().await;
+
+            assert_eq!(started_mode, PermissionMode::Supervised, "{mode:?}");
+            assert_eq!(row.permission_mode, "supervised", "{mode:?}");
+            assert_eq!(resumed_mode, PermissionMode::Supervised, "{mode:?}");
+            drop(writer);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn review_sessions_keep_the_configured_mode() {
+        let (dir, writer) = temp_store("review-mode");
+        let configured = SessionContext {
+            permission_mode: PermissionMode::AcceptEdits,
+            ..context("s1", dir.clone())
+        };
+        let (_, agent) = launch(
+            &stream_spec(),
+            configured,
+            writer.clone(),
+            None,
+            SessionOptions::default(),
+            replies_with_the_prompt,
+        )
+        .await
+        .unwrap();
+        let mode = agent.shared.subscribe().0.permission_mode;
+        agent.shutdown().await;
+
+        assert_eq!(mode, PermissionMode::AcceptEdits);
         drop(writer);
         let _ = std::fs::remove_dir_all(&dir);
     }

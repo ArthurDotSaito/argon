@@ -34,6 +34,7 @@ impl ActiveSession {
         SessionInfo {
             session_id: self.session_id.clone(),
             pr: self.pr.clone(),
+            kind: self.handle.kind(),
             number: self.number,
             agent_label: self.agent_label,
             model: self.model.clone(),

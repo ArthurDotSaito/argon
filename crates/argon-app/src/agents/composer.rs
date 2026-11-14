@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 
 use super::choice::{Choice, permission_choices};
-use super::labels::{FULL_ACCESS_RISK, permission_mode_hint};
+use super::labels::{FULL_ACCESS_RISK, PLAN_MODE_LOCKED, permission_mode_hint};
 use super::panel_labels as labels;
 use super::thread_model::ThreadModel;
 use crate::review::{Confirm, confirm};
@@ -212,8 +212,16 @@ impl Render for Composer {
         let mode_select = Select::new(&self.mode_select)
             .xsmall()
             .placeholder(labels::PERMISSION_MODE_TOOLTIP)
-            .disabled(mode.is_none() || model.is_changing_permission_mode());
-        let mode_hint = mode.map(permission_mode_hint);
+            .disabled(
+                mode.is_none()
+                    || model.is_changing_permission_mode()
+                    || model.is_permission_mode_locked(),
+            );
+        let mode_hint = if model.is_permission_mode_locked() {
+            Some(PLAN_MODE_LOCKED)
+        } else {
+            mode.map(permission_mode_hint)
+        };
         let reference = Button::new("composer-reference")
             .icon(Icon::new(IconName::AtSign))
             .xsmall()

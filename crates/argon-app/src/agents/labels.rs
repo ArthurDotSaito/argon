@@ -8,6 +8,7 @@ pub const TEMPLATE: &str = "Template";
 pub const OPTIONS: &str = "Opções";
 pub const PERMISSIONS: &str = "Permissões";
 pub const FULL_ACCESS_RISK: &str = "Acesso total aprova automaticamente todo pedido de permissão do agente — comandos, edições e rede — sem mostrar o card. O agente lê código de PRs de terceiros: escolha este modo só se aceitar esse risco.";
+pub const PLAN_MODE_LOCKED: &str = "Agent Plan roda só em Supervisionado";
 pub const EDIT_IN_SETTINGS: &str = "Editar em Configurações";
 pub const DETECTING: &str = "detectando…";
 pub const NOT_FOUND: &str = "não encontrado no PATH";

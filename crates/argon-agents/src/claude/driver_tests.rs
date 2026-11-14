@@ -162,6 +162,7 @@ fn mode_rules_still_auto_allow_without_a_session_grant() {
         "Read",
         &cwd(),
         PermissionMode::Supervised,
+        SessionKind::Review,
         &granted(&[])
     ));
 }
@@ -175,6 +176,7 @@ fn session_grant_allows_contained_local_tools() {
         "Edit",
         &cwd(),
         PermissionMode::Supervised,
+        SessionKind::Review,
         &granted(&[])
     ));
     assert!(auto_allowed(
@@ -182,6 +184,21 @@ fn session_grant_allows_contained_local_tools() {
         "Edit",
         &cwd(),
         PermissionMode::Supervised,
+        SessionKind::Review,
+        &granted(&["Edit"])
+    ));
+}
+
+#[test]
+fn plan_sessions_never_auto_allow_edits_even_with_a_grant() {
+    let edit = native_ask("edit", &[inside("src/a.rs")]);
+
+    assert!(!auto_allowed(
+        &edit,
+        "Edit",
+        &cwd(),
+        PermissionMode::FullAccess,
+        SessionKind::Plan,
         &granted(&["Edit"])
     ));
 }
@@ -195,6 +212,7 @@ fn session_grant_never_covers_commands() {
         "Bash",
         &cwd(),
         PermissionMode::AcceptEdits,
+        SessionKind::Review,
         &granted(&["Bash"])
     ));
 }
@@ -212,6 +230,7 @@ fn session_grant_never_covers_edits_outside_the_worktree() {
                 "Edit",
                 &cwd(),
                 PermissionMode::AcceptEdits,
+                SessionKind::Review,
                 &granted(&["Edit"])
             ),
             "{:?}",

@@ -133,6 +133,10 @@ impl Shared {
         &self.config.id
     }
 
+    pub fn kind(&self) -> SessionKind {
+        self.config.kind
+    }
+
     pub fn writer(&self) -> &SessionWriter {
         &self.config.writer
     }
