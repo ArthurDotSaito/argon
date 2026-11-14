@@ -291,12 +291,10 @@ impl InboxModel {
         }
     }
 
-    #[expect(dead_code)]
     pub fn issue_scope(&self) -> IssueScope {
         self.scope
     }
 
-    #[expect(dead_code)]
     pub fn set_issue_scope(&mut self, scope: IssueScope, cx: &mut Context<Self>) {
         if self.scope != scope {
             self.scope = scope;
@@ -305,7 +303,6 @@ impl InboxModel {
         }
     }
 
-    #[expect(dead_code)]
     pub fn can_browse(&self) -> bool {
         self.target.is_some()
     }
@@ -314,7 +311,6 @@ impl InboxModel {
         self.browse.get(self.active_key()?)
     }
 
-    #[expect(dead_code)]
     pub fn is_browse_loading(&self) -> bool {
         self.browse_inflight.is_some() && self.browse_inflight.as_ref() == self.active_key()
     }
@@ -341,12 +337,15 @@ impl InboxModel {
         cx.notify();
     }
 
-    #[expect(dead_code)]
     pub fn browse_retry(&mut self, cx: &mut Context<Self>) {
         match self.browse_list() {
             Some(list) if list.loaded && list.next.is_some() => self.browse_more(cx),
             _ => self.browse_refresh(cx),
         }
+    }
+
+    fn browse_has_more(&self) -> bool {
+        self.browse_list().is_some_and(|list| list.next.is_some())
     }
 
     fn active_key(&self) -> Option<&BrowseKey> {
@@ -751,6 +750,9 @@ impl InboxModel {
         self.sections = Sections::build(self.shown_items(), matches, self.view, Local::now());
         if !self.sections.rows.is_empty() && self.shows_load_more() {
             self.sections.rows.push(InboxRow::LoadMore);
+        }
+        if !self.sections.rows.is_empty() && self.browse_has_more() {
+            self.sections.rows.push(InboxRow::BrowseMore);
         }
         let last = self.visible_count().saturating_sub(1);
         self.selected = if reset_scroll {

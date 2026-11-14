@@ -25,9 +25,12 @@ pub const EMPTY_PR_VIEW: &str = "Nenhum PR nesta visão.";
 pub const EMPTY_ISSUE_VIEW: &str = "Nenhuma issue nesta visão.";
 pub const EMPTY_MIXED_VIEW: &str = "Nada nesta visão.";
 pub const EMPTY_FILTER: &str = "Nada corresponde ao filtro.";
+pub const EMPTY_BROWSE: &str = "Nenhuma issue aberta encontrada.";
 pub const KIND_ALL: &str = "Tudo";
 pub const KIND_PRS: &str = "PRs";
 pub const KIND_ISSUES: &str = "Issues";
+pub const SCOPE_RECENT: &str = "Recentes";
+pub const SCOPE_ALL_OPEN: &str = "Todas abertas";
 pub const NEEDS_YOU_SECTION: &str = "Needs you";
 pub const PR_FALLBACK_TITLE: &str = "PR";
 pub const ISSUE_FALLBACK_TITLE: &str = "Issue";
@@ -68,6 +71,14 @@ pub fn empty_view(view: InboxView, kind: KindFilter) -> &'static str {
         | InboxView::ReadyToMerge
         | InboxView::AlreadyDone => EMPTY_PR_VIEW,
     }
+}
+
+pub fn empty_browse(filtered: bool) -> &'static str {
+    if filtered { EMPTY_FILTER } else { EMPTY_BROWSE }
+}
+
+pub fn browse_count(shown: usize, total: u32) -> String {
+    format!("{shown} de {total}")
 }
 
 pub fn visible_labels(labels: &[IssueLabel]) -> (&[IssueLabel], Option<String>) {
@@ -187,6 +198,19 @@ mod tests {
             assert_eq!(empty_view(view, KindFilter::Prs), EMPTY_PR_VIEW);
             assert_eq!(empty_view(view, KindFilter::Issues), EMPTY_ISSUE_VIEW);
         }
+    }
+
+    #[test]
+    fn browse_empty_says_nothing_matched_only_when_filtering() {
+        assert_eq!(empty_browse(false), EMPTY_BROWSE);
+        assert_eq!(empty_browse(true), EMPTY_FILTER);
+    }
+
+    #[test]
+    fn browse_count_shows_loaded_out_of_the_total() {
+        assert_eq!(browse_count(50, 80), "50 de 80");
+        assert_eq!(browse_count(31, 31), "31 de 31");
+        assert_eq!(browse_count(0, 0), "0 de 0");
     }
 
     #[test]
