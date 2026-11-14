@@ -1,10 +1,12 @@
-use argon_core::Severity;
+use argon_core::{SessionKind, Severity};
 
 use super::card_status::{CardStatus, SessionFilter};
 
 pub const PANEL_TITLE: &str = "Agentes";
 pub const REVIEW_PR: &str = "Nova review";
 pub const OPEN_PR: &str = "Abrir PR";
+pub const PLAN_ISSUE: &str = "Novo plano";
+pub const OPEN_ISSUE: &str = "Abrir issue";
 pub const NO_SESSIONS: &str = "Nenhuma sessão de agente ainda.";
 pub const NO_SESSIONS_IN_FILTER: &str = "Nenhuma sessão neste filtro.";
 pub const LOADING_SESSIONS: &str = "carregando sessões…";
@@ -43,6 +45,7 @@ pub const FULL_ACCESS_TITLE: &str = "Ativar acesso total?";
 pub const FULL_ACCESS_CONFIRM: &str = "Ativar acesso total";
 pub use super::labels::SERVICES_UNAVAILABLE;
 pub const UNKNOWN_PR: &str = "PR fora da inbox";
+pub const UNKNOWN_ISSUE: &str = "Issue fora da inbox";
 pub const YOU: &str = "você";
 pub const CONTINUE: &str = "Continuar";
 pub const OUT_OF_DIFF: &str = "Linha fora do diff — abra no diff e comente manualmente";
@@ -59,6 +62,13 @@ pub const NO_ACP_SESSION: &str = "esta sessão não tem id ACP para retomar";
 pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
 pub const SESSION_ARCHIVED: &str = "esta sessão foi arquivada";
 pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
+
+pub fn unknown_subject(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Review => UNKNOWN_PR,
+        SessionKind::Plan => UNKNOWN_ISSUE,
+    }
+}
 
 pub fn filter_label(filter: SessionFilter) -> &'static str {
     match filter {

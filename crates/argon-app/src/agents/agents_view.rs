@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use argon_core::PrKey;
+use argon_core::{PrKey, SessionKind};
 use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -20,24 +20,24 @@ use super::panel_labels as labels;
 use super::session_actions::controls;
 use super::session_tab::open_session_tab;
 use super::sessions::AgentSessions;
-use super::sessions_list::{SessionCard, pr_labels};
-use crate::center::CenterItem;
-use crate::workspace::Workspace;
+use super::sessions_list::{SessionCard, subject_labels};
+use crate::workspace::{Workspace, subject_item};
 
 const TICK: Duration = Duration::from_secs(1);
 
-fn open_pr(pr: PrKey, window: &mut Window, cx: &mut App) {
+fn open_subject(key: PrKey, kind: SessionKind, window: &mut Window, cx: &mut App) {
     if let Some(workspace) = Workspace::global(cx) {
         _ = workspace.update(cx, |workspace, cx| {
-            workspace.open_item(CenterItem::Pr(pr), false, window, cx)
+            workspace.open_item(subject_item(key, kind), false, window, cx)
         });
     }
 }
 
-fn review_pr(pr: PrKey, window: &mut Window, cx: &mut App) {
+fn start_agent(key: PrKey, kind: SessionKind, window: &mut Window, cx: &mut App) {
     if let Some(workspace) = Workspace::global(cx) {
-        _ = workspace.update(cx, |workspace, cx| {
-            workspace.review_pr_with_ai(pr, window, cx)
+        _ = workspace.update(cx, |workspace, cx| match kind {
+            SessionKind::Review => workspace.review_pr_with_ai(key, window, cx),
+            SessionKind::Plan => workspace.plan_issue_with_agent(key, window, cx),
         });
     }
 }
@@ -223,15 +223,17 @@ impl AgentsView {
     }
 
     fn group(&self, group: PrGroup<SessionCard>, cx: &mut Context<Self>) -> Div {
-        let number = group
-            .sessions
-            .first()
-            .or(group.archived.first())
-            .and_then(|card| card.number);
-        let (title, reference) = pr_labels(&group.pr, number, cx);
+        let first = group.sessions.first().or(group.archived.first());
+        let number = first.and_then(|card| card.number);
+        let kind = first.map_or(SessionKind::Review, |card| card.kind);
+        let (title, reference) = subject_labels(&group.pr, kind, number, cx);
         let expanded = self.expanded.contains(&group.pr);
         let key = format!("{}-{}", group.pr.host, group.pr.id.0);
-        let (open_target, review_target) = (group.pr.clone(), group.pr.clone());
+        let (open_target, start_target) = (group.pr.clone(), group.pr.clone());
+        let (icon, open_label, start_label) = match kind {
+            SessionKind::Review => (IconName::GitPullRequest, labels::OPEN_PR, labels::REVIEW_PR),
+            SessionKind::Plan => (IconName::CircleDot, labels::OPEN_ISSUE, labels::PLAN_ISSUE),
+        };
         let toggle = (!group.archived.is_empty())
             .then(|| self.archived_toggle(&group.pr, group.archived.len(), expanded, cx));
         let rows = group
@@ -246,11 +248,7 @@ impl AgentsView {
             .px_3()
             .py_1p5()
             .items_center()
-            .child(
-                Icon::new(IconName::GitPullRequest)
-                    .small()
-                    .text_color(theme.muted_foreground),
-            )
+            .child(Icon::new(icon).small().text_color(theme.muted_foreground))
             .child(
                 div()
                     .min_w_0()
@@ -269,20 +267,24 @@ impl AgentsView {
                     .child(reference),
             )
             .child(
-                Button::new(SharedString::from(format!("agents-open-pr-{key}")))
+                Button::new(SharedString::from(format!("agents-open-subject-{key}")))
                     .icon(Icon::new(IconName::ExternalLink))
-                    .label(labels::OPEN_PR)
+                    .label(open_label)
                     .xsmall()
                     .ghost()
-                    .on_click(move |_, window, cx| open_pr(open_target.clone(), window, cx)),
+                    .on_click(move |_, window, cx| {
+                        open_subject(open_target.clone(), kind, window, cx)
+                    }),
             )
             .child(
-                Button::new(SharedString::from(format!("agents-review-pr-{key}")))
+                Button::new(SharedString::from(format!("agents-start-agent-{key}")))
                     .icon(Icon::new(IconName::Sparkles))
-                    .label(labels::REVIEW_PR)
+                    .label(start_label)
                     .xsmall()
                     .outline()
-                    .on_click(move |_, window, cx| review_pr(review_target.clone(), window, cx)),
+                    .on_click(move |_, window, cx| {
+                        start_agent(start_target.clone(), kind, window, cx)
+                    }),
             );
         v_flex()
             .w_full()

@@ -12,9 +12,10 @@ use std::sync::Arc;
 
 use argon_agents::new_session_id;
 use argon_core::{
-    AgentKind, Config, InvalidTemplate, PermissionMode, PromptTemplate, PullRequest, RenderedPrompt,
+    AgentKind, Config, InvalidTemplate, Issue, PermissionMode, PrKey, PromptTemplate, PullRequest,
+    RenderedPrompt, SessionKind,
 };
-use argon_github::PrDetail;
+use argon_github::{IssueDetail, PrDetail};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{
@@ -37,6 +38,64 @@ type ChoiceSelect = Entity<SelectState<Vec<Choice>>>;
 pub struct ReviewTarget {
     pub pr: PullRequest,
     pub detail: Option<PrDetail>,
+}
+
+pub struct PlanTarget {
+    pub issue: Issue,
+    pub detail: Option<IssueDetail>,
+}
+
+pub enum Target {
+    Review(ReviewTarget),
+    Plan(PlanTarget),
+}
+
+enum Subject {
+    Pr(PullRequest),
+    Issue(Issue),
+}
+
+impl Subject {
+    fn of(target: &Target) -> Self {
+        match target {
+            Target::Review(target) => Self::Pr(target.pr.clone()),
+            Target::Plan(target) => Self::Issue(target.issue.clone()),
+        }
+    }
+
+    fn kind(&self) -> SessionKind {
+        match self {
+            Self::Pr(_) => SessionKind::Review,
+            Self::Issue(_) => SessionKind::Plan,
+        }
+    }
+
+    fn key(&self) -> PrKey {
+        match self {
+            Self::Pr(pr) => pr.key(),
+            Self::Issue(issue) => issue.key(),
+        }
+    }
+
+    fn repo(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.repo,
+            Self::Issue(issue) => &issue.repo,
+        }
+    }
+
+    fn number(&self) -> u64 {
+        match self {
+            Self::Pr(pr) => pr.number,
+            Self::Issue(issue) => issue.number,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Gathering {
+    Review(Arc<Gathered>),
+    Plan(Arc<IssueDetail>),
 }
 
 enum Load<T> {
@@ -66,11 +125,11 @@ struct Preview {
     rendered: Result<RenderedPrompt, SharedString>,
     lines: Vec<SharedString>,
     chars: usize,
-    diff_inline: bool,
+    diff_inline: Option<bool>,
 }
 
 pub struct StartDialog {
-    pr: PullRequest,
+    subject: Subject,
     config: Config,
     agents: Load<Vec<AgentOption>>,
     agent: Option<AgentKind>,
@@ -84,7 +143,7 @@ pub struct StartDialog {
     template_select: ChoiceSelect,
     include_reviews: bool,
     include_ci: bool,
-    context: Load<Arc<Gathered>>,
+    context: Load<Gathering>,
     ci: Option<Load<String>>,
     preview: Option<Preview>,
     render_epoch: u64,
@@ -97,7 +156,7 @@ pub struct StartDialog {
     _subscriptions: Vec<Subscription>,
 }
 
-pub fn open(target: ReviewTarget, window: &mut Window, cx: &mut App) {
+pub fn open(target: Target, window: &mut Window, cx: &mut App) {
     let dialog = cx.new(|cx| StartDialog::new(target, window, cx));
     window.open_dialog(cx, move |modal, _, cx| {
         let busy = dialog.read(cx).is_launching();
@@ -133,7 +192,7 @@ fn fresh_session_id() -> Result<String, SharedString> {
 }
 
 impl StartDialog {
-    fn new(target: ReviewTarget, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(target: Target, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let config = app_services(cx)
             .map(|services| services.config())
             .unwrap_or_default();
@@ -177,10 +236,12 @@ impl StartDialog {
                 this.on_sessions_changed(window, cx)
             }));
         }
+        let subject = Subject::of(&target);
+        let review = subject.kind() == SessionKind::Review;
         let mut this = Self {
-            include_reviews: config.review.include_previous_reviews,
-            include_ci: config.review.include_ci_failures,
-            pr: target.pr.clone(),
+            include_reviews: review && config.review.include_previous_reviews,
+            include_ci: review && config.review.include_ci_failures,
+            subject,
             config,
             agents: Load::Loading,
             agent: None,
@@ -213,6 +274,10 @@ impl StartDialog {
 
     fn is_launching(&self) -> bool {
         matches!(self.phase, Phase::Launching(_) | Phase::Cancelling)
+    }
+
+    fn kind(&self) -> SessionKind {
+        self.subject.kind()
     }
 
     fn sessions(cx: &App) -> Option<Entity<AgentSessions>> {

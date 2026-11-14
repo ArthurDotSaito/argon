@@ -1,6 +1,7 @@
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 
 pub const DIALOG_TITLE: &str = "Agent Review";
+pub const AGENT_PLAN: &str = "Agent Plan";
 pub const AGENT: &str = "Agente";
 pub const GENERIC_AGENT: &str = "agente";
 pub const MODEL: &str = "Modelo";
@@ -24,6 +25,12 @@ pub const ISOLATED_WORKTREE_HINT: &str =
     "Obrigatório por segurança: o agente nunca roda no seu checkout";
 pub const DRAFTS_ONLY: &str = "O agente só cria rascunhos";
 pub const DRAFTS_ONLY_HINT: &str = "Achados viram comentários pendentes; nada é publicado sem você";
+pub const READ_ONLY: &str = "Somente leitura";
+pub const READ_ONLY_HINT: &str = "Pedidos de edição do agente são negados";
+pub const PLAN_DRAFT_ONLY: &str = "O plano fica em rascunho";
+pub const PLAN_DRAFT_ONLY_HINT: &str = "Nada é publicado na issue sem o seu clique";
+pub const PLAN_BASE_PENDING: &str = "branch padrão";
+pub const PLAN_SHA_PENDING: &str = "definido ao iniciar";
 pub const PROMPT_PREVIEW: &str = "prompt";
 pub const COMMAND_PREVIEW: &str = "comando";
 pub const CWD: &str = "cwd";
@@ -37,6 +44,7 @@ pub const PREPARING_WORKTREE: &str = "preparando worktree…";
 pub const STARTING_AGENT: &str = "iniciando o agente…";
 pub const PICK_AGENT: &str = "escolha um agente disponível";
 pub const START: &str = "Iniciar review";
+pub const START_PLAN: &str = "Iniciar plano";
 pub const CANCEL: &str = "Cancelar";
 pub const COPY_ERROR: &str = "Copiar";
 pub const CANCEL_START: &str = "Cancelar início";
@@ -44,10 +52,12 @@ pub const CANCELLING: &str = "cancelando o início…";
 pub const START_CANCELLED: &str = "Início cancelado — o worktree foi removido";
 pub const CONFIGURE: &str = "Configurar";
 pub const PR_CLOSED: &str = "Este PR está fechado";
+pub const ISSUE_CLOSED: &str = "Esta issue está fechada";
 pub const SERVICES_UNAVAILABLE: &str = "serviços em segundo plano indisponíveis";
 pub const CI_HEADING: &str = "Jobs com falha:";
 pub const NO_CI_LOG: &str = "(log vazio)";
 pub const BUTTON_TOOLTIP: &str = "Agent Review deste PR (a)";
+pub const PLAN_BUTTON_TOOLTIP: &str = "Agent Plan desta issue (a)";
 pub const CLOSED_TOOLTIP: &str = "Disponível só para PRs abertos";
 
 pub const LOADING_USAGE: &str = "carregando uso…";
@@ -119,12 +129,20 @@ pub fn permission_mode_hint(mode: PermissionMode) -> &'static str {
     }
 }
 
-pub fn permissions_warning(agent: &str) -> String {
+pub fn permissions_warning(agent: &str, kind: SessionKind) -> String {
+    let subject = match kind {
+        SessionKind::Review => "do PR",
+        SessionKind::Plan => "da issue",
+    };
     format!(
         "O {agent} roda com as suas próprias permissões e configuração (ex.: comandos que você \
-         liberou no {agent} rodam sem perguntar). O conteúdo do PR é tratado como não confiável \
-         no prompt, mas confira o que o agente pedir no chat."
+         liberou no {agent} rodam sem perguntar). O conteúdo {subject} é tratado como não \
+         confiável no prompt, mas confira o que o agente pedir no chat."
     )
+}
+
+pub fn plan_title(number: u64) -> String {
+    format!("{AGENT_PLAN} · #{number}")
 }
 
 pub fn context_line(repo: &str, number: u64, head: &str) -> String {
@@ -155,8 +173,11 @@ pub fn render_failed(error: &str) -> String {
     format!("Falha ao renderizar o prompt: {error}")
 }
 
-pub fn launch_failed(error: &str) -> String {
-    format!("Falha ao iniciar a review: {error}")
+pub fn launch_failed(kind: SessionKind, error: &str) -> String {
+    match kind {
+        SessionKind::Review => format!("Falha ao iniciar a review: {error}"),
+        SessionKind::Plan => format!("Falha ao iniciar o plano: {error}"),
+    }
 }
 
 pub fn ci_log_heading(job: &str, lines: usize) -> String {

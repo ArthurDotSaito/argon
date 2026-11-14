@@ -65,6 +65,7 @@ impl ActionState {
 pub(super) struct ActionBar {
     pub assign: bool,
     pub close: bool,
+    pub plan: bool,
     pub running: Option<IssueAction>,
 }
 
@@ -84,6 +85,7 @@ impl ActionBar {
         Self {
             assign: open && unassigned_viewer,
             close: open,
+            plan: open,
             running,
         }
     }
@@ -188,10 +190,11 @@ mod tests {
     }
 
     #[test]
-    fn open_issue_offers_assign_and_close() {
+    fn open_issue_offers_assign_close_and_plan() {
         let bar = ActionBar::of(&issue(), Some("ana"), None);
         assert!(bar.assign);
         assert!(bar.close);
+        assert!(bar.plan);
     }
 
     #[test]
@@ -215,6 +218,7 @@ mod tests {
         let bar = ActionBar::of(&closed(issue()), Some("ana"), None);
         assert!(!bar.assign);
         assert!(!bar.close);
+        assert!(!bar.plan);
     }
 
     #[test]

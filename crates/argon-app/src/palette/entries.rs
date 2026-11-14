@@ -4,13 +4,15 @@ use gpui_kit::{Action, SharedString};
 
 use super::ranking::Candidate;
 use crate::actions::{
-    CheckForUpdates, CloseActiveItem, GoToAgents, GoToView, OpenSettings, ReviewWithAi,
-    StartReview, SyncNow, ToggleBottomDock, ToggleLeftDock, ToggleRightDock, ToggleTheme,
+    CheckForUpdates, CloseActiveItem, GoToAgents, GoToView, OpenSettings, PlanWithAgent,
+    ReviewWithAi, StartReview, SyncNow, ToggleBottomDock, ToggleLeftDock, ToggleRightDock,
+    ToggleTheme,
 };
 use crate::inbox::InboxView;
 use crate::issue::IssueStatus;
 
 const REVIEW_WITH_AI_TITLE: &str = "Agent Review no PR atual";
+const PLAN_WITH_AGENT_TITLE: &str = "Agent Plan na issue atual";
 
 pub struct PrEntry {
     pub key: PrKey,
@@ -153,6 +155,7 @@ pub fn command_specs() -> Vec<CommandSpec> {
             CommandSpec::new("Fechar aba", IconName::X, CloseActiveItem),
             CommandSpec::new("Enviar review", IconName::Send, StartReview),
             CommandSpec::new(REVIEW_WITH_AI_TITLE, IconName::Sparkles, ReviewWithAi),
+            CommandSpec::new(PLAN_WITH_AGENT_TITLE, IconName::Sparkles, PlanWithAgent),
             CommandSpec::new("Abrir configurações", IconName::Settings, OpenSettings),
             CommandSpec::new(
                 "Verificar atualizações",

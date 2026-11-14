@@ -27,6 +27,7 @@ type RepoLock = Arc<tokio::sync::Mutex<()>>;
 pub struct PreparedWorktree {
     pub path: PathBuf,
     pub base_sha: String,
+    pub branch: String,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +55,7 @@ impl WorktreeManager {
     ) -> Result<PathBuf> {
         self.prepare_kind(WorktreeKind::PullRequest, host, repo, number, session)
             .await
+            .map(|(path, _)| path)
     }
 
     pub async fn prepare_default(
@@ -63,11 +65,15 @@ impl WorktreeManager {
         number: u64,
         session: &str,
     ) -> Result<PreparedWorktree> {
-        let path = self
+        let (path, branch) = self
             .prepare_kind(WorktreeKind::Issue, host, repo, number, session)
             .await?;
         match self.head_oid(&path).await {
-            Ok(base_sha) => Ok(PreparedWorktree { path, base_sha }),
+            Ok(base_sha) => Ok(PreparedWorktree {
+                path,
+                base_sha,
+                branch: branch.unwrap_or_default(),
+            }),
             Err(error) => {
                 let _ = self.discard(&path).await;
                 Err(error)
@@ -82,7 +88,7 @@ impl WorktreeManager {
         repo: &str,
         number: u64,
         session: &str,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, Option<String>)> {
         let host = validate_host(host)?;
         let repo = RepoRef::parse(repo)?;
         let prefix = session_prefix(session)?;
@@ -94,14 +100,14 @@ impl WorktreeManager {
         let _guard = lock.lock().await;
 
         mirror::ensure(host, &repo, &mirror).await?;
-        let reference = match kind {
+        let (reference, branch) = match kind {
             WorktreeKind::PullRequest => {
                 let reference = pr_ref(number);
                 Invocation::git_authenticated(&mirror, host)
                     .args(pr_fetch_args(number, &reference))
                     .run(FETCH_TIMEOUT)
                     .await?;
-                reference
+                (reference, None)
             }
             WorktreeKind::Issue => {
                 let branch = mirror::default_branch(host, &mirror).await?;
@@ -109,7 +115,7 @@ impl WorktreeManager {
                     .args(default_fetch_args(&branch))
                     .run(FETCH_TIMEOUT)
                     .await?;
-                DEFAULT_REF.to_owned()
+                (DEFAULT_REF.to_owned(), Some(branch))
             }
         };
         prune(&mirror).await?;
@@ -120,7 +126,7 @@ impl WorktreeManager {
         self.clear_slot(&mirror, slot).await?;
         add_worktree(&mirror, host, &target, &reference).await?;
         checkout::claim(&target, session).await?;
-        Ok(target)
+        Ok((target, branch))
     }
 
     pub fn planned_path(

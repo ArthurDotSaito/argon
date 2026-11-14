@@ -4,6 +4,7 @@ mod header;
 mod issue_view;
 mod labels;
 mod loading;
+mod plan;
 mod tabs;
 mod timeline;
 

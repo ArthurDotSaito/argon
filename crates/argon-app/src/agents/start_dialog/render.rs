@@ -1,3 +1,4 @@
+use argon_core::SessionKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{
@@ -10,7 +11,7 @@ use gpui_kit::{
 };
 
 use super::launch::Status;
-use super::{Phase, StartDialog};
+use super::{Phase, StartDialog, Subject};
 use crate::agents::labels;
 
 fn section(title: &'static str, body: impl IntoElement, cx: &App) -> Div {
@@ -29,22 +30,28 @@ fn section(title: &'static str, body: impl IntoElement, cx: &App) -> Div {
 impl StartDialog {
     pub(super) fn title(&self, cx: &App) -> Div {
         let theme = cx.theme();
+        let (title, context) = match &self.subject {
+            Subject::Pr(pr) => (
+                SharedString::from(labels::DIALOG_TITLE),
+                labels::context_line(&pr.repo, pr.number, &pr.head),
+            ),
+            Subject::Issue(issue) => (
+                SharedString::from(labels::plan_title(issue.number)),
+                issue.repo.clone(),
+            ),
+        };
         h_flex()
             .gap_2()
             .items_center()
             .child(Icon::new(IconName::Sparkles).text_color(theme.primary))
-            .child(labels::DIALOG_TITLE)
+            .child(title)
             .child(
                 div()
                     .text_xs()
                     .font_normal()
                     .font_family(theme.mono_font_family.clone())
                     .text_color(theme.muted_foreground)
-                    .child(labels::context_line(
-                        &self.pr.repo,
-                        self.pr.number,
-                        &self.pr.head,
-                    )),
+                    .child(context),
             )
     }
 
@@ -120,7 +127,10 @@ impl StartDialog {
             .child(
                 Button::new("ai-review-start")
                     .icon(Icon::new(IconName::Play))
-                    .label(labels::START)
+                    .label(match self.kind() {
+                        SessionKind::Review => labels::START,
+                        SessionKind::Plan => labels::START_PLAN,
+                    })
                     .small()
                     .primary()
                     .loading(busy)

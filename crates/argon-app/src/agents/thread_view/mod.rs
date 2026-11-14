@@ -17,7 +17,7 @@ use super::badges::{severity_counts, status_chip};
 use super::composer::Composer;
 use super::panel_labels as labels;
 use super::session_actions::{SessionControls, controls};
-use super::sessions_list::pr_labels;
+use super::sessions_list::subject_labels;
 use super::thread_model::ThreadModel;
 use crate::bottom::duration_label;
 
@@ -87,7 +87,7 @@ impl ThreadView {
     fn header(&self, cx: &mut Context<Self>) -> Div {
         let model = self.model.read(cx);
         let info = model.info();
-        let (title, reference) = pr_labels(&info.pr, info.number, cx);
+        let (title, reference) = subject_labels(&info.pr, info.kind, info.number, cx);
         let meta = format!("{reference} · {} · {}", info.agent_label, info.model_label);
         let status = model.card_status();
         let session_controls = SessionControls {

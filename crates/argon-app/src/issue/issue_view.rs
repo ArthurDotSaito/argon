@@ -45,6 +45,7 @@ pub struct IssueView {
     pub(super) action: ActionState,
     pub(super) action_task: Option<Task<()>>,
     pub(super) viewer_id: Option<String>,
+    pub(super) pending_plan: bool,
     pub(super) linked_scroll: ScrollHandle,
     pub(super) sub_scroll: ScrollHandle,
     scroll: ScrollHandle,
@@ -88,6 +89,7 @@ impl IssueView {
             action: ActionState::Idle,
             action_task: None,
             viewer_id: None,
+            pending_plan: false,
             linked_scroll: ScrollHandle::new(),
             sub_scroll: ScrollHandle::new(),
             scroll: ScrollHandle::new(),
@@ -201,7 +203,8 @@ impl Focusable for IssueView {
 }
 
 impl Render for IssueView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settle_pending_plan(window, cx);
         let now = Utc::now();
         let detail = self.detail.clone();
         let store_issue = self.store_issue.clone();

@@ -15,6 +15,7 @@ pub const ASSIGN_TO_ME: &str = "Atribuir a mim";
 pub const CLOSE: &str = "Fechar";
 pub const CLOSE_COMPLETED: &str = "Fechar como concluída";
 pub const CLOSE_NOT_PLANNED: &str = "Fechar como não planejada";
+pub const PLAN_LOAD_FAILED: &str = "Não consegui carregar a issue para o Agent Plan";
 
 pub fn load_failed(error: &str) -> String {
     format!("Falha ao carregar a issue: {error}")

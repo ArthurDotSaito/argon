@@ -1,4 +1,5 @@
 mod gather;
+mod plan;
 #[cfg(test)]
 mod tests;
 
@@ -10,6 +11,7 @@ use crate::bottom::clean_line;
 use crate::pr::labels::{line_ref, review_state};
 
 pub use gather::{Gathered, gather, gather_ci};
+pub use plan::plan_context;
 
 pub const CI_LOG_LINES: usize = 80;
 

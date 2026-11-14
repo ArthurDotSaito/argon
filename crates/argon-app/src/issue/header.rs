@@ -14,6 +14,7 @@ use gpui_kit::{
 use super::actions::{ActionBar, IssueAction};
 use super::issue_view::IssueView;
 use super::labels;
+use crate::agents::{AGENT_PLAN, PLAN_BUTTON_TOOLTIP};
 use crate::pr::{self, labels as pr_labels};
 use crate::ui;
 
@@ -128,6 +129,17 @@ fn actions(refreshing: bool, bar: ActionBar, cx: &mut Context<IssueView>) -> Div
                 cx.listener(|this, _: &ClickEvent, _, cx| this.run_action(IssueAction::Assign, cx)),
             )
     });
+    let plan = bar.plan.then(|| {
+        Button::new("issue-agent-plan")
+            .icon(Icon::new(IconName::Sparkles))
+            .label(AGENT_PLAN)
+            .small()
+            .primary()
+            .tooltip(PLAN_BUTTON_TOOLTIP)
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.open_agent_plan(window, cx)),
+            )
+    });
     let close = bar.close.then(|| close_button(bar.running, cx));
     h_flex()
         .gap_1()
@@ -136,6 +148,7 @@ fn actions(refreshing: bool, bar: ActionBar, cx: &mut Context<IssueView>) -> Div
         .child(refresh)
         .children(assign)
         .children(close)
+        .children(plan)
 }
 
 fn close_button(running: Option<IssueAction>, cx: &mut Context<IssueView>) -> impl IntoElement {

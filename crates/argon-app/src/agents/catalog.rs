@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use argon_agents::defaults::agent_defaults;
-use argon_core::PrKey;
+use argon_core::{PrKey, SessionKind};
 use argon_store::{SessionRow, SessionStatus, Store};
 use chrono::{DateTime, Utc};
 use gpui_kit::{App, AppContext as _, Context, Entity, Global, SharedString, Subscription, Task};
@@ -9,9 +9,8 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Global, SharedString, Subs
 use super::card_status::{CardStatus, SessionFilter, card_status};
 use super::finding_set::SeverityCounts;
 use super::sessions::{AgentSessions, AgentsEvent};
-use super::sessions_list::SessionCard;
+use super::sessions_list::{SessionCard, subject_number};
 use super::thread_model::{SessionInfo, ThreadModel};
-use crate::inbox::InboxModel;
 use crate::services::{AppServices, flatten};
 
 struct HistoryRow {
@@ -43,13 +42,11 @@ fn load_rows(store: &mut Store) -> argon_store::Result<Vec<HistoryRow>> {
 }
 
 pub(super) fn session_info(row: &SessionRow, worktree_present: bool, cx: &App) -> SessionInfo {
-    let number =
-        InboxModel::global(cx).and_then(|inbox| inbox.read(cx).pr(&row.pr).map(|pr| pr.number));
     SessionInfo {
         session_id: row.id.clone(),
         pr: row.pr.clone(),
         kind: row.kind,
-        number,
+        number: subject_number(&row.pr, row.kind, cx),
         agent_label: agent_defaults(row.agent).label,
         model: row.model.clone(),
         model_label: row.model_label.clone().unwrap_or_else(|| row.model.clone()),
@@ -242,14 +239,15 @@ impl SessionCatalog {
         Some(thread)
     }
 
-    pub fn pr_of(&self, session_id: &str, cx: &App) -> Option<PrKey> {
+    pub fn subject_of(&self, session_id: &str, cx: &App) -> Option<(PrKey, SessionKind)> {
         if let Some(live) = self.sessions.read(cx).thread(session_id) {
-            return Some(live.read(cx).info().pr.clone());
+            let info = live.read(cx).info();
+            return Some((info.pr.clone(), info.kind));
         }
         self.history
             .iter()
             .find(|history| history.row.id == session_id)
-            .map(|history| history.row.pr.clone())
+            .map(|history| (history.row.pr.clone(), history.row.kind))
     }
 
     pub fn latest_for(&self, pr: &PrKey, cx: &App) -> Option<String> {

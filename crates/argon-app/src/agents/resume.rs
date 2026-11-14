@@ -4,14 +4,14 @@ use argon_agents::defaults::agent_defaults;
 use argon_agents::{
     AgentSessionHandle, SessionContext, Transport, WorktreeManager, agent_spec_for, resume_session,
 };
-use argon_core::{Config, PermissionMode};
+use argon_core::{Config, PermissionMode, SessionKind};
 use argon_store::{ARCHIVE_PENDING, SessionRow, SessionStatus};
 use gpui_kit::{Context, SharedString};
 
 use super::panel_labels as labels;
 use super::sessions::{ActiveSession, AgentSessions, ResumeState};
+use super::sessions_list::subject_number;
 use super::sink::SessionStore;
-use crate::inbox::InboxModel;
 use crate::services::{Services, StoreHandle, flatten};
 
 struct Resumed {
@@ -139,10 +139,10 @@ impl AgentSessions {
             head,
             handle,
         } = resumed;
-        let number =
-            InboxModel::global(cx).and_then(|inbox| inbox.read(cx).pr(&row.pr).map(|pr| pr.number));
+        let number = subject_number(&row.pr, row.kind, cx);
         let session_id = row.id.clone();
         let pr = row.pr.clone();
+        let kind = row.kind;
         self.add(
             ActiveSession {
                 session_id: row.id,
@@ -159,6 +159,9 @@ impl AgentSessions {
             },
             cx,
         );
+        if kind == SessionKind::Plan {
+            return;
+        }
         let check = services.spawn_github(cx, pr.host.clone(), move |client| async move {
             client.pr_detail(&pr.id).await
         });

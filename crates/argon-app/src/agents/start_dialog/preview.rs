@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use argon_core::SessionKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -106,19 +107,24 @@ impl StartDialog {
                 .vertical_scrollbar(&self.preview_scroll)
                 .into_any_element()
         };
-        let diff_note = self.preview.as_ref().filter(|_| lines > 0).map(|preview| {
-            h_flex()
-                .gap_1p5()
-                .items_center()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::FileDiff).xsmall())
-                .child(if preview.diff_inline {
-                    labels::DIFF_INLINE
-                } else {
-                    labels::DIFF_IN_WORKTREE
-                })
-        });
+        let diff_note = self
+            .preview
+            .as_ref()
+            .filter(|_| lines > 0)
+            .and_then(|preview| preview.diff_inline)
+            .map(|inline| {
+                h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::FileDiff).xsmall())
+                    .child(if inline {
+                        labels::DIFF_INLINE
+                    } else {
+                        labels::DIFF_IN_WORKTREE
+                    })
+            });
         v_flex()
             .w_full()
             .gap_1()
@@ -173,12 +179,22 @@ impl StartDialog {
             .collect::<Vec<_>>()
             .join(" ");
         let cwd = match (&self.session_id, Self::sessions(cx)) {
-            (Ok(id), Some(sessions)) => sessions
-                .read(cx)
-                .worktrees()
-                .planned_path(&self.pr.host, &self.pr.repo, self.pr.number, id)
+            (Ok(id), Some(sessions)) => {
+                let worktrees = sessions.read(cx).worktrees();
+                let (key, repo, number) = (
+                    self.subject.key(),
+                    self.subject.repo(),
+                    self.subject.number(),
+                );
+                match self.kind() {
+                    SessionKind::Review => worktrees.planned_path(&key.host, repo, number, id),
+                    SessionKind::Plan => {
+                        worktrees.planned_default_path(&key.host, repo, number, id)
+                    }
+                }
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|error| error.to_string()),
+                .unwrap_or_else(|error| error.to_string())
+            }
             _ => String::new(),
         };
         let model = match (&self.model, self.model_label()) {
