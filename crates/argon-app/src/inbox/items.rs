@@ -91,7 +91,7 @@ impl Subject {
         self.node_id() == key.id.0 && self.host() == key.host
     }
 
-    fn node_id(&self) -> &str {
+    pub(super) fn node_id(&self) -> &str {
         match self {
             Self::Pr(pr) => &pr.id.0,
             Self::Issue(issue) => &issue.id.0,

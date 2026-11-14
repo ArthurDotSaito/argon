@@ -376,6 +376,7 @@ impl InboxPane {
             .icon(Icon::new(AppIconName::RefreshCw))
             .xsmall()
             .ghost()
+            .loading(self.model.read(cx).is_browse_loading())
             .tooltip(pr_labels::REFRESH)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.model.update(cx, |model, cx| model.browse_refresh(cx));

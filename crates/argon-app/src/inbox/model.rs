@@ -1,13 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use argon_core::{DEFAULT_HOST, Issue, PrKey, PullRequest, SubjectKind, ViewSet};
+use argon_core::{Issue, PrKey, PullRequest, SubjectKind, ViewSet};
 use argon_store::Store;
 use chrono::{DateTime, Local, Utc};
 use gpui_kit::{App, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task};
 
 use super::InboxView;
 use super::browse::{
-    BrowseKey, BrowseList, BrowsePage, IssueScope, PAGE_SIZE, browse_query, load_page,
+    BrowseKey, BrowseList, BrowsePage, IssueScope, PAGE_SIZE, SeenByHost, browse_host,
+    browse_query, last_seen_by_host, load_page,
 };
 use super::filter::{self, KindFilter};
 use super::items::{AccountEntry, InboxItem, LoadContext, OrgEntry, OrgKey, Subject, load_items};
@@ -331,16 +332,15 @@ impl InboxModel {
         let Some(key) = self.active_key().cloned() else {
             return;
         };
-        self.browse.insert(key.clone(), BrowseList::default());
         self.fetch_page(key, None, cx);
-        self.refilter(true);
         cx.notify();
     }
 
     pub fn browse_retry(&mut self, cx: &mut Context<Self>) {
-        match self.browse_list() {
-            Some(list) if list.loaded && list.next.is_some() => self.browse_more(cx),
-            _ => self.browse_refresh(cx),
+        if self.browse_list().is_some_and(|list| list.failed_more) {
+            self.browse_more(cx);
+        } else {
+            self.browse_refresh(cx);
         }
     }
 
@@ -361,25 +361,14 @@ impl InboxModel {
         }
     }
 
-    fn shown_items_mut(&mut self) -> &mut [InboxItem] {
-        let key = self
-            .target
-            .as_ref()
-            .filter(|_| self.scope == IssueScope::AllOpen);
-        match key.and_then(|key| self.browse.get_mut(key)) {
-            Some(list) => &mut list.items,
-            None => &mut self.items,
-        }
-    }
-
     fn browse_target(&self) -> Option<BrowseKey> {
-        let host = match &self.org {
-            Some(org) => org.host().to_string(),
-            None => self.services.accounts().first().map_or_else(
-                || DEFAULT_HOST.to_string(),
-                |account| account.host.to_lowercase(),
-            ),
-        };
+        let hosts: Vec<String> = self
+            .services
+            .accounts()
+            .into_iter()
+            .map(|account| account.host)
+            .collect();
+        let host = browse_host(self.org.as_ref(), &hosts)?;
         let tracked: Vec<OrgKey> = self
             .orgs
             .iter()
@@ -417,6 +406,7 @@ impl InboxModel {
     }
 
     fn fetch_page(&mut self, key: BrowseKey, after: Option<String>, cx: &mut Context<Self>) {
+        let first = after.is_none();
         self.browse_epoch += 1;
         let epoch = self.browse_epoch;
         self.browse_inflight = Some(key.clone());
@@ -445,7 +435,7 @@ impl InboxModel {
             };
             _ = this.update(cx, |model, cx| {
                 if model.browse_epoch == epoch {
-                    model.apply_page(key, loaded, cx);
+                    model.apply_page(key, first, loaded, cx);
                 }
             });
         }));
@@ -454,16 +444,18 @@ impl InboxModel {
     fn apply_page(
         &mut self,
         key: BrowseKey,
+        first: bool,
         loaded: Result<BrowsePage, String>,
         cx: &mut Context<Self>,
     ) {
         self.browse_inflight = None;
         let list = self.browse.entry(key).or_default();
         match loaded {
+            Ok(page) if first => list.replace(page),
             Ok(page) => list.append(page),
             Err(error) => {
                 tracing::warn!(%error, "failed to browse open issues");
-                list.error = Some(labels::browse_failed(&error).into());
+                list.fail(labels::browse_failed(&error).into(), !first);
             }
         }
         self.refilter(false);
@@ -526,7 +518,7 @@ impl InboxModel {
         let (unread, updated_at) = (item.unread, item.subject.updated_at());
         self.selected = position;
         if unread {
-            self.mark_read_in_memory(&key, updated_at);
+            self.set_unread_in_memory(&key, false, updated_at);
             let seen = key.clone();
             self.persist(move |store| store.mark_seen(&seen, updated_at), cx);
         }
@@ -538,13 +530,13 @@ impl InboxModel {
     }
 
     pub fn mark_seen(&mut self, key: &PrKey, updated_at: DateTime<Utc>, cx: &mut Context<Self>) {
-        self.mark_read_in_memory(key, updated_at);
+        self.set_unread_in_memory(key, false, updated_at);
         let key = key.clone();
         self.persist(move |store| store.mark_seen(&key, updated_at), cx);
         cx.notify();
     }
 
-    fn mark_read_in_memory(&mut self, key: &PrKey, updated_at: DateTime<Utc>) {
+    fn set_unread_in_memory(&mut self, key: &PrKey, unread: bool, updated_at: DateTime<Utc>) {
         let synced = self.index.get(key).and_then(|&ix| self.items.get_mut(ix));
         let browsed = self
             .browse
@@ -552,8 +544,8 @@ impl InboxModel {
             .flat_map(|list| list.items.iter_mut())
             .filter(|item| item.subject.has_key(key));
         for item in synced.into_iter().chain(browsed) {
-            if item.subject.updated_at() <= updated_at {
-                item.unread = false;
+            if unread || item.subject.updated_at() <= updated_at {
+                item.unread = unread;
             }
         }
     }
@@ -579,15 +571,13 @@ impl InboxModel {
     }
 
     pub fn toggle_read_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(&ix) = self.sections.visible.get(self.selected) else {
+        let Some(item) = self.item_at(self.selected) else {
             return;
         };
-        let Some(item) = self.shown_items_mut().get_mut(ix) else {
-            return;
-        };
-        item.unread = !item.unread;
-        let (key, updated_at) = (item.subject.key(), item.subject.updated_at());
-        if item.unread {
+        let (key, updated_at, unread) =
+            (item.subject.key(), item.subject.updated_at(), !item.unread);
+        self.set_unread_in_memory(&key, unread, updated_at);
+        if unread {
             self.persist(move |store| store.mark_unread(&key), cx);
         } else {
             self.persist(move |store| store.mark_seen(&key, updated_at), cx);
@@ -597,11 +587,15 @@ impl InboxModel {
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let mut context = self.load_context();
+        let hosts: HashSet<String> = self.browse.keys().map(|key| key.host.clone()).collect();
         let store = self.services.store();
         let epoch = self.local_epoch;
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let loaded = store
-                .call(move |store| load_items(store, &mut context))
+                .call(move |store| -> argon_store::Result<_> {
+                    let items = load_items(store, &mut context)?;
+                    Ok((items, last_seen_by_host(store, hosts)?))
+                })
                 .await;
             _ = this.update(cx, |model, cx| {
                 if model.local_epoch == epoch {
@@ -625,11 +619,16 @@ impl InboxModel {
         }
     }
 
-    fn apply(&mut self, loaded: Result<Vec<InboxItem>, String>, cx: &mut Context<Self>) {
+    fn apply(
+        &mut self,
+        loaded: Result<(Vec<InboxItem>, SeenByHost), String>,
+        cx: &mut Context<Self>,
+    ) {
         match loaded {
-            Ok(items) => {
+            Ok((items, seen)) => {
                 self.items = items;
                 self.reindex();
+                self.refresh_browse_unread(&seen);
                 self.loaded = true;
                 self.load_error = None;
                 self.refresh_meta();
@@ -643,6 +642,14 @@ impl InboxModel {
             }
         }
         cx.notify();
+    }
+
+    fn refresh_browse_unread(&mut self, seen: &SeenByHost) {
+        for (key, list) in &mut self.browse {
+            if let Some(last_seen) = seen.get(&key.host) {
+                list.refresh_unread(last_seen);
+            }
+        }
     }
 
     fn persist(

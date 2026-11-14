@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use argon_core::{Involvement, Issue, PrKey, ViewSet};
+use argon_core::{DEFAULT_HOST, Involvement, Issue, PrKey, ViewSet};
 use argon_github::IssuePage;
 use argon_store::{LocalState, Store};
 use chrono::{DateTime, Utc};
@@ -11,6 +11,8 @@ use super::filter::KindFilter;
 use super::items::{InboxItem, LoadContext, OrgKey, Subject, add_viewer_logins};
 
 pub(super) const PAGE_SIZE: usize = 50;
+
+pub(super) type SeenByHost = HashMap<String, HashMap<String, DateTime<Utc>>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IssueScope {
@@ -32,9 +34,15 @@ pub(super) struct BrowseList {
     pub(super) total: u32,
     pub(super) loaded: bool,
     pub(super) error: Option<SharedString>,
+    pub(super) failed_more: bool,
 }
 
 impl BrowseList {
+    pub(super) fn replace(&mut self, page: BrowsePage) {
+        self.items.clear();
+        self.append(page);
+    }
+
     pub(super) fn append(&mut self, page: BrowsePage) {
         let known: HashSet<PrKey> = self.items.iter().map(|item| item.subject.key()).collect();
         self.items.extend(
@@ -46,6 +54,19 @@ impl BrowseList {
         self.total = page.total;
         self.loaded = true;
         self.error = None;
+        self.failed_more = false;
+    }
+
+    pub(super) fn fail(&mut self, error: SharedString, more: bool) {
+        self.error = Some(error);
+        self.failed_more = more;
+    }
+
+    pub(super) fn refresh_unread(&mut self, last_seen: &HashMap<String, DateTime<Utc>>) {
+        for item in &mut self.items {
+            let seen = last_seen.get(item.subject.node_id()).copied();
+            item.unread = unread_since(item.subject.updated_at(), seen);
+        }
     }
 }
 
@@ -83,6 +104,36 @@ pub fn browse_query(
     Some(terms.join(" "))
 }
 
+pub(super) fn browse_host(org: Option<&OrgKey>, account_hosts: &[String]) -> Option<String> {
+    let hosts: HashSet<String> = account_hosts
+        .iter()
+        .map(|host| host.to_lowercase())
+        .collect();
+    if hosts.len() > 1 {
+        return None;
+    }
+    Some(match org {
+        Some(org) => org.host().to_string(),
+        None => hosts
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| DEFAULT_HOST.to_string()),
+    })
+}
+
+pub(super) fn last_seen_by_host(
+    store: &Store,
+    hosts: HashSet<String>,
+) -> argon_store::Result<SeenByHost> {
+    hosts
+        .into_iter()
+        .map(|host| {
+            let seen = store.last_seen_map(&host)?;
+            Ok((host, seen))
+        })
+        .collect()
+}
+
 pub(super) fn load_page(
     store: &mut Store,
     key: &BrowseKey,
@@ -110,7 +161,7 @@ fn browse_items(
             issue.involvement = involvement(view);
             let last_seen = last_seen.get(&issue.id.0).copied();
             let state = LocalState {
-                unread: last_seen.is_none_or(|seen| issue.updated_at > seen),
+                unread: unread_since(issue.updated_at, last_seen),
                 archived: false,
                 last_seen,
             };
@@ -119,6 +170,10 @@ fn browse_items(
             item
         })
         .collect()
+}
+
+fn unread_since(updated_at: DateTime<Utc>, last_seen: Option<DateTime<Utc>>) -> bool {
+    last_seen.is_none_or(|seen| updated_at > seen)
 }
 
 fn involvement(view: InboxView) -> Involvement {
@@ -321,5 +376,102 @@ mod tests {
         );
 
         assert!(!items[0].views.contains(ViewSet::NEEDS_YOU));
+    }
+
+    fn hosts(hosts: &[&str]) -> Vec<String> {
+        hosts.iter().map(|host| host.to_string()).collect()
+    }
+
+    #[test]
+    fn browsing_uses_the_only_account_host_or_the_selected_org() {
+        assert_eq!(
+            browse_host(None, &hosts(&["GitHub.com", "github.com"])).as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(browse_host(None, &[]).as_deref(), Some(DEFAULT_HOST));
+        let selected = OrgKey::new("github.com", "acme");
+        assert_eq!(
+            browse_host(Some(&selected), &hosts(&["github.com"])).as_deref(),
+            Some("github.com")
+        );
+    }
+
+    #[test]
+    fn browsing_is_hidden_with_accounts_on_more_than_one_host() {
+        let accounts = hosts(&["github.com", "ghe.example.com"]);
+        let selected = OrgKey::new("github.com", "acme");
+        assert_eq!(browse_host(None, &accounts), None);
+        assert_eq!(browse_host(Some(&selected), &accounts), None);
+    }
+
+    fn page(ids: &[&str], next: Option<&str>, total: u32) -> BrowsePage {
+        let issues = ids.iter().map(|id| issue(id, 1)).collect();
+        BrowsePage {
+            items: browse_items(issues, InboxView::Inbox, &HashMap::new(), &context()),
+            next: next.map(str::to_string),
+            total,
+        }
+    }
+
+    fn ids(list: &BrowseList) -> Vec<String> {
+        list.items
+            .iter()
+            .map(|item| item.subject.key().id.0)
+            .collect()
+    }
+
+    #[test]
+    fn append_skips_issues_already_loaded_and_keeps_the_latest_cursor() {
+        let mut list = BrowseList::default();
+        list.append(page(&["a", "b"], Some("cursor-1"), 3));
+        list.fail("boom".into(), true);
+
+        list.append(page(&["b", "c"], None, 3));
+
+        assert_eq!(ids(&list), vec!["a", "b", "c"]);
+        assert_eq!(list.next, None);
+        assert_eq!(list.total, 3);
+        assert!(list.loaded);
+        assert_eq!(list.error, None);
+        assert!(!list.failed_more);
+    }
+
+    #[test]
+    fn replace_swaps_the_items_for_the_new_first_page() {
+        let mut list = BrowseList::default();
+        list.append(page(&["a", "b"], Some("cursor-1"), 80));
+
+        list.replace(page(&["c", "a"], Some("cursor-2"), 81));
+
+        assert_eq!(ids(&list), vec!["c", "a"]);
+        assert_eq!(list.next.as_deref(), Some("cursor-2"));
+        assert_eq!(list.total, 81);
+    }
+
+    #[test]
+    fn failing_keeps_the_loaded_items() {
+        let mut list = BrowseList::default();
+        list.append(page(&["a"], Some("cursor-1"), 2));
+
+        list.fail("boom".into(), false);
+
+        assert_eq!(ids(&list), vec!["a"]);
+        assert_eq!(list.error.as_deref(), Some("boom"));
+        assert!(!list.failed_more);
+    }
+
+    #[test]
+    fn refresh_unread_follows_the_stored_last_seen() {
+        let mut list = BrowseList::default();
+        list.append(page(&["seen", "unseen", "updated"], None, 3));
+        let last_seen = HashMap::from([
+            ("seen".to_string(), fixtures::days_ago(1)),
+            ("updated".to_string(), fixtures::days_ago(2)),
+        ]);
+
+        list.refresh_unread(&last_seen);
+
+        let unread: Vec<bool> = list.items.iter().map(|item| item.unread).collect();
+        assert_eq!(unread, vec![false, true, true]);
     }
 }
