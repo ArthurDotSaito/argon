@@ -5,6 +5,8 @@ use super::error::{Result, WorktreeError};
 const SESSION_PREFIX_LEN: usize = 12;
 const GIT_SUFFIX: &str = ".git";
 const GITDIR_KEY: &str = "gitdir:";
+const SYMREF_KEY: &str = "ref:";
+const HEADS_PREFIX: &str = "refs/heads/";
 const TMP_MARKER: &str = ".tmp-";
 const RESERVED_NAMES: [&str; 4] = ["con", "prn", "aux", "nul"];
 
@@ -62,15 +64,58 @@ pub(super) fn worktree_parent(worktrees_root: &Path, host: &str, repo: &RepoRef)
     worktrees_root.join(host).join(&repo.owner).join(&repo.name)
 }
 
-pub(super) fn worktree_dir_name(number: u64, session_prefix: &str, suffix: Option<&str>) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorktreeKind {
+    PullRequest,
+    Issue,
+}
+
+impl WorktreeKind {
+    fn dir_prefix(self) -> &'static str {
+        match self {
+            WorktreeKind::PullRequest => "pr",
+            WorktreeKind::Issue => "issue",
+        }
+    }
+}
+
+pub(super) fn worktree_dir_name(
+    kind: WorktreeKind,
+    number: u64,
+    session_prefix: &str,
+    suffix: Option<&str>,
+) -> String {
+    let prefix = kind.dir_prefix();
     match suffix {
-        Some(suffix) => format!("pr-{number}-{session_prefix}-{suffix}"),
-        None => format!("pr-{number}-{session_prefix}"),
+        Some(suffix) => format!("{prefix}-{number}-{session_prefix}-{suffix}"),
+        None => format!("{prefix}-{number}-{session_prefix}"),
     }
 }
 
 pub(super) fn pr_ref(number: u64) -> String {
     format!("refs/argon/pr-{number}")
+}
+
+pub(super) const DEFAULT_REF: &str = "refs/argon/default";
+
+pub(super) fn parse_default_branch(ls_remote_output: &str) -> Option<String> {
+    let target = ls_remote_output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(SYMREF_KEY))?
+        .split_whitespace()
+        .next()?;
+    let branch = target.strip_prefix(HEADS_PREFIX)?;
+    is_fetchable_branch(branch).then(|| branch.to_string())
+}
+
+fn is_fetchable_branch(branch: &str) -> bool {
+    const FORBIDDEN: [char; 7] = [':', '?', '*', '[', '\\', '~', '^'];
+    !branch.is_empty()
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && !branch
+            .chars()
+            .any(|ch| ch.is_control() || FORBIDDEN.contains(&ch))
 }
 
 pub(super) fn tmp_clone_dir(mirror: &Path, pid: u32) -> Option<PathBuf> {
@@ -266,18 +311,61 @@ mod tests {
                 .join("nuria-auth")
         );
         assert_eq!(
-            worktree_dir_name(42, "0190a3b2-7c1", None),
+            worktree_dir_name(WorktreeKind::PullRequest, 42, "0190a3b2-7c1", None),
             "pr-42-0190a3b2-7c1"
         );
         assert_eq!(
-            worktree_dir_name(42, "0190a3b2-7c1", Some("a1f0")),
+            worktree_dir_name(WorktreeKind::PullRequest, 42, "0190a3b2-7c1", Some("a1f0")),
             "pr-42-0190a3b2-7c1-a1f0"
+        );
+    }
+
+    #[test]
+    fn issue_worktrees_use_the_issue_prefix() {
+        assert_eq!(
+            worktree_dir_name(WorktreeKind::Issue, 7, "0190a3b2-7c1", None),
+            "issue-7-0190a3b2-7c1"
+        );
+        assert_eq!(
+            worktree_dir_name(WorktreeKind::Issue, 7, "0190a3b2-7c1", Some("a1f0")),
+            "issue-7-0190a3b2-7c1-a1f0"
         );
     }
 
     #[test]
     fn builds_pr_ref() {
         assert_eq!(pr_ref(42), "refs/argon/pr-42");
+    }
+
+    #[test]
+    fn builds_default_ref() {
+        assert_eq!(DEFAULT_REF, "refs/argon/default");
+    }
+
+    #[test]
+    fn parses_default_branch_from_ls_remote_symref() {
+        let output = "ref: refs/heads/master\tHEAD\n7fd1a60b01f91b314f59955a4e4d4e80d8edf11d\tHEAD";
+        assert_eq!(parse_default_branch(output), Some("master".to_string()));
+        let slashed = "ref: refs/heads/release/2026.1\tHEAD\nabc\tHEAD\n";
+        assert_eq!(
+            parse_default_branch(slashed),
+            Some("release/2026.1".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_ls_remote_output_without_a_usable_default_branch() {
+        for output in [
+            "",
+            "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d\tHEAD",
+            "ref: refs/tags/v1\tHEAD",
+            "ref: refs/heads/\tHEAD",
+            "ref: refs/heads/-x\tHEAD",
+            "ref: refs/heads/a..b\tHEAD",
+            "ref: refs/heads/a:b\tHEAD",
+        ] {
+            assert_eq!(parse_default_branch(output), None, "{output:?}");
+        }
     }
 
     #[test]

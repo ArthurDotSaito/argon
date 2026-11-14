@@ -84,10 +84,21 @@ mod tests {
             found(r"C:\wt\github.com\o\r\pr-1-aaaa", 600, now),
             found(r"C:\wt\github.com\o\r\pr-2-bbbb", 600, now),
             found(r"C:\wt\github.com\o\r\pr-3-cccc", 1, now),
+            found(r"C:\wt\github.com\o\r\issue-4-dddd", 600, now),
+            found(r"C:\wt\github.com\o\r\issue-5-eeee", 600, now),
         ];
-        let known = [PathBuf::from("c:/WT/github.com/o/r/pr-1-aaaa/")];
+        let known = [
+            PathBuf::from("c:/WT/github.com/o/r/pr-1-aaaa/"),
+            PathBuf::from("c:/WT/github.com/o/r/issue-5-eeee"),
+        ];
         let orphans = orphan_worktrees(&tree, &known, now - Duration::from_secs(60));
-        assert_eq!(orphans, [PathBuf::from(r"C:\wt\github.com\o\r\pr-2-bbbb")]);
+        assert_eq!(
+            orphans,
+            [
+                PathBuf::from(r"C:\wt\github.com\o\r\pr-2-bbbb"),
+                PathBuf::from(r"C:\wt\github.com\o\r\issue-4-dddd")
+            ]
+        );
     }
 
     #[test]

@@ -1,9 +1,10 @@
+use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use super::error::Result;
-use super::invocation::{CLONE_TIMEOUT, Invocation, WORKTREE_TIMEOUT};
-use super::layout::{RepoRef, is_tmp_clone_name, tmp_clone_dir};
+use super::invocation::{CLONE_TIMEOUT, FETCH_TIMEOUT, Invocation, WORKTREE_TIMEOUT};
+use super::layout::{RepoRef, is_tmp_clone_name, parse_default_branch, tmp_clone_dir};
 
 const STALE_LOCK_AGE: Duration = Duration::from_secs(10 * 60);
 const RENAME_ATTEMPTS: u32 = 5;
@@ -29,6 +30,20 @@ pub(super) async fn ensure(host: &str, repo: &RepoRef, mirror: &Path) -> Result<
         let _ = tokio::fs::remove_dir_all(&staging).await;
     }
     published
+}
+
+pub(super) async fn default_branch(host: &str, mirror: &Path) -> Result<String> {
+    let output = Invocation::git_authenticated(mirror, host)
+        .args(["ls-remote", "--symref", "origin", "HEAD"])
+        .run(FETCH_TIMEOUT)
+        .await?;
+    parse_default_branch(&output).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "the repository has no default branch to branch from",
+        )
+        .into()
+    })
 }
 
 async fn clone_and_publish(
