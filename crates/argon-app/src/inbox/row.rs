@@ -33,6 +33,7 @@ const DIFF_WIDTH: f32 = 104.;
 const COMMENTS_WIDTH: f32 = 40.;
 const AGE_WIDTH: f32 = 52.;
 const LABEL_DOT: f32 = 8.;
+const LABEL_MAX_WIDTH: f32 = 120.;
 const TAG_HEIGHT: f32 = 18.;
 const TAG_TEXT_SIZE: f32 = 11.;
 
@@ -370,7 +371,13 @@ fn label_dots(issue_labels: &[IssueLabel], cx: &App) -> Div {
                         .rounded_full()
                         .bg(color),
                 )
-                .child(label.name.clone())
+                .child(
+                    div()
+                        .min_w_0()
+                        .max_w(px(LABEL_MAX_WIDTH))
+                        .truncate()
+                        .child(label.name.clone()),
+                )
         }))
         .children(more)
 }

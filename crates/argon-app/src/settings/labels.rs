@@ -22,7 +22,8 @@ pub const AUTHENTICATED: &str = "autenticado — aguardando o próximo sync";
 pub const CHECKING: &str = "verificando…";
 pub const RECHECK: &str = "Verificar de novo";
 
-pub const ORGS_HINT: &str = "Só PRs das orgs marcadas entram na inbox. O sync roda ao salvar.";
+pub const ORGS_HINT: &str =
+    "Só PRs e issues das orgs marcadas entram na inbox. O sync roda ao salvar.";
 pub const NO_ORGS: &str = "Nenhuma org conhecida ainda — rode um sync com uma conta conectada.";
 pub const ADMIN: &str = "admin";
 pub const SAVE_AND_SYNC: &str = "Salvar e sincronizar";

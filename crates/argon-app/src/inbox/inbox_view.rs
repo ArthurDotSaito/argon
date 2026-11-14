@@ -292,7 +292,7 @@ impl InboxPane {
             )
     }
 
-    fn kind_segment(&self, cx: &App) -> Div {
+    fn kind_segment(&self, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let current = self.model.read(cx).kind_filter();
         h_flex()
@@ -308,7 +308,6 @@ impl InboxPane {
                     .enumerate()
                     .map(|(ix, (kind, label, icon))| {
                         let selected = kind == current;
-                        let model = self.model.downgrade();
                         h_flex()
                             .id(("inbox-kind", ix))
                             .px(px(9.))
@@ -327,9 +326,11 @@ impl InboxPane {
                             })
                             .children(icon.map(|icon| Icon::new(icon).xsmall()))
                             .child(label)
-                            .on_click(move |_, _, cx| {
-                                _ = model.update(cx, |model, cx| model.set_kind_filter(kind, cx));
-                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.model
+                                    .update(cx, |model, cx| model.set_kind_filter(kind, cx));
+                                this.focus_handle.focus(window, cx);
+                            }))
                     }),
             )
     }

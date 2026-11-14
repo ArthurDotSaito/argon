@@ -37,7 +37,7 @@ impl LocalState {
 impl Store {
     pub(crate) fn list_with_local<T: DeserializeOwned>(
         &self,
-        table: &str,
+        table: &'static str,
     ) -> Result<Vec<(T, LocalState)>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT p.data, p.updated_at, l.last_seen_updated_at, l.archived_at

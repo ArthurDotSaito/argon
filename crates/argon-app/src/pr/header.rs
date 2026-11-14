@@ -323,6 +323,8 @@ fn stats(
     closing: Vec<ClosingLink>,
     cx: &mut Context<PrView>,
 ) -> Div {
+    let abandoned = pr.state == PrState::Closed && !merged;
+    let closing = if abandoned { Vec::new() } else { closing };
     let chips: Vec<_> = closing
         .into_iter()
         .enumerate()
