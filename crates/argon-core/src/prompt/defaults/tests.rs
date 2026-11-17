@@ -1,5 +1,6 @@
 use super::*;
 use crate::prompt::TemplateKind;
+use crate::prompt::profile::PROFILE_SLOT;
 use crate::prompt::template::{load_templates, parse_template};
 use crate::prompt::test_support::TempDir;
 
@@ -91,12 +92,15 @@ fn embedded_source(id: &str) -> &'static str {
 }
 
 const V2_REVIEW_PADRAO: &str = include_str!("../testdata/review-padrao.v2.md");
+const V3_REVIEW_PADRAO: &str = include_str!("../testdata/review-padrao.v3.md");
+const V2_SEGURANCA: &str = include_str!("../testdata/seguranca.v2.md");
+const V2_PERFORMANCE: &str = include_str!("../testdata/performance.v2.md");
 
 fn expected_version(id: &str) -> u32 {
     match id {
-        "review-padrao" => 3,
+        "review-padrao" => 4,
         "plan-padrao" => 1,
-        _ => 2,
+        _ => 3,
     }
 }
 
@@ -199,5 +203,62 @@ fn current_templates_are_left_alone_on_the_next_run() {
 fn current_templates_are_not_listed_as_previous_versions() {
     for (id, source) in DEFAULT_TEMPLATES {
         assert!(!is_previous_version(id, &content_hash(source)), "{id}");
+    }
+}
+
+const RETIRED_BEFORE_PROFILE_SLOT: [(&str, &str); 3] = [
+    ("review-padrao", V3_REVIEW_PADRAO),
+    ("seguranca", V2_SEGURANCA),
+    ("performance", V2_PERFORMANCE),
+];
+
+#[test]
+fn versions_retired_by_the_profile_slot_are_registered_as_previous_versions() {
+    for (id, source) in RETIRED_BEFORE_PROFILE_SLOT {
+        assert!(is_previous_version(id, &content_hash(source)), "{id}");
+    }
+}
+
+#[test]
+fn unedited_versions_retired_by_the_profile_slot_are_upgraded() {
+    let dir = TempDir::new("ensure-upgrades-profile-slot");
+    for (id, source) in RETIRED_BEFORE_PROFILE_SLOT {
+        fs::write(dir.path().join(format!("{id}.md")), source).unwrap();
+    }
+
+    ensure_default_templates(dir.path()).unwrap();
+
+    for (id, _) in RETIRED_BEFORE_PROFILE_SLOT {
+        let written = fs::read_to_string(dir.path().join(format!("{id}.md"))).unwrap();
+        assert_eq!(written, embedded_source(id), "{id}");
+    }
+}
+
+#[test]
+fn edited_version_retired_by_the_profile_slot_is_preserved() {
+    let dir = TempDir::new("ensure-preserves-edited-v3");
+    let path = dir.path().join("review-padrao.md");
+    let edited = format!(
+        "{V3_REVIEW_PADRAO}
+Minha regra extra.
+"
+    );
+    fs::write(&path, &edited).unwrap();
+
+    ensure_default_templates(dir.path()).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+}
+
+#[test]
+fn embedded_review_templates_contain_the_profile_slot_and_the_plan_does_not() {
+    for (id, source) in DEFAULT_TEMPLATES {
+        let expected = id != "plan-padrao";
+        assert_eq!(source.contains(PROFILE_SLOT), expected, "{id}");
+        assert_eq!(
+            source.matches(PROFILE_SLOT).count(),
+            usize::from(expected),
+            "{id}"
+        );
     }
 }

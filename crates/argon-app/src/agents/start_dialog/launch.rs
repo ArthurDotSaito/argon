@@ -1,3 +1,4 @@
+use argon_core::resolve_template;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{Context, SharedString, Window};
 
@@ -91,7 +92,9 @@ impl StartDialog {
                     .collect(),
             },
             Gathering::Plan(detail) => LaunchPrompt::Plan {
-                template: Box::new(self.current_template()?.clone()),
+                template: Box::new(
+                    resolve_template(self.current_template()?, &self.all_templates).ok()?,
+                ),
                 context: Box::new(plan_context(
                     detail,
                     labels::PLAN_BASE_PENDING,

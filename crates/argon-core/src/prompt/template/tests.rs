@@ -201,3 +201,54 @@ fn load_templates_returns_empty_when_directory_is_missing() {
 
     assert!(templates.is_empty());
 }
+
+#[test]
+fn header_without_base_or_detached_is_a_plain_template() {
+    let template = parse_template(
+        "r",
+        "+++
+name = \"R\"
++++
+Corpo",
+    )
+    .unwrap();
+
+    assert_eq!(template.base, None);
+    assert!(!template.detached);
+}
+
+#[test]
+fn parses_base_and_detached_from_the_header() {
+    let following = parse_template(
+        "perfil",
+        "+++
+name = \"Perfil\"
+base = \"review-padrao\"
++++
+Texto",
+    )
+    .unwrap();
+    let detached = parse_template(
+        "solto",
+        "+++
+base = \" review-padrao \"
+detached = true
++++
+Texto",
+    )
+    .unwrap();
+    let blank = parse_template(
+        "vazio",
+        "+++
+base = \"  \"
++++
+Texto",
+    )
+    .unwrap();
+
+    assert_eq!(following.base.as_deref(), Some("review-padrao"));
+    assert!(!following.detached);
+    assert_eq!(detached.base.as_deref(), Some("review-padrao"));
+    assert!(detached.detached);
+    assert_eq!(blank.base, None);
+}

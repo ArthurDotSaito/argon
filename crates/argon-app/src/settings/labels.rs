@@ -83,6 +83,20 @@ pub const RESTORE_TITLE: &str = "Restaurar template padrão";
 pub const NEW_TEMPLATE_NAME: &str = "Novo template";
 pub const NEW_TEMPLATE_BODY: &str =
     "Revise o PR {{ pr.title }} (#{{ pr.number }}) em {{ repo }}.\n";
+pub const NEW_PROFILE: &str = "Novo perfil";
+pub const NEW_PROFILE_NAME: &str = "Novo perfil";
+pub const NEW_PROFILE_BODY: &str = "Neste repositório, preste atenção também em:\n- \n";
+pub const PROFILE_BADGE: &str = "perfil";
+pub const BASE: &str = "Base";
+pub const PROFILE_TEXT: &str = "Só deste perfil";
+pub const OWN_TEXT_START: &str = "Texto próprio · início";
+pub const OWN_TEXT_END: &str = "Texto próprio · fim";
+pub const SAVE_HERE_ONLY: &str = "Salvar só neste perfil";
+pub const FOLLOW_AGAIN: &str = "Voltar a acompanhar";
+pub const REPOSITORIES: &str = "Repositórios que usam este template";
+pub const ADD_REPOSITORY: &str = "Adicionar repositório";
+pub const REPOSITORIES_EMPTY: &str =
+    "Nenhum repositório usa este template. Sem vínculo, vale o Template padrão.";
 
 pub const NOTIFICATIONS_HINT: &str = "Toasts do Windows. Valem a partir do próximo evento.";
 pub const NOTIFY_NEEDS_YOU: &str = "PR ou issue entrou em Needs you";
@@ -194,4 +208,70 @@ pub fn discard_message(name: &str) -> String {
 
 pub fn copy_of(name: &str) -> String {
     format!("{name} (cópia)")
+}
+
+pub fn profile_row(base_name: &str, detached: bool) -> String {
+    if detached {
+        format!("texto próprio · base: {base_name}")
+    } else {
+        format!("base: {base_name}")
+    }
+}
+
+pub fn from_base_start(base_name: &str) -> String {
+    format!("Vem de {base_name} · início")
+}
+
+pub fn from_base_end(base_name: &str) -> String {
+    format!("Vem de {base_name} · fim")
+}
+
+pub fn base_without_slot(base: &str) -> String {
+    format!(
+        "{base} não tem a linha {{# argon:perfil #}}: o texto deste perfil entra no fim do prompt, depois do formato da resposta. \"Restaurar padrão\" em {base} devolve a linha."
+    )
+}
+
+pub fn base_failed(error: &str) -> String {
+    format!("Base inválida: {error}")
+}
+
+pub fn base_edited(base_name: &str) -> String {
+    format!("Você alterou um trecho que vem de {base_name}. Onde aplicar?")
+}
+
+pub fn save_in_base(base_name: &str) -> String {
+    format!("Salvar em {base_name}, para todos")
+}
+
+pub fn save_in_base_hint(names: &str) -> String {
+    if names.is_empty() {
+        "Vale também para todo repositório sem perfil.".to_owned()
+    } else {
+        format!("Vale também para: {names} e para todo repositório sem perfil.")
+    }
+}
+
+pub fn follow_again_message(base_name: &str) -> String {
+    format!(
+        "Os trechos de {base_name} voltam a ser os atuais. O texto \"{PROFILE_TEXT}\" é mantido."
+    )
+}
+
+pub fn used_as_base(names: &str, has_slot: bool) -> String {
+    if has_slot {
+        format!("Base de: {names}. O texto de cada perfil entra na linha {{# argon:perfil #}}.")
+    } else {
+        format!(
+            "Base de: {names}. Sem a linha {{# argon:perfil #}}, o texto de cada perfil entra no fim."
+        )
+    }
+}
+
+pub fn base_in_use(names: &str) -> String {
+    format!("Este template é base de: {names}. Troque a base desses perfis antes de excluir.")
+}
+
+pub fn repo_elsewhere(repo: &str, template_name: &str) -> String {
+    format!("{repo} · hoje: {template_name}")
 }

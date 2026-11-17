@@ -1,7 +1,7 @@
 +++
 name = "Performance"
 description = "Foco em desempenho: N+1, alocações, I/O síncrono, índices, cache e complexidade."
-argon_template_version = 2
+argon_template_version = 3
 +++
 Você é um engenheiro de performance. Revise o Pull Request abaixo procurando gargalos reais de CPU, memória, I/O e banco, não micro-otimizações.
 
@@ -82,6 +82,8 @@ O diff não foi incluído por ser grande. Leia-o no worktree com `git diff {{ ba
 - Concorrência que serializa trabalho independente ou cria contenção de lock.
 
 Só aponte o que tiver impacto plausível em volume real e diga como estimou esse impacto. Use `high` para degradação perceptível em produção, `medium` para custo que cresce com os dados e `low` para ganhos pequenos.
+
+{# argon:perfil #}
 
 ## Formato da resposta
 

@@ -2,6 +2,8 @@ mod actions;
 mod files;
 mod naming;
 mod preview;
+mod profile;
+mod repos;
 mod review_opts;
 mod view;
 
@@ -13,6 +15,8 @@ use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
 
 use self::preview::PreviewState;
+use self::profile::ProfileEditor;
+use self::repos::RepoPicker;
 use super::labels;
 use crate::agents::{AgentSessions, Choice};
 use crate::config_watch;
@@ -36,6 +40,8 @@ pub struct TemplatesSection {
     error: Option<SharedString>,
     busy: bool,
     preview: PreviewState,
+    profile: ProfileEditor,
+    repo_picker: RepoPicker,
     default_select: Entity<SelectState<Vec<Choice>>>,
     diff_limit: Entity<InputState>,
     config: Config,
@@ -52,7 +58,9 @@ impl TemplatesSection {
         let default_select = cx.new(|cx| SelectState::new(Vec::<Choice>::new(), None, window, cx));
         let diff_limit = cx.new(|cx| InputState::new(window, cx));
         let preview = PreviewState::new(window, cx);
-        let subscriptions = vec![
+        let profile = ProfileEditor::new(window, cx);
+        let repo_picker = RepoPicker::new(window, cx);
+        let mut subscriptions = vec![
             cx.observe(&name, |_, _, cx| cx.notify()),
             cx.subscribe(&body, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -83,6 +91,8 @@ impl TemplatesSection {
                 },
             ),
         ];
+        subscriptions.extend(profile.subscriptions(window, cx));
+        subscriptions.push(repo_picker.subscription(window, cx));
         let mut this = Self {
             dir,
             templates: Load::Loading,
@@ -93,6 +103,8 @@ impl TemplatesSection {
             error: None,
             busy: false,
             preview,
+            profile,
+            repo_picker,
             default_select,
             diff_limit,
             config,
@@ -107,6 +119,7 @@ impl TemplatesSection {
 
     pub fn shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.refresh_targets(window, cx);
+        self.refresh_repos(window, cx);
     }
 
     pub fn config_changed(&mut self, config: &Config, window: &mut Window, cx: &mut Context<Self>) {
@@ -114,6 +127,7 @@ impl TemplatesSection {
         self.config = config.clone();
         if review_changed {
             self.sync_review_options(window, cx);
+            self.refresh_repos(window, cx);
             self.rerender(cx);
         }
     }
@@ -134,18 +148,25 @@ impl TemplatesSection {
 
     fn draft(&self, cx: &Context<Self>) -> Option<PromptTemplate> {
         let current = self.current()?;
+        let name = self.name.read(cx).value().to_string();
+        if current.base.is_some() {
+            return Some(self.profile_draft(current, name, cx));
+        }
         Some(PromptTemplate {
             id: current.id.clone(),
-            name: self.name.read(cx).value().to_string(),
+            name,
             description: current.description.clone(),
             kind: current.kind,
             version: current.version,
+            base: current.base.clone(),
+            detached: current.detached,
             body: self.body.read(cx).value().to_string(),
         })
     }
 
     fn is_dirty(&self, cx: &Context<Self>) -> bool {
         match (self.current(), self.draft(cx)) {
+            (Some(saved), Some(_)) if saved.base.is_some() => self.profile_dirty(saved, cx),
             (Some(saved), Some(draft)) => saved.name != draft.name || saved.body != draft.body,
             _ => false,
         }
@@ -196,6 +217,8 @@ impl TemplatesSection {
             .update(cx, |input, cx| input.set_value(name, window, cx));
         self.body
             .update(cx, |input, cx| input.set_value(body, window, cx));
+        self.load_profile(window, cx);
+        self.refresh_repos(window, cx);
         self.rerender(cx);
     }
 

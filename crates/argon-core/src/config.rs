@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::TemplateKind;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to access config file {path}: {source}")]
@@ -157,6 +159,8 @@ pub struct ReviewCfg {
     pub use_worktree: bool,
     pub include_previous_reviews: bool,
     pub include_ci_failures: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub repo_templates: BTreeMap<String, String>,
 }
 
 impl Default for ReviewCfg {
@@ -168,7 +172,41 @@ impl Default for ReviewCfg {
             use_worktree: true,
             include_previous_reviews: true,
             include_ci_failures: false,
+            repo_templates: BTreeMap::new(),
         }
+    }
+}
+
+pub fn repo_key(host: &str, repo: &str) -> String {
+    format!("{host}/{repo}")
+}
+
+impl ReviewCfg {
+    pub fn template_candidates(&self, kind: TemplateKind, host: &str, repo: &str) -> Vec<&str> {
+        match kind {
+            TemplateKind::Review => self
+                .repo_templates
+                .get(&repo_key(host, repo))
+                .map(String::as_str)
+                .into_iter()
+                .chain([self.default_template.as_str()])
+                .collect(),
+            TemplateKind::Plan => vec![self.default_plan_template.as_str()],
+        }
+    }
+
+    pub fn repo_template(&self, host: &str, repo: &str) -> Option<&str> {
+        self.repo_templates
+            .get(&repo_key(host, repo))
+            .map(String::as_str)
+    }
+
+    pub fn repos_using(&self, template_id: &str) -> Vec<String> {
+        self.repo_templates
+            .iter()
+            .filter(|(_, id)| id.as_str() == template_id)
+            .map(|(repo, _)| repo.clone())
+            .collect()
     }
 }
 
@@ -336,6 +374,10 @@ mod tests {
                 use_worktree: false,
                 include_previous_reviews: false,
                 include_ci_failures: true,
+                repo_templates: BTreeMap::from([(
+                    "github.com/acme/api".into(),
+                    "perfil-api".into(),
+                )]),
             },
             appearance: AppearanceCfg {
                 theme: ThemeChoice::System,
@@ -430,6 +472,42 @@ mod tests {
         let parsed: Config = toml::from_str(text).unwrap();
         assert_eq!(parsed.review.default_plan_template, "meu-plano");
         assert_eq!(parsed.review.default_template, "review-padrao");
+    }
+
+    #[test]
+    fn repo_templates_are_omitted_when_empty_and_read_back_when_set() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(!text.contains("repo_templates"), "{text}");
+        let text = "[review.repo_templates]\n\"github.com/acme/api\" = \"perfil-api\"\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(
+            parsed.review.repo_template("github.com", "acme/api"),
+            Some("perfil-api")
+        );
+        assert_eq!(parsed.review.default_template, "review-padrao");
+        assert_eq!(parsed.review.repo_template("github.com", "acme/web"), None);
+    }
+
+    #[test]
+    fn template_candidates_put_the_repo_template_first() {
+        let review = ReviewCfg {
+            repo_templates: BTreeMap::from([("github.com/acme/api".into(), "perfil-api".into())]),
+            ..ReviewCfg::default()
+        };
+        assert_eq!(
+            review.template_candidates(TemplateKind::Review, "github.com", "acme/api"),
+            ["perfil-api", "review-padrao"]
+        );
+        assert_eq!(
+            review.template_candidates(TemplateKind::Review, "github.com", "acme/web"),
+            ["review-padrao"]
+        );
+        assert_eq!(
+            review.template_candidates(TemplateKind::Plan, "github.com", "acme/api"),
+            ["plan-padrao"]
+        );
+        assert_eq!(review.repos_using("perfil-api"), ["github.com/acme/api"]);
+        assert!(review.repos_using("review-padrao").is_empty());
     }
 
     #[test]

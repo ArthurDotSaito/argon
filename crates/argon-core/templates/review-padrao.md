@@ -1,7 +1,7 @@
 +++
 name = "Review padrão"
 description = "Revisão geral: bugs, feedback de reviews anteriores e comentários desnecessários."
-argon_template_version = 3
+argon_template_version = 4
 +++
 Review pull request #{{pr.number}} in {{pr.repo}} ({{pr.url}}).
 Base {{pr.base}} ← head @ {{pr.sha}}
@@ -43,6 +43,8 @@ Unnecessary comments should not exist. Comments should not exist when the logic 
 First work out whether this has been reviewed before: look for existing review comments and for commits pushed since them. If it has, concentrate on what changed since that review — check whether the earlier feedback was actually addressed, review the new commits, and flag anything still outstanding.
 If it has not, review the whole set of changes. Either way, analyze the changes, check for bugs, and suggest improvements.
 At the end, suggest either approval or "Request Changes." Also, suggest a comment to be posted on the pull request.
+
+{# argon:perfil #}
 
 Read the diff with `gh pr diff {{pr.number}} --repo {{pr.repo}}`. Report findings as Critical / Important / Minor with file:line.
 

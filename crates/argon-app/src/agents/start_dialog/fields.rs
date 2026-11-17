@@ -4,7 +4,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
+    h_flex, v_flex,
 };
 use gpui_kit::{App, Context, Div, ParentElement as _, SharedString, Styled as _, div, px};
 
@@ -89,6 +90,23 @@ impl StartDialog {
             .ghost()
             .disabled(self.is_launching())
             .on_click(|_, window, cx| open_settings(window, cx));
+        let pin = (!plan && self.template.is_some()).then(|| {
+            let pinned = self.is_pinned_to_repo();
+            let repo = self.subject.repo();
+            let (icon, label) = if pinned {
+                (IconName::Check, labels::pinned_to_repo(repo))
+            } else {
+                (IconName::Tag, labels::pin_to_repo(repo))
+            };
+            Button::new("ai-pin-template")
+                .icon(Icon::new(icon))
+                .label(label)
+                .xsmall()
+                .ghost()
+                .selected(pinned)
+                .disabled(self.is_launching())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_repo_pin(cx)))
+        });
         let mut notes: Vec<Div> = Vec::new();
         if let Load::Failed(error) = &self.templates {
             notes.push(note(error.clone(), theme.danger));
@@ -148,6 +166,7 @@ impl StartDialog {
                         v_flex()
                             .pl(px(FIELD_LABEL_WIDTH + 8.))
                             .gap_0p5()
+                            .children(pin.map(|pin| h_flex().child(pin)))
                             .children(notes),
                     ),
             );
