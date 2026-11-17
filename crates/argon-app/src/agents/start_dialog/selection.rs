@@ -1,6 +1,6 @@
 use argon_core::{
     AgentCfg, AgentKind, PermissionMode, PromptError, PromptTemplate, RenderedPrompt, SessionKind,
-    TemplateKind, render_plan_prompt, render_prompt,
+    TemplateKind, render_plan_prompt, render_prompt, repo_key, resolve_template,
 };
 use gpui_kit::{AppContext as _, Context, SharedString, Task, Window};
 
@@ -11,6 +11,7 @@ use crate::agents::detection::{
     AgentOption, default_agent, default_model, default_template, model_choices,
 };
 use crate::agents::labels;
+use crate::config_watch;
 
 pub(super) fn template_kind(kind: SessionKind) -> TemplateKind {
     match kind {
@@ -181,12 +182,13 @@ impl StartDialog {
         cx: &mut Context<Self>,
     ) {
         let kind = template_kind(self.kind());
+        self.all_templates = templates.clone();
         let templates = templates_of_kind(templates, kind);
-        let configured = match kind {
-            TemplateKind::Review => &self.config.review.default_template,
-            TemplateKind::Plan => &self.config.review.default_plan_template,
-        };
-        let chosen = default_template(&templates, configured);
+        let candidates =
+            self.config
+                .review
+                .template_candidates(kind, self.subject.host(), self.subject.repo());
+        let chosen = default_template(&templates, &candidates);
         let choices: Vec<Choice> = templates
             .iter()
             .map(|template| Choice::new(template.id.clone(), template.name.clone()))
@@ -215,6 +217,35 @@ impl StartDialog {
             self.template = Some(id);
             self.rerender(cx);
         }
+    }
+
+    pub(super) fn repo_template(&self) -> Option<&str> {
+        self.config
+            .review
+            .repo_template(self.subject.host(), self.subject.repo())
+    }
+
+    pub(super) fn is_pinned_to_repo(&self) -> bool {
+        self.template.is_some() && self.repo_template() == self.template.as_deref()
+    }
+
+    pub(super) fn toggle_repo_pin(&mut self, cx: &mut Context<Self>) {
+        if self.kind() != SessionKind::Review {
+            return;
+        }
+        let Some(template) = self.template.clone() else {
+            return;
+        };
+        let key = repo_key(self.subject.host(), self.subject.repo());
+        let pinned = self.is_pinned_to_repo();
+        self.config = config_watch::update(cx, |config| {
+            if pinned {
+                config.review.repo_templates.remove(&key);
+            } else {
+                config.review.repo_templates.insert(key, template);
+            }
+        });
+        cx.notify();
     }
 
     pub(super) fn set_include_reviews(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -251,7 +282,15 @@ impl StartDialog {
             cx.notify();
             return;
         };
-        let template = template.clone();
+        let template = match resolve_template(template, &self.all_templates) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                self.preview = Some(preview(Err(render_error(&error)), None));
+                self.render_task = None;
+                cx.notify();
+                return;
+            }
+        };
         let job: Task<Preview> = match gathered.clone() {
             Gathering::Review(gathered) => {
                 let ci = self.ci_text().map(str::to_owned);

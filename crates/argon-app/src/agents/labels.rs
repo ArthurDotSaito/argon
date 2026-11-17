@@ -169,6 +169,14 @@ pub fn templates_failed(error: &str) -> String {
     format!("Falha ao carregar templates: {error}")
 }
 
+pub fn pin_to_repo(repo: &str) -> String {
+    format!("Usar sempre em {repo}")
+}
+
+pub fn pinned_to_repo(repo: &str) -> String {
+    format!("Usado sempre em {repo}")
+}
+
 pub fn render_failed(error: &str) -> String {
     format!("Falha ao renderizar o prompt: {error}")
 }

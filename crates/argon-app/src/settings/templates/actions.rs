@@ -1,9 +1,10 @@
-use argon_core::{PromptTemplate, ReviewCfg};
+use argon_core::{PromptTemplate, ReviewCfg, TemplateKind};
 use gpui_kit::{AppContext as _, Context, Task, Window};
 
 use super::TemplatesSection;
 use super::files::{self, compose, template_path, write_atomic};
 use super::naming::{is_built_in, slugify, unique_id, validate_name};
+use super::profile::{join_names, profiles_of};
 use crate::config_watch;
 use crate::review::{Confirm, confirm};
 use crate::settings::labels;
@@ -22,7 +23,7 @@ impl TemplatesSection {
         unique_id(&slugify(name), ids.iter().map(String::as_str))
     }
 
-    fn run_io(
+    pub(super) fn run_io(
         &mut self,
         job: Task<Result<(), String>>,
         select: Option<String>,
@@ -45,7 +46,13 @@ impl TemplatesSection {
         cx.notify();
     }
 
-    fn write(&mut self, id: String, source: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn write(
+        &mut self,
+        id: String,
+        source: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(dir) = self.dir.clone() else {
             return;
         };
@@ -66,6 +73,30 @@ impl TemplatesSection {
         self.write(id, source, window, cx);
     }
 
+    pub(super) fn create_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let configured = &self.config.review.default_template;
+        let base = self
+            .saved_templates()
+            .iter()
+            .find(|template| {
+                &template.id == configured
+                    && template.kind == TemplateKind::Review
+                    && template.base.is_none()
+            })
+            .map_or_else(
+                || ReviewCfg::default().default_template,
+                |template| template.id.clone(),
+            );
+        let id = self.fresh_id(labels::NEW_PROFILE_NAME);
+        let source = compose(&PromptTemplate {
+            name: labels::NEW_PROFILE_NAME.into(),
+            base: Some(base),
+            body: labels::NEW_PROFILE_BODY.into(),
+            ..PromptTemplate::default()
+        });
+        self.write(id, source, window, cx);
+    }
+
     pub(super) fn duplicate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.draft(cx) else {
             return;
@@ -76,20 +107,24 @@ impl TemplatesSection {
         self.write(id, source, window, cx);
     }
 
-    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.draft(cx) else {
-            return;
-        };
-        let name = match validate_name(&draft.name) {
-            Ok(name) => name,
+    pub(super) fn validated_draft(&mut self, cx: &mut Context<Self>) -> Option<PromptTemplate> {
+        let draft = self.draft(cx)?;
+        match validate_name(&draft.name) {
+            Ok(name) => Some(PromptTemplate { name, ..draft }),
             Err(error) => {
                 self.error = Some(error.message().into());
                 cx.notify();
-                return;
+                None
             }
+        }
+    }
+
+    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = self.validated_draft(cx) else {
+            return;
         };
         let id = draft.id.clone();
-        let source = compose(&PromptTemplate { name, ..draft });
+        let source = compose(&draft);
         self.write(id, source, window, cx);
     }
 
@@ -98,6 +133,12 @@ impl TemplatesSection {
             return;
         };
         if is_built_in(&id) {
+            return;
+        }
+        let profiles = join_names(profiles_of(self.saved_templates(), &id));
+        if !profiles.is_empty() {
+            self.error = Some(labels::base_in_use(&profiles).into());
+            cx.notify();
             return;
         }
         let this = cx.entity().downgrade();
@@ -120,13 +161,27 @@ impl TemplatesSection {
         let Some(dir) = self.dir.clone() else {
             return;
         };
-        if self.config.review.default_template == id {
-            let fallback = ReviewCfg::default().default_template;
-            config_watch::update(cx, |config| config.review.default_template = fallback);
-        }
-        if self.config.review.default_plan_template == id {
-            let fallback = ReviewCfg::default().default_plan_template;
-            config_watch::update(cx, |config| config.review.default_plan_template = fallback);
+        let review = &self.config.review;
+        let referenced = review.default_template == id
+            || review.default_plan_template == id
+            || review
+                .repo_templates
+                .values()
+                .any(|template| template == &id);
+        if referenced {
+            self.config = config_watch::update(cx, |config| {
+                let fallback = ReviewCfg::default();
+                if config.review.default_template == id {
+                    config.review.default_template = fallback.default_template;
+                }
+                if config.review.default_plan_template == id {
+                    config.review.default_plan_template = fallback.default_plan_template;
+                }
+                config
+                    .review
+                    .repo_templates
+                    .retain(|_, template| template != &id);
+            });
         }
         self.selected = None;
         let job = cx.background_spawn(async move {

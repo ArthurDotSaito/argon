@@ -17,7 +17,7 @@ mod views;
 
 pub use config::{
     AgentCfg, AgentKind, AppearanceCfg, Config, ConfigError, Density, NotificationsCfg, OrgsCfg,
-    PermissionMode, ReviewCfg, SyncCfg, ThemeChoice,
+    PermissionMode, ReviewCfg, SyncCfg, ThemeChoice, repo_key,
 };
 pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patch, split_rows};
 pub use findings::{
@@ -32,9 +32,10 @@ pub use model::{
 pub use paths::Paths;
 pub use plan_output::parse_plan;
 pub use prompt::{
-    InvalidTemplate, PlanComment, PlanContext, PromptContext, PromptError, PromptTemplate,
-    RenderedPrompt, TemplateKind, TemplateSet, ensure_default_templates, load_templates,
-    render_plan_prompt, render_prompt, scan_templates,
+    InvalidTemplate, PROFILE_END, PROFILE_SLOT, PlanComment, PlanContext, ProfileParts,
+    PromptContext, PromptError, PromptTemplate, RenderedPrompt, TemplateKind, TemplateSet,
+    base_body, base_parts, detached_body, ensure_default_templates, load_templates, profile_parts,
+    render_plan_prompt, render_prompt, resolve_template, scan_templates,
 };
 pub use reason::{Reason, issue_reason, reason};
 pub use redact::{redact_line, redact_text};

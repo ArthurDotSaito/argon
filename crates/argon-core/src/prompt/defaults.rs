@@ -34,6 +34,7 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 4] = [
             "4ee28d1f7461110d20df8556e2b2ed149b8ea5177d3a9b3d30d5a67e98875135",
             "ac307efe3dd13d85417f904aaa333640bf0898250bfd27de8a0970ba89110748",
             "bd53ac457bafdf5151e463924e2afc8547ec4366c1569760f2d87ac33321fd33",
+            "ce3136abc8d38a5ef118ae38151d5a6fbf910dbfa6dce6cb6abc35d141bb5615",
         ],
     ),
     (
@@ -42,6 +43,7 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 4] = [
             "de14dc5bfb0a9a84d04a94fcf28fc053d370f7a4d10a3138ef247b5cb32e18b7",
             "03360ac0fc600db0c00c8123f5de3898c258054d8529f5681d2165c7cfb412a4",
             "38c669ab354baf1ea88bebc6fb2d9e4db767e0da6795297d3d900bff95b2193b",
+            "02c0cdedc3e357355acc097b32b1a3ddee2f04ae787de1155c1d64e2a1ca8414",
         ],
     ),
     (
@@ -50,6 +52,7 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 4] = [
             "c7559ba71ac9c83cd84f859ba59d08e28755f12ffc236931365e168fb2f704c2",
             "38a7adbd7cb7934fa5cdfcd5ac08e08ebdeb3a5c73ed251a6bcdd85c5cda5eed",
             "33f5c35ae93f4f038331cc44c510742725246a0e226a02d8f0690b2b86a9873f",
+            "74782eafa90f6c443baa3d0f5f555396fa3d2c67beafb2b95645927b5f434eec",
         ],
     ),
     ("plan-padrao", &[]),

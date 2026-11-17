@@ -84,6 +84,13 @@ impl Subject {
         }
     }
 
+    fn host(&self) -> &str {
+        match self {
+            Self::Pr(pr) => &pr.host,
+            Self::Issue(issue) => &issue.host,
+        }
+    }
+
     fn number(&self) -> u64 {
         match self {
             Self::Pr(pr) => pr.number,
@@ -136,6 +143,7 @@ pub struct StartDialog {
     model: Option<String>,
     permission_mode: PermissionMode,
     templates: Load<Vec<PromptTemplate>>,
+    all_templates: Vec<PromptTemplate>,
     invalid_templates: Vec<InvalidTemplate>,
     template: Option<String>,
     model_select: ChoiceSelect,
@@ -248,6 +256,7 @@ impl StartDialog {
             model: None,
             permission_mode: PermissionMode::default(),
             templates: Load::Loading,
+            all_templates: Vec::new(),
             invalid_templates: Vec::new(),
             template: None,
             model_select,

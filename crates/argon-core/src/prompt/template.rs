@@ -40,6 +40,8 @@ pub struct PromptTemplate {
     pub description: Option<String>,
     pub kind: TemplateKind,
     pub version: Option<u32>,
+    pub base: Option<String>,
+    pub detached: bool,
     pub body: String,
 }
 
@@ -72,6 +74,8 @@ struct Header {
     description: Option<String>,
     kind: Option<String>,
     argon_template_version: Option<toml::Value>,
+    base: Option<String>,
+    detached: Option<bool>,
 }
 
 pub(super) fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> PromptError {
@@ -132,6 +136,11 @@ pub(super) fn parse_template(id: &str, source: &str) -> Result<PromptTemplate, P
             .argon_template_version
             .and_then(|value| value.as_integer())
             .and_then(|version| u32::try_from(version).ok()),
+        base: header
+            .base
+            .map(|base| base.trim().to_owned())
+            .filter(|base| !base.is_empty()),
+        detached: header.detached.unwrap_or(false),
         body: body.trim_start_matches(['\r', '\n']).to_owned(),
     })
 }
@@ -167,7 +176,8 @@ fn load_entry(entry: std::io::Result<DirEntry>) -> Option<Result<PromptTemplate,
             return Some(Err(invalid(error.to_string())));
         }
     };
-    if !template.uses_nonce() {
+    let follows_base = template.base.is_some() && !template.detached;
+    if !follows_base && !template.uses_nonce() {
         tracing::warn!(
             path = %path.display(),
             "prompt template does not use the nonce variable, so the agent's answer will not be read"

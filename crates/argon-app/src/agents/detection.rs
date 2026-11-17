@@ -80,10 +80,10 @@ pub fn default_model(spec: &AgentSpec) -> Option<String> {
         .map(|model| model.id.clone())
 }
 
-pub fn default_template(templates: &[PromptTemplate], configured: &str) -> Option<String> {
-    templates
+pub fn default_template(templates: &[PromptTemplate], candidates: &[&str]) -> Option<String> {
+    candidates
         .iter()
-        .find(|template| template.id == configured)
+        .find_map(|id| templates.iter().find(|template| template.id == *id))
         .or_else(|| templates.first())
         .map(|template| template.id.clone())
 }
@@ -269,16 +269,28 @@ mod tests {
             name: id.into(),
             ..PromptTemplate::default()
         };
-        let templates = [template("review-padrao"), template("seguranca")];
+        let templates = [
+            template("review-padrao"),
+            template("seguranca"),
+            template("perfil-api"),
+        ];
         assert_eq!(
-            default_template(&templates, "seguranca").as_deref(),
+            default_template(&templates, &["seguranca"]).as_deref(),
             Some("seguranca")
         );
         assert_eq!(
-            default_template(&templates, "missing").as_deref(),
+            default_template(&templates, &["missing"]).as_deref(),
             Some("review-padrao")
         );
-        assert_eq!(default_template(&[], "seguranca"), None);
+        assert_eq!(
+            default_template(&templates, &["perfil-api", "seguranca"]).as_deref(),
+            Some("perfil-api")
+        );
+        assert_eq!(
+            default_template(&templates, &["perfil-apagado", "seguranca"]).as_deref(),
+            Some("seguranca")
+        );
+        assert_eq!(default_template(&[], &["seguranca"]), None);
     }
 
     #[test]

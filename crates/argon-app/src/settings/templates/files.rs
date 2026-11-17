@@ -45,6 +45,12 @@ pub fn compose(template: &PromptTemplate) -> String {
     if template.kind != TemplateKind::Review {
         source.push_str(&format!("kind = {}\n", toml_string(template.kind.as_str())));
     }
+    if let Some(base) = &template.base {
+        source.push_str(&format!("base = {}\n", toml_string(base)));
+    }
+    if template.detached {
+        source.push_str("detached = true\n");
+    }
     if let Some(version) = template.version {
         source.push_str(&format!("argon_template_version = {version}\n"));
     }
@@ -142,6 +148,43 @@ mod tests {
         assert_eq!(template.version, None);
         assert_eq!(template.body, "Olá {{ pr.title }} {{nonce}}\n");
         assert!(set.invalid.is_empty());
+    }
+
+    #[test]
+    fn composed_profile_keeps_base_and_detached_through_the_loader() {
+        let dir = TempDir::new("compose-profile");
+        let following = PromptTemplate {
+            base: Some("review-padrao".into()),
+            ..draft("Perfil API", None, "Olhe as migrações.\n")
+        };
+        let detached = PromptTemplate {
+            base: Some("seguranca".into()),
+            detached: true,
+            ..draft("Perfil web", None, "Início\n\nFim\n")
+        };
+        let plain = compose(&draft("Comum", None, "{{nonce}}\n"));
+        assert!(!plain.contains("base =") && !plain.contains("detached ="));
+        write_atomic(&template_path(&dir.0, "perfil-api"), &compose(&following)).unwrap();
+        write_atomic(&template_path(&dir.0, "perfil-web"), &compose(&detached)).unwrap();
+        write_atomic(&template_path(&dir.0, "comum"), &plain).unwrap();
+        let set = scan_templates(&dir.0).unwrap();
+        let find = |id: &str| set.templates.iter().find(|t| t.id == id).unwrap();
+        assert_eq!(
+            find("perfil-api"),
+            &PromptTemplate {
+                id: "perfil-api".into(),
+                ..following
+            }
+        );
+        assert_eq!(
+            find("perfil-web"),
+            &PromptTemplate {
+                id: "perfil-web".into(),
+                ..detached
+            }
+        );
+        assert_eq!(find("comum").base, None);
+        assert!(!find("comum").detached);
     }
 
     #[test]

@@ -3,8 +3,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use argon_core::{
-    PlanComment, PlanContext, PrKey, PromptContext, PromptTemplate, PullRequest, TemplateKind,
-    render_plan_prompt, render_prompt,
+    PlanComment, PlanContext, PrKey, PromptContext, PromptError, PromptTemplate, PullRequest,
+    TemplateKind, render_plan_prompt, render_prompt, resolve_template,
 };
 use chrono::DateTime;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -114,6 +114,15 @@ fn sample_plan_context() -> PlanContext {
     }
 }
 
+fn failed(error: SharedString) -> Rendered {
+    Rendered {
+        lines: Vec::new(),
+        chars: 0,
+        warnings: Vec::new(),
+        error: Some(error),
+    }
+}
+
 fn render_preview(
     template: &PromptTemplate,
     input: &PreviewInput,
@@ -138,12 +147,7 @@ fn render_preview(
                 .collect(),
             error: None,
         },
-        Err(error) => Rendered {
-            lines: Vec::new(),
-            chars: 0,
-            warnings: Vec::new(),
-            error: Some(labels::render_failed(&error.to_string()).into()),
-        },
+        Err(error) => failed(labels::render_failed(&error.to_string()).into()),
     }
 }
 
@@ -262,20 +266,29 @@ impl TemplatesSection {
         }
     }
 
+    pub(super) fn resolved_draft(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<Result<PromptTemplate, PromptError>> {
+        let draft = self.preview_draft(cx)?;
+        let mut all = self.saved_templates().to_vec();
+        if let Some(saved) = all.iter_mut().find(|template| template.id == draft.id) {
+            *saved = draft.clone();
+        }
+        Some(resolve_template(&draft, &all))
+    }
+
     pub(super) fn rerender(&mut self, cx: &mut Context<Self>) {
         self.preview.epoch += 1;
         let epoch = self.preview.epoch;
-        let template = self.draft(cx);
-        let input = self.preview_input(template.as_ref().map(|template| template.kind));
-        let (template, input) = match (template, input) {
-            (Some(template), Ok(Some(input))) => (template, input),
-            (_, input) => {
-                self.preview.rendered = input.err().map(|error| Rendered {
-                    lines: Vec::new(),
-                    chars: 0,
-                    warnings: Vec::new(),
-                    error: Some(error),
-                });
+        let input = self.preview_input(self.current().map(|template| template.kind));
+        let (template, input) = match (self.resolved_draft(cx), input) {
+            (Some(Ok(template)), Ok(Some(input))) => (template, input),
+            (resolved, input) => {
+                let resolve_error = resolved
+                    .and_then(Result::err)
+                    .map(|error| SharedString::from(labels::render_failed(&error.to_string())));
+                self.preview.rendered = resolve_error.or_else(|| input.err()).map(failed);
                 self.preview.render_task = None;
                 cx.notify();
                 return;
