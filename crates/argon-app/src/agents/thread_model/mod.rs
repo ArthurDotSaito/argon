@@ -2,6 +2,7 @@ mod actions;
 mod diff;
 mod feed;
 mod plans;
+mod summaries;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -23,6 +24,8 @@ use crate::review::{DraftsBus, DraftsChanged};
 use crate::services::{AppServices, Services, flatten};
 pub use plans::PlanBusy;
 use plans::PlanDrafts;
+use summaries::SummaryState;
+pub use summaries::{is_in_related, related_label};
 
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
@@ -55,6 +58,7 @@ pub struct ThreadModel {
     transcript: Transcript,
     findings: FindingSet,
     plans: PlanDrafts,
+    summaries: SummaryState,
     models: Vec<ModelInfo>,
     loading: bool,
     load_error: Option<SharedString>,
@@ -101,6 +105,7 @@ impl ThreadModel {
             transcript: Transcript::default(),
             findings: FindingSet::default(),
             plans: PlanDrafts::default(),
+            summaries: SummaryState::default(),
             models: Vec::new(),
             loading: true,
             load_error: None,
@@ -272,7 +277,7 @@ impl ThreadModel {
             match this.info.kind {
                 SessionKind::Review => this.reload_findings(cx),
                 SessionKind::Plan => this.reload_plans(cx),
-                SessionKind::Summary => {}
+                SessionKind::Summary => this.reload_summaries(cx),
             }
         }));
     }

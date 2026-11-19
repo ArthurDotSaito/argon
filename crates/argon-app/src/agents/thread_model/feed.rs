@@ -159,6 +159,7 @@ impl ThreadModel {
                 cx.emit(ThreadEvent::Activity);
                 this.ensure_diff(cx);
                 this.reload_plans(cx);
+                this.reload_summaries(cx);
                 cx.notify();
             });
         }));
@@ -195,6 +196,7 @@ impl ThreadModel {
         }
         self.set_model_id(snapshot.model);
         self.reload_plans(cx);
+        self.reload_summaries(cx);
         self.notify_activity(before, cx);
     }
 
@@ -202,10 +204,14 @@ impl ThreadModel {
         let before = self.activity();
         let now = Instant::now();
         let mut plans_changed = false;
+        let mut summaries_changed = false;
         for (_, event) in batch {
             match &event {
                 AgentEvent::Findings { findings, .. } => self.findings.insert_saved(findings),
                 AgentEvent::PlanDraft { .. } => plans_changed = true,
+                AgentEvent::Summary { id, body, .. } => {
+                    summaries_changed |= self.record_summary(*id, body);
+                }
                 AgentEvent::ModelsAvailable(models) => {
                     self.models = models.clone();
                     let model = self.info.model.clone();
@@ -224,7 +230,7 @@ impl ThreadModel {
                 self.transcript.mark_failed();
             }
         }
-        if plans_changed {
+        if plans_changed || summaries_changed {
             DraftsBus::notify(self.info.pr.clone(), cx);
         }
         self.notify_activity(before, cx);

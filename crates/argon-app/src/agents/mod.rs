@@ -28,6 +28,7 @@ mod sessions;
 mod sessions_list;
 mod sink;
 mod start_dialog;
+mod summary_card;
 mod thread_model;
 mod thread_view;
 mod transcript;

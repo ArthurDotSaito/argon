@@ -77,6 +77,19 @@ pub const PROPERTY_AGENT: &str = "Agente";
 pub const PROPERTY_MODEL: &str = "Modelo";
 pub const PROPERTY_PERMISSION: &str = "Permissão";
 pub const PROPERTY_FINDINGS: &str = "Achados";
+pub const PROPERTY_KIND: &str = "Tipo";
+pub const PROPERTY_PROJECT: &str = "Projeto";
+pub const PROPERTY_RELATED: &str = "Relacionados";
+pub const READ_GROUP: &str = "O que foi lido";
+pub const SUMMARY: &str = "Resumo";
+pub const SUMMARY_LOADING: &str = "carregando o resumo…";
+pub const COPY_SUMMARY: &str = "Copiar";
+pub const VIEW_PROJECT: &str = "Ver projeto";
+pub const RELATED_TAG: &str = "relacionado";
+pub const PROJECT_REREAD: &str = "relido nesta sessão";
+pub const PROJECT_SAVED: &str = "visão salva";
+pub const PROJECT_NONE: &str = "sem visão salva";
+pub const PROJECT_REREAD_NOTE: &str = "projeto relido nesta sessão";
 
 pub const EDIT_PLAN: &str = "Editar";
 pub const EDIT_PLAN_CAPTION: &str = "Editando o plano — o texto salvo é o que será publicado";
@@ -88,6 +101,21 @@ pub const USE_NEW_VERSION: &str = "Usar a nova versão";
 pub const KEEP_MINE: &str = "Manter a minha";
 pub const PLAN_LOADING: &str = "carregando o plano…";
 pub const PLAN_CHANGED: &str = "O rascunho mudou; confira antes de publicar.";
+
+pub fn summary_project_part(repo: &str) -> String {
+    format!("O projeto · {repo}")
+}
+
+pub fn summary_pr_part(number: Option<u64>) -> String {
+    match number {
+        Some(number) => format!("Este PR · #{number}"),
+        None => "Este PR".to_owned(),
+    }
+}
+
+pub fn summary_saved_note(date: &str) -> String {
+    format!("visão salva de {date}")
+}
 
 pub fn plan_footer(agent: &str, model: &str, login: &str) -> String {
     format!("_Plano preparado com Agent Plan ({agent} · {model}) e revisado por @{login}._")

@@ -262,6 +262,24 @@ mod tests {
     }
 
     #[test]
+    fn summarize_toasts_open_the_session_when_the_summary_is_ready() {
+        let session = SessionSnapshot {
+            kind: SessionKind::Summary,
+            ..snapshot("a", Phase::Running)
+        };
+        let done = toast(Signal::Completed, &session);
+        assert_eq!(done.body, "Summarize de #42 concluído");
+        assert_eq!(
+            done.target,
+            ToastTarget::AgentSession(PrKey::new("github.com", "pr"), SessionKind::Summary)
+        );
+        assert_eq!(
+            toast(Signal::Failed, &session).body,
+            "Summarize de #42 falhou"
+        );
+    }
+
+    #[test]
     fn toast_texts_without_pr_number_and_with_few_findings() {
         let mut session = snapshot("a", Phase::Running);
         session.number = None;
