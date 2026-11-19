@@ -9,6 +9,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, StyledExt as _,
     h_flex, v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{App, Context, Div, ParentElement as _, SharedString, Styled as _, div, px};
 
 use super::{Gathering, Load, StartDialog, open_project, open_settings};
@@ -45,25 +46,16 @@ fn block(title: &'static str, trailing: Option<String>, body: Div, cx: &App) -> 
 
 fn related_block(related: &[String], project: RepoKey, locked: bool, cx: &App) -> Div {
     let theme = cx.theme();
-    let rows = related.iter().map(|repo| {
-        h_flex()
-            .w_full()
-            .gap_2()
+    let chips = related.iter().map(|repo| {
+        div()
+            .px_1p5()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
             .text_xs()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(theme.mono_font_family.clone())
-                    .child(repo.clone()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.muted_foreground)
-                    .child(labels::PLAN_BASE_PENDING),
-            )
+            .font_family(theme.mono_font_family.clone())
+            .child(repo.clone())
     });
     let hint = if related.is_empty() {
         labels::NO_RELATED
@@ -74,8 +66,10 @@ fn related_block(related: &[String], project: RepoKey, locked: bool, cx: &App) -
         labels::RELATED_PROJECTS,
         Some(labels::related_count(related.len())),
         v_flex()
-            .gap_1()
-            .children(rows)
+            .gap_1p5()
+            .when(!related.is_empty(), |this| {
+                this.child(h_flex().flex_wrap().gap_1().children(chips))
+            })
             .child(note(hint, theme.muted_foreground))
             .child(
                 Button::new("ai-edit-related")
@@ -314,16 +308,17 @@ impl StartDialog {
         let Some(Gathering::Summary(gathering)) = self.context.ready() else {
             return v_flex();
         };
-        v_flex()
+        h_flex()
             .w_full()
             .gap_3()
-            .child(self.project_block(cx))
-            .child(related_block(
+            .items_start()
+            .child(div().flex_1().min_w_0().child(self.project_block(cx)))
+            .child(div().flex_1().min_w_0().child(related_block(
                 &gathering.related,
                 RepoKey::new(self.subject.host(), self.subject.repo()),
                 self.is_launching(),
                 cx,
-            ))
+            )))
     }
 
     fn project_block(&self, cx: &mut Context<Self>) -> Div {
