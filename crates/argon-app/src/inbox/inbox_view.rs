@@ -452,19 +452,26 @@ impl InboxPane {
                 .child(message)
                 .into_any_element();
         }
+        let kinds = filter::shown_kinds(model.view(), model.kind_filter());
         let inbox = self.model.clone();
         let pane = cx.weak_entity();
-        div()
-            .relative()
+        v_flex()
             .flex_1()
             .min_h_0()
+            .child(row::column_header(kinds, cx))
             .child(
-                list(self.list_state.clone(), move |ix, _, cx| {
-                    render_list_row(&inbox, &pane, ix, cx)
-                })
-                .size_full(),
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        list(self.list_state.clone(), move |ix, _, cx| {
+                            render_list_row(&inbox, &pane, ix, cx)
+                        })
+                        .size_full(),
+                    )
+                    .vertical_scrollbar(&self.list_state),
             )
-            .vertical_scrollbar(&self.list_state)
             .into_any_element()
     }
 }

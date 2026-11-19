@@ -27,7 +27,8 @@ use crate::config_watch::{self, ConfigChanged, ConfigWatch};
 
 pub use recent_prs::note_opened as note_pr_opened;
 
-const NAV_WIDTH: f32 = 184.;
+const NAV_WIDTH: f32 = 200.;
+const NAV_ITEM_HEIGHT: f32 = 32.;
 const CONTENT_MAX_WIDTH: f32 = 1100.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,11 +182,17 @@ impl SettingsView {
                 h_flex()
                     .id(("settings-nav", ix))
                     .w_full()
-                    .h(px(30.))
+                    .h(px(NAV_ITEM_HEIGHT))
                     .px_2()
                     .gap_2()
                     .items_center()
                     .rounded(theme.radius)
+                    .border_l_2()
+                    .border_color(if active {
+                        theme.primary
+                    } else {
+                        gpui_kit::transparent_black()
+                    })
                     .text_sm()
                     .cursor_pointer()
                     .text_color(if active {

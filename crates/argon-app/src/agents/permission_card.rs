@@ -50,7 +50,8 @@ pub fn permission_card(model: WeakEntity<ThreadModel>, item: &PermissionItem, cx
             .child(labels::PERMISSION_EXPIRED),
     };
     v_flex()
-        .p_2()
+        .px_3()
+        .py_2p5()
         .gap_1p5()
         .rounded(theme.radius)
         .border_1()

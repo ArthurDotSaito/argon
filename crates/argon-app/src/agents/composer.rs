@@ -9,11 +9,11 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _
 use gpui_kit::{App, FocusHandle, Focusable as _};
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Window, div,
+    Subscription, Window, div, px,
 };
 
 use super::choice::{Choice, permission_choices};
-use super::labels::{FULL_ACCESS_RISK, PLAN_MODE_LOCKED, permission_mode_hint};
+use super::labels::FULL_ACCESS_RISK;
 use super::panel_labels as labels;
 use super::thread_model::ThreadModel;
 use crate::review::{Confirm, confirm};
@@ -21,6 +21,8 @@ use crate::workspace::Workspace;
 
 const MIN_ROWS: usize = 2;
 const MAX_ROWS: usize = 8;
+const PADDING_X: f32 = 16.;
+const PADDING_Y: f32 = 10.;
 
 pub struct Composer {
     model: Entity<ThreadModel>,
@@ -31,12 +33,41 @@ pub struct Composer {
     shown_mode: Option<PermissionMode>,
     was_changing: bool,
     was_changing_mode: bool,
+    inline_selects: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Composer {
     pub fn input_focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.focus_handle(cx)
+    }
+
+    pub fn set_inline_selects(&mut self, inline: bool, cx: &mut Context<Self>) {
+        if self.inline_selects != inline {
+            self.inline_selects = inline;
+            cx.notify();
+        }
+    }
+
+    pub fn model_select(&self, cx: &App) -> Select<Vec<Choice>> {
+        let model = self.model.read(cx);
+        let locked =
+            model.transcript().in_turn() || model.is_changing_model() || model.models().is_empty();
+        Select::new(&self.model_select)
+            .xsmall()
+            .placeholder(model.info().model_label.clone())
+            .disabled(locked)
+    }
+
+    pub fn permission_select(&self, cx: &App) -> Select<Vec<Choice>> {
+        let model = self.model.read(cx);
+        let busy = model.permission_mode().is_none()
+            || model.is_changing_permission_mode()
+            || model.is_permission_mode_locked();
+        Select::new(&self.mode_select)
+            .xsmall()
+            .placeholder(labels::PERMISSION_MODE_TOOLTIP)
+            .disabled(busy)
     }
 
     pub fn new(model: Entity<ThreadModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -93,6 +124,7 @@ impl Composer {
             shown_mode: None,
             was_changing: false,
             was_changing_mode: false,
+            inline_selects: false,
             _subscriptions: subscriptions,
         };
         this.sync_models(window, cx);
@@ -198,31 +230,14 @@ impl Composer {
 
 impl Render for Composer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let model = self.model.read(cx);
-        let in_turn = model.transcript().in_turn();
-        let locked = in_turn || model.is_changing_model() || model.models().is_empty();
-        let placeholder = model.info().model_label.clone();
+        let in_turn = self.model.read(cx).transcript().in_turn();
         let empty = self.text(cx).is_empty();
+        let selects = self.inline_selects.then(|| {
+            [self.model_select(cx), self.permission_select(cx)]
+                .map(|select| div().w_40().min_w_0().child(select))
+        });
         let theme = cx.theme();
-        let select = Select::new(&self.model_select)
-            .xsmall()
-            .placeholder(placeholder)
-            .disabled(locked);
-        let mode = model.permission_mode();
-        let mode_select = Select::new(&self.mode_select)
-            .xsmall()
-            .placeholder(labels::PERMISSION_MODE_TOOLTIP)
-            .disabled(
-                mode.is_none()
-                    || model.is_changing_permission_mode()
-                    || model.is_permission_mode_locked(),
-            );
-        let mode_hint = if model.is_permission_mode_locked() {
-            Some(PLAN_MODE_LOCKED)
-        } else {
-            mode.map(permission_mode_hint)
-        };
-        let reference = (model.info().kind != SessionKind::Plan).then(|| {
+        let reference = (self.model.read(cx).info().kind != SessionKind::Plan).then(|| {
             Button::new("composer-reference")
                 .icon(Icon::new(IconName::AtSign))
                 .xsmall()
@@ -250,14 +265,15 @@ impl Render for Composer {
                 .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
         };
         v_flex()
-            .p_2()
-            .gap_1p5()
+            .px(px(PADDING_X))
+            .py(px(PADDING_Y))
+            .gap_2()
             .child(Textarea::new(&self.input))
             .child(
                 h_flex()
                     .gap_1p5()
                     .items_center()
-                    .child(div().w_40().child(select))
+                    .children(selects.into_iter().flatten())
                     .children(reference)
                     .child(div().flex_1())
                     .child(
@@ -271,26 +287,5 @@ impl Render for Composer {
                     )
                     .child(primary),
             )
-            .child(
-                h_flex()
-                    .gap_1p5()
-                    .items_center()
-                    .child(div().w_40().flex_none().child(mode_select))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .line_clamp(2)
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .children(mode_hint),
-                    ),
-            )
-            .children(in_turn.then(|| {
-                div()
-                    .text_xs()
-                    .text_color(theme.warning)
-                    .child(labels::PERMISSION_MODE_TURN_HINT)
-            }))
     }
 }

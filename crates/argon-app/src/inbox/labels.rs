@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use super::InboxView;
 use super::browse::IssueScope;
 use super::filter::KindFilter;
-use crate::ui;
+use crate::ui::{self, Tone};
 
 pub const PANEL_TITLE: &str = "Visões";
 pub const GROUP_INBOX: &str = "Inbox";
@@ -36,9 +36,54 @@ pub const SCOPE_ALL_OPEN_HINT: &str = "Busca no GitHub agora, sem limite de data
 pub const NEEDS_YOU_SECTION: &str = "Needs you";
 pub const PR_FALLBACK_TITLE: &str = "PR";
 pub const ISSUE_FALLBACK_TITLE: &str = "Issue";
+pub const COLUMN_PR: &str = "Pull request";
+pub const COLUMN_ISSUE: &str = "Issue";
+pub const COLUMN_TITLE: &str = "Título";
+pub const COLUMN_REASON: &str = "Motivo";
+pub const COLUMN_CI: &str = "CI";
+pub const COLUMN_LABELS: &str = "Labels";
+pub const COLUMN_CI_LABELS: &str = "CI / labels";
+pub const COLUMN_REVIEW: &str = "Review";
+pub const COLUMN_PEOPLE: &str = "Pessoas";
+pub const COLUMN_DIFF: &str = "Diff";
+pub const COLUMN_LINK: &str = "Vínculo";
+pub const COLUMN_DIFF_LINK: &str = "Diff / vínculo";
+pub const COLUMN_UPDATED: &str = "Atualizado";
+pub const NO_VALUE: &str = "—";
 
 const TAB_TITLE_MAX_CHARS: usize = 16;
 const MAX_LABEL_DOTS: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColumnTitles {
+    pub subject: &'static str,
+    pub signal: &'static str,
+    pub people: &'static str,
+    pub size: &'static str,
+}
+
+pub fn column_titles(kind: KindFilter) -> ColumnTitles {
+    match kind {
+        KindFilter::Prs => ColumnTitles {
+            subject: COLUMN_PR,
+            signal: COLUMN_CI,
+            people: COLUMN_REVIEW,
+            size: COLUMN_DIFF,
+        },
+        KindFilter::Issues => ColumnTitles {
+            subject: COLUMN_ISSUE,
+            signal: COLUMN_LABELS,
+            people: COLUMN_PEOPLE,
+            size: COLUMN_LINK,
+        },
+        KindFilter::All => ColumnTitles {
+            subject: COLUMN_TITLE,
+            signal: COLUMN_CI_LABELS,
+            people: COLUMN_PEOPLE,
+            size: COLUMN_DIFF_LINK,
+        },
+    }
+}
 
 pub fn view_title(view: InboxView) -> &'static str {
     match view {
@@ -142,6 +187,11 @@ pub fn repo_ref(repo: &str, number: u64) -> String {
     format!("{repo} #{number}")
 }
 
+pub fn short_repo_ref(repo: &str, number: u64) -> String {
+    let name = repo.rsplit_once('/').map_or(repo, |(_, name)| name);
+    format!("{name} #{number}")
+}
+
 pub fn reason_line(reason: &Reason, now: DateTime<Utc>, updated_at: DateTime<Utc>) -> String {
     match reason {
         Reason::ReviewRequestedBy(login) => format!("{login} pediu sua review"),
@@ -163,6 +213,23 @@ pub fn reason_line(reason: &Reason, now: DateTime<Utc>, updated_at: DateTime<Utc
         Reason::NewInOrg(org) => format!("Nova em {org} · sem responsável"),
         Reason::ClosedBy(number) => format!("Fechada por #{number}"),
         Reason::Tracking => tracking_line(now, updated_at),
+    }
+}
+
+pub fn reason_tone(reason: &Reason) -> Tone {
+    match reason {
+        Reason::ReviewRequestedBy(_)
+        | Reason::AssignedBy(_)
+        | Reason::IssueAssigned
+        | Reason::Mentioned => Tone::Action,
+        Reason::CiFailed | Reason::Conflict => Tone::Danger,
+        Reason::ChangesRequestedBy(_) | Reason::NewInOrg(_) => Tone::Warning,
+        Reason::ReadyToMerge | Reason::ClosedBy(_) => Tone::Success,
+        Reason::WaitingOn(_)
+        | Reason::ApprovedByYouWaitingAuthor
+        | Reason::IssueAuthored
+        | Reason::Participating
+        | Reason::Tracking => Tone::Neutral,
     }
 }
 
@@ -260,5 +327,48 @@ mod tests {
         let names: Vec<_> = shown.iter().map(|label| label.name.as_str()).collect();
         assert_eq!(names, ["bug", "api"]);
         assert_eq!(more.as_deref(), Some("+2"));
+    }
+    #[test]
+    fn short_repo_ref_drops_the_owner() {
+        assert_eq!(short_repo_ref("argon-labs/argon", 482), "argon #482");
+    }
+
+    #[test]
+    fn short_repo_ref_keeps_a_repo_without_owner() {
+        assert_eq!(short_repo_ref("argon", 482), "argon #482");
+    }
+
+    #[test]
+    fn reason_tone_maps_every_reason() {
+        let cases = [
+            (Reason::ReviewRequestedBy("a".into()), Tone::Action),
+            (Reason::AssignedBy(None), Tone::Action),
+            (Reason::CiFailed, Tone::Danger),
+            (Reason::Conflict, Tone::Danger),
+            (Reason::ChangesRequestedBy("a".into()), Tone::Warning),
+            (Reason::ReadyToMerge, Tone::Success),
+            (Reason::WaitingOn(vec!["a".into()]), Tone::Neutral),
+            (Reason::ApprovedByYouWaitingAuthor, Tone::Neutral),
+            (Reason::IssueAssigned, Tone::Action),
+            (Reason::Mentioned, Tone::Action),
+            (Reason::IssueAuthored, Tone::Neutral),
+            (Reason::Participating, Tone::Neutral),
+            (Reason::NewInOrg("acme".into()), Tone::Warning),
+            (Reason::ClosedBy(7), Tone::Success),
+            (Reason::Tracking, Tone::Neutral),
+        ];
+        for (reason, tone) in cases {
+            assert_eq!(reason_tone(&reason), tone);
+        }
+    }
+
+    #[test]
+    fn column_titles_follow_the_kinds_on_screen() {
+        assert_eq!(column_titles(KindFilter::Prs).subject, COLUMN_PR);
+        assert_eq!(column_titles(KindFilter::Prs).signal, COLUMN_CI);
+        assert_eq!(column_titles(KindFilter::Issues).subject, COLUMN_ISSUE);
+        assert_eq!(column_titles(KindFilter::Issues).signal, COLUMN_LABELS);
+        assert_eq!(column_titles(KindFilter::All).signal, COLUMN_CI_LABELS);
+        assert_eq!(column_titles(KindFilter::All).size, COLUMN_DIFF_LINK);
     }
 }

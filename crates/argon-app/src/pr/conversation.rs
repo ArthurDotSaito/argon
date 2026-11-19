@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use argon_core::{PrKey, SubjectKind};
 use argon_github::{PrDetail, TimelineItem};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Textarea, TextareaState};
@@ -16,10 +16,11 @@ use gpui_kit::{
 
 use super::comment_check::{SentComment, may_have_landed};
 use super::labels;
-use super::timeline_item::{self, Entry, MarkdownBlock, card, card_body, card_text, timeline_item};
+use super::timeline_item::{self, Entry, MarkdownBlock, flat_item, timeline_item};
 use crate::services::AppServices;
 
 pub const CONTENT_MAX_WIDTH: f32 = 920.;
+const TIMELINE_MAX_WIDTH: f32 = 760.;
 const COMMENT_MIN_ROWS: usize = 3;
 const COMMENT_MAX_ROWS: usize = 12;
 
@@ -257,7 +258,7 @@ impl Conversation {
         cx.notify();
     }
 
-    fn description(&self, detail: &PrDetail, cx: &Context<Self>) -> Div {
+    fn description(&self, detail: &PrDetail, now: DateTime<Utc>, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let pr = &detail.pr;
         let body = match &self.description {
@@ -268,16 +269,13 @@ impl Conversation {
                 .child(labels::NO_DESCRIPTION)
                 .into_any_element(),
         };
-        card(
+        flat_item(
             &pr.author,
-            card_body(
-                &pr.author,
-                div().child(labels::OPENED_THIS_PR),
-                pr.created_at,
-                Utc::now(),
-                cx,
-            )
-            .child(card_text(body)),
+            labels::OPENED_THIS_PR,
+            pr.created_at,
+            now,
+            Some(body),
+            cx,
         )
     }
 }
@@ -297,11 +295,15 @@ impl Render for Conversation {
         let notice = detail.truncated_timeline.then(|| {
             let open =
                 cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ConversationEvent::OpenOnGithub));
-            truncated_notice("pr-timeline-open-github", open, cx)
+            div()
+                .w_full()
+                .py_3()
+                .child(truncated_notice("pr-timeline-open-github", open, cx))
         });
         let timeline = v_flex()
             .w_full()
-            .gap_3()
+            .child(self.description(&detail, now, cx))
+            .children(notice)
             .children(self.timeline.iter().filter_map(|entry| {
                 let item = detail.timeline.get(entry.ix)?;
                 timeline_item(item, entry, &detail.labels, now, cx)
@@ -309,14 +311,12 @@ impl Render for Conversation {
         let content = v_flex()
             .w_full()
             .min_w_0()
-            .max_w(px(CONTENT_MAX_WIDTH))
+            .max_w(px(TIMELINE_MAX_WIDTH))
             .mx_auto()
             .px_4()
-            .py_4()
+            .pb_4()
             .gap_4()
             .text_color(cx.theme().foreground)
-            .child(self.description(&detail, cx))
-            .children(notice)
             .child(timeline)
             .child(self.composer.clone());
         scroller.child(content)

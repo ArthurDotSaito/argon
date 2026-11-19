@@ -6,6 +6,7 @@ mod header;
 pub(crate) mod labels;
 mod merge_dialog;
 mod pr_view;
+mod properties;
 mod timeline_item;
 
 pub(crate) use comment_check::{SentComment, may_have_landed};

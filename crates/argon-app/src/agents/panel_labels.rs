@@ -7,11 +7,17 @@ pub const REVIEW_PR: &str = "Nova review";
 pub const OPEN_PR: &str = "Abrir PR";
 pub const PLAN_ISSUE: &str = "Novo plano";
 pub const OPEN_ISSUE: &str = "Abrir issue";
+pub const COLUMN_STATUS: &str = "Status";
+pub const COLUMN_AGENT: &str = "Agente e modelo";
+pub const COLUMN_FINDINGS: &str = "Achados";
+pub const COLUMN_TIME: &str = "Tempo";
+pub const NO_COUNTS: &str = "—";
 pub const NO_SESSIONS: &str = "Nenhuma sessão de agente ainda.";
 pub const NO_SESSIONS_IN_FILTER: &str = "Nenhuma sessão neste filtro.";
 pub const LOADING_SESSIONS: &str = "carregando sessões…";
 pub const SESSION_ENDED: &str = "Sessão encerrada — transcript somente leitura";
 pub const SESSION_TAB_FALLBACK: &str = "Sessão";
+pub const SESSION_DETAILS: &str = "Detalhes da sessão";
 pub const LOADING_TRANSCRIPT: &str = "carregando transcript…";
 pub const THINKING: &str = "pensando…";
 pub const THINKING_NOW: &str = "Pensando…";
@@ -62,6 +68,14 @@ pub const NO_ACP_SESSION: &str = "esta sessão não tem id ACP para retomar";
 pub const WORKTREE_GONE: &str = "o worktree desta sessão foi removido";
 pub const SESSION_ARCHIVED: &str = "esta sessão foi arquivada";
 pub const SESSION_MISSING: &str = "sessão não encontrada no banco local";
+pub const PROPERTY_STATUS: &str = "Status";
+pub const PROPERTY_TIME: &str = "Tempo";
+pub const PROPERTY_PR: &str = "PR";
+pub const PROPERTY_ISSUE: &str = "Issue";
+pub const PROPERTY_AGENT: &str = "Agente";
+pub const PROPERTY_MODEL: &str = "Modelo";
+pub const PROPERTY_PERMISSION: &str = "Permissão";
+pub const PROPERTY_FINDINGS: &str = "Achados";
 
 pub const EDIT_PLAN: &str = "Editar";
 pub const EDIT_PLAN_CAPTION: &str = "Editando o plano — o texto salvo é o que será publicado";
@@ -104,6 +118,13 @@ pub fn plan_save_failed(error: &str) -> String {
 
 pub fn plan_update_failed(error: &str) -> String {
     format!("Falha ao atualizar o plano: {error}")
+}
+
+pub fn subject_property(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Review => PROPERTY_PR,
+        SessionKind::Plan => PROPERTY_ISSUE,
+    }
 }
 
 pub fn unknown_subject(kind: SessionKind) -> &'static str {

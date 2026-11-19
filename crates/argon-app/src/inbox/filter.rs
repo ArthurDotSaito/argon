@@ -24,6 +24,21 @@ pub fn passes(kind: SubjectKind, filter: KindFilter, view: InboxView) -> bool {
     }
 }
 
+pub fn shown_kinds(view: InboxView, filter: KindFilter) -> KindFilter {
+    match view {
+        InboxView::Inbox | InboxView::NeedsYou => filter,
+        InboxView::IssuesAssigned
+        | InboxView::IssuesMentioned
+        | InboxView::IssuesAuthored
+        | InboxView::IssuesParticipating => KindFilter::Issues,
+        InboxView::YourPrs
+        | InboxView::WaitingOnOthers
+        | InboxView::ChangesRequested
+        | InboxView::ReadyToMerge
+        | InboxView::AlreadyDone => KindFilter::Prs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +85,19 @@ mod tests {
                     assert!(passes(kind, filter, view), "{view:?} {kind:?} {filter:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn shown_kinds_follow_the_filter_only_where_it_applies() {
+        for filter in FILTERS {
+            assert_eq!(shown_kinds(InboxView::Inbox, filter), filter);
+            assert_eq!(shown_kinds(InboxView::NeedsYou, filter), filter);
+            assert_eq!(shown_kinds(InboxView::YourPrs, filter), KindFilter::Prs);
+            assert_eq!(
+                shown_kinds(InboxView::IssuesMentioned, filter),
+                KindFilter::Issues
+            );
         }
     }
 }

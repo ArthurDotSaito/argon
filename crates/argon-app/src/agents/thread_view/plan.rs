@@ -321,10 +321,11 @@ impl ThreadView {
             .transcript()
             .items()
             .iter()
-            .position(|item| *item == Item::PlanDraft(id));
+            .position(|item| *item == Item::PlanDraft(id))
+            .and_then(|ix| self.rows.iter().position(|range| range.contains(&ix)));
         match row {
-            Some(ix) => self.list.remeasure_items(ix..ix + 1),
-            None => self.list.remeasure_items(0..self.rows),
+            Some(row) => self.list.remeasure_items(row..row + 1),
+            None => self.list.remeasure_items(0..self.list.item_count()),
         }
         cx.notify();
     }

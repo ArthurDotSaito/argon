@@ -5,7 +5,7 @@ use gpui_kit::{
 
 use crate::services::{AppServices, Services};
 
-const LABEL_WIDTH: f32 = 132.;
+const LABEL_WIDTH: f32 = 150.;
 
 pub fn services(cx: &App) -> Option<Services> {
     cx.try_global::<AppServices>()

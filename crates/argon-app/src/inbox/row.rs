@@ -1,4 +1,4 @@
-use argon_core::{ChecksState, Issue, IssueLabel, PullRequest};
+use argon_core::{Issue, IssueLabel, PullRequest};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
@@ -6,10 +6,11 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, Div, ElementId, Hsla, InteractiveElement as _, ParentElement as _,
-    SharedString, Stateful, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    App, ClickEvent, Div, ElementId, Hsla, ParentElement as _, SharedString, Stateful, Styled as _,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 
+use super::filter::KindFilter;
 use super::items::{InboxItem, Subject};
 use super::labels;
 use crate::issue::{IssueStatus, status_style, type_style};
@@ -17,53 +18,61 @@ use crate::pr::label_color;
 use crate::theme::density;
 use crate::ui::{self, avatar, state_icon, state_style_for};
 
-const PR_ROW_HEIGHT: f32 = 52.;
-const HEADER_HEIGHT: f32 = 28.;
 const AVATAR_SIZE: f32 = 18.;
-const REVIEWER_SIZE: f32 = 16.;
 const REVIEWER_OVERLAP: f32 = -5.;
 const MAX_REVIEWERS: usize = 3;
 const UNREAD_DOT: f32 = 6.;
-const REASON_INDENT: f32 = 62.;
-const BRANCH_MAX_WIDTH: f32 = 240.;
-const SEPARATOR: &str = "·";
-const CI_WIDTH: f32 = 18.;
-const REVIEWERS_WIDTH: f32 = 46.;
-const DIFF_WIDTH: f32 = 104.;
-const COMMENTS_WIDTH: f32 = 40.;
-const AGE_WIDTH: f32 = 52.;
+const REASON_DOT: f32 = 7.;
+const REASON_GAP: f32 = 7.;
+const REASON_WIDTH: f32 = 284.;
+const REASON_MIN_WIDTH: f32 = 140.;
+const CI_WIDTH: f32 = 100.;
+const REVIEWERS_WIDTH: f32 = 56.;
+const COMMENTS_WIDTH: f32 = 44.;
+const DIFF_WIDTH: f32 = 92.;
+const AGE_WIDTH: f32 = 66.;
 const LABEL_DOT: f32 = 8.;
-const LABEL_MAX_WIDTH: f32 = 120.;
-const TAG_HEIGHT: f32 = 18.;
-const TAG_TEXT_SIZE: f32 = 11.;
+const TAG_HEIGHT: f32 = 20.;
 
 pub fn pr_row_height(cx: &App) -> f32 {
-    density::scaled(PR_ROW_HEIGHT, cx)
+    density::scaled(ui::columns::LIST_ROW_HEIGHT, cx)
 }
 
 pub fn header(title: SharedString, count: usize, cx: &App) -> Div {
-    let theme = cx.theme();
-    h_flex()
-        .w_full()
-        .h(px(density::scaled(HEADER_HEIGHT, cx)))
-        .px_3()
-        .gap_1p5()
-        .items_center()
-        .bg(theme.muted)
-        .border_b_1()
-        .border_color(theme.border)
-        .text_xs()
+    ui::columns::group_row(cx).child(title).child(
+        div()
+            .font_normal()
+            .text_color(cx.theme().muted_foreground)
+            .child(count.to_string()),
+    )
+}
+
+pub fn column_header(kind: KindFilter, cx: &App) -> Div {
+    let titles = labels::column_titles(kind);
+    ui::columns::column_header(cx)
+        .child(div().flex_1().min_w_0().child(titles.subject))
+        .child(reason_cell().child(labels::COLUMN_REASON))
+        .child(div().w(px(CI_WIDTH)).flex_none().child(titles.signal))
         .child(
             div()
-                .font_semibold()
-                .text_color(theme.foreground)
-                .child(title),
+                .w(px(REVIEWERS_WIDTH))
+                .flex_none()
+                .child(titles.people),
         )
-        .child(
-            div()
-                .text_color(theme.muted_foreground)
-                .child(count.to_string()),
-        )
+        .child(right_cell(COMMENTS_WIDTH).child(Icon::new(IconName::MessageSquare).xsmall()))
+        .child(right_cell(DIFF_WIDTH).child(titles.size))
+        .child(right_cell(AGE_WIDTH).child(labels::COLUMN_UPDATED))
+}
+
+fn reason_cell() -> Div {
+    div()
+        .w(px(REASON_WIDTH))
+        .flex_shrink(1.)
+        .min_w(px(REASON_MIN_WIDTH))
+}
+
+fn right_cell(width: f32) -> Div {
+    h_flex().w(px(width)).flex_none().justify_end()
 }
 
 pub fn load_more(
@@ -94,13 +103,11 @@ pub fn item_row(
     now: DateTime<Utc>,
     cx: &App,
 ) -> Stateful<Div> {
-    let (summary, details) = match &item.subject {
-        Subject::Pr(pr) => pr_lines(pr, Some(item), now, cx),
-        Subject::Issue(issue) => issue_lines(item, issue, now, cx),
-    };
-    row_frame(("inbox-row", position), selected, cx)
-        .child(summary)
-        .child(details)
+    let row = ui::columns::list_row(("inbox-row", position), selected, cx);
+    match &item.subject {
+        Subject::Pr(pr) => pr_cells(row, pr, Some(item), now, cx),
+        Subject::Issue(issue) => issue_cells(row, item, issue, now, cx),
+    }
 }
 
 pub fn pr_row(
@@ -110,120 +117,107 @@ pub fn pr_row(
     now: DateTime<Utc>,
     cx: &App,
 ) -> Stateful<Div> {
-    let (summary, details) = pr_lines(pr, item, now, cx);
-    row_frame(id, false, cx).child(summary).child(details)
+    pr_cells(ui::columns::list_row(id, false, cx), pr, item, now, cx)
 }
 
-fn row_frame(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> {
-    let theme = cx.theme();
-    div()
-        .id(id)
-        .w_full()
-        .overflow_hidden()
-        .h(px(pr_row_height(cx)))
-        .flex()
-        .flex_col()
-        .justify_center()
-        .gap_0p5()
-        .pl_2()
-        .pr_3()
-        .border_l_2()
-        .border_color(if selected {
-            theme.primary
-        } else {
-            gpui_kit::transparent_black()
-        })
-        .when(selected, |this| this.bg(theme.list_active))
-        .when(!selected, |this| {
-            this.hover(|style| style.bg(theme.list_hover))
-        })
-        .cursor_pointer()
-}
-
-fn pr_lines(
+fn pr_cells(
+    row: Stateful<Div>,
     pr: &PullRequest,
     item: Option<&InboxItem>,
     now: DateTime<Utc>,
     cx: &App,
-) -> (Div, Div) {
+) -> Stateful<Div> {
     let unread = item.is_some_and(|item| item.unread);
-    let summary = summary_line()
-        .child(unread_dot(unread, cx))
-        .child(state_icon(pr, cx))
-        .child(avatar(&pr.author, AVATAR_SIZE))
-        .child(title(&pr.title, unread, cx))
-        .child(checks(pr.checks, cx))
-        .child(reviewers(pr, cx))
-        .child(diff_stat(pr, cx))
-        .child(comments(pr.comments, cx))
-        .child(age(now, pr.updated_at, cx));
-    let details = details_line(cx)
-        .child(mono(labels::repo_ref(&pr.repo, pr.number), cx))
-        .child(SEPARATOR)
-        .child(
-            mono(pr.head.clone(), cx)
-                .flex_shrink(1.)
-                .min_w_0()
-                .max_w(px(BRANCH_MAX_WIDTH)),
-        )
-        .when_some(item, |this, item| {
-            this.child(SEPARATOR)
-                .child(reason(item, now, pr.updated_at))
-        });
-    (summary, details)
+    let reason = match item {
+        Some(item) => reason(item, now, pr.updated_at, cx),
+        None => reason_cell().child(mono(pr.head.clone(), cx).min_w_0()),
+    };
+    row.child(
+        subject_cell()
+            .child(unread_dot(unread, cx))
+            .child(state_icon(pr, cx))
+            .child(avatar(&pr.author, AVATAR_SIZE))
+            .child(title(&pr.title, unread, cx))
+            .child(mono(labels::short_repo_ref(&pr.repo, pr.number), cx)),
+    )
+    .child(reason)
+    .child(
+        div()
+            .w(px(CI_WIDTH))
+            .flex_none()
+            .child(ui::checks_label(pr.checks, cx)),
+    )
+    .child(reviewers(pr, cx))
+    .child(comments(pr.comments, cx))
+    .child(right_cell(DIFF_WIDTH).child(ui::diff_stat(pr.additions, pr.deletions, cx)))
+    .child(age(now, pr.updated_at, cx))
 }
 
-fn issue_lines(item: &InboxItem, issue: &Issue, now: DateTime<Utc>, cx: &App) -> (Div, Div) {
+fn issue_cells(
+    row: Stateful<Div>,
+    item: &InboxItem,
+    issue: &Issue,
+    now: DateTime<Utc>,
+    cx: &App,
+) -> Stateful<Div> {
     let (state_icon, state_color) =
         status_style(IssueStatus::of(issue.state, issue.state_reason), cx);
-    let summary = summary_line()
-        .child(unread_dot(item.unread, cx))
-        .child(Icon::new(state_icon).small().text_color(state_color))
-        .child(avatar(&issue.author, AVATAR_SIZE))
-        .child(title(&issue.title, item.unread, cx))
-        .child(issue_type(issue.issue_type.as_deref(), cx))
-        .child(assignees(issue, cx))
-        .child(linkage(issue, cx))
-        .child(comments(issue.comments, cx))
-        .child(age(now, issue.updated_at, cx));
-    let details = details_line(cx)
-        .child(mono(labels::repo_ref(&issue.repo, issue.number), cx))
-        .child(SEPARATOR)
-        .when(!issue.labels.is_empty(), |this| {
-            this.child(label_dots(&issue.labels, cx)).child(SEPARATOR)
-        })
-        .child(reason(item, now, issue.updated_at));
-    (summary, details)
+    row.child(
+        subject_cell()
+            .child(unread_dot(item.unread, cx))
+            .child(Icon::new(state_icon).small().text_color(state_color))
+            .child(avatar(&issue.author, AVATAR_SIZE))
+            .child(title(&issue.title, item.unread, cx))
+            .children(issue.issue_type.as_deref().map(|name| {
+                let (icon, color) = type_style(name, cx);
+                Icon::new(icon).xsmall().text_color(color)
+            }))
+            .child(mono(labels::short_repo_ref(&issue.repo, issue.number), cx)),
+    )
+    .child(reason(item, now, issue.updated_at, cx))
+    .child(label_dots(&issue.labels, cx))
+    .child(avatar_stack(
+        issue.assignees.iter().map(String::as_str).collect(),
+        cx,
+    ))
+    .child(comments(issue.comments, cx))
+    .child(linkage(issue, cx))
+    .child(age(now, issue.updated_at, cx))
 }
 
-fn summary_line() -> Div {
-    h_flex().w_full().min_w_0().gap_2().items_center()
+fn subject_cell() -> Div {
+    h_flex().flex_1().min_w_0().items_center().gap_2()
 }
 
-fn details_line(cx: &App) -> Div {
-    h_flex()
-        .w_full()
-        .min_w_0()
-        .pl(px(REASON_INDENT))
-        .gap_1p5()
+fn reason(item: &InboxItem, now: DateTime<Utc>, updated_at: DateTime<Utc>, cx: &App) -> Div {
+    let color = ui::tone_color(labels::reason_tone(&item.reason), cx);
+    reason_cell()
+        .flex()
         .items_center()
-        .text_xs()
-        .text_color(cx.theme().muted_foreground)
+        .gap(px(REASON_GAP))
+        .child(
+            div()
+                .size(px(REASON_DOT))
+                .flex_none()
+                .rounded_full()
+                .bg(color),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_sm()
+                .text_color(color)
+                .child(labels::reason_line(&item.reason, now, updated_at)),
+        )
 }
 
 fn age(now: DateTime<Utc>, updated_at: DateTime<Utc>, cx: &App) -> Div {
-    mono(ui::age_label(now, updated_at), cx)
-        .w(px(AGE_WIDTH))
-        .flex()
-        .justify_end()
-}
-
-fn reason(item: &InboxItem, now: DateTime<Utc>, updated_at: DateTime<Utc>) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .truncate()
-        .child(labels::reason_line(&item.reason, now, updated_at))
+    right_cell(AGE_WIDTH)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(ui::age_label(now, updated_at))
 }
 
 fn unread_dot(unread: bool, cx: &App) -> Div {
@@ -255,13 +249,13 @@ fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text.into())
 }
 
-fn checks(checks: Option<ChecksState>, cx: &App) -> Div {
-    h_flex()
-        .w(px(CI_WIDTH))
-        .flex_none()
-        .justify_center()
-        .child(ui::checks_glyph(checks, cx))
+fn no_value(cx: &App) -> Div {
+    div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(labels::NO_VALUE)
 }
+
 fn reviewers(pr: &PullRequest, cx: &App) -> Div {
     let mut logins: Vec<&str> = Vec::new();
     let candidates = pr.requested_reviewers.iter().map(String::as_str).chain(
@@ -277,10 +271,6 @@ fn reviewers(pr: &PullRequest, cx: &App) -> Div {
     avatar_stack(logins, cx)
 }
 
-fn assignees(issue: &Issue, cx: &App) -> Div {
-    avatar_stack(issue.assignees.iter().map(String::as_str).collect(), cx)
-}
-
 fn avatar_stack(logins: Vec<&str>, cx: &App) -> Div {
     let theme = cx.theme();
     h_flex().w(px(REVIEWERS_WIDTH)).flex_none().children(
@@ -289,7 +279,7 @@ fn avatar_stack(logins: Vec<&str>, cx: &App) -> Div {
             .take(MAX_REVIEWERS)
             .enumerate()
             .map(|(ix, login)| {
-                avatar(login, REVIEWER_SIZE)
+                avatar(login, AVATAR_SIZE)
                     .border_1()
                     .border_color(theme.background)
                     .when(ix > 0, |this| this.ml(px(REVIEWER_OVERLAP)))
@@ -297,15 +287,38 @@ fn avatar_stack(logins: Vec<&str>, cx: &App) -> Div {
     )
 }
 
-fn issue_type(name: Option<&str>, cx: &App) -> Div {
-    h_flex()
+fn label_dots(issue_labels: &[IssueLabel], cx: &App) -> Div {
+    let theme = cx.theme();
+    let cell = h_flex()
         .w(px(CI_WIDTH))
         .flex_none()
-        .justify_center()
-        .children(name.map(|name| {
-            let (icon, color) = type_style(name, cx);
-            Icon::new(icon).xsmall().text_color(color)
-        }))
+        .min_w_0()
+        .overflow_hidden()
+        .gap_1p5()
+        .items_center()
+        .text_xs()
+        .text_color(theme.muted_foreground);
+    if issue_labels.is_empty() {
+        return cell.child(no_value(cx));
+    }
+    let (shown, more) = labels::visible_labels(issue_labels);
+    cell.children(shown.iter().map(|label| {
+        let color: Hsla = label_color(&label.color).unwrap_or(theme.muted_foreground);
+        h_flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .gap_1()
+            .items_center()
+            .child(
+                div()
+                    .size(px(LABEL_DOT))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(color),
+            )
+            .child(div().min_w_0().truncate().child(label.name.clone()))
+    }))
+    .children(more.map(|more| div().flex_none().child(more)))
 }
 
 fn linkage(issue: &Issue, cx: &App) -> Div {
@@ -329,11 +342,7 @@ fn linkage(issue: &Issue, cx: &App) -> Div {
                 .child(format!("{}/{}", sub.completed, sub.total))
         })
     };
-    h_flex()
-        .w(px(DIFF_WIDTH))
-        .flex_none()
-        .justify_end()
-        .children(chip)
+    right_cell(DIFF_WIDTH).child(chip.unwrap_or_else(|| no_value(cx)))
 }
 
 fn tag(cx: &App) -> Div {
@@ -347,47 +356,8 @@ fn tag(cx: &App) -> Div {
         .rounded(theme.radius)
         .border_1()
         .border_color(theme.border)
-        .text_size(px(TAG_TEXT_SIZE))
+        .text_xs()
         .text_color(theme.muted_foreground)
-}
-
-fn label_dots(issue_labels: &[IssueLabel], cx: &App) -> Div {
-    let theme = cx.theme();
-    let (shown, more) = labels::visible_labels(issue_labels);
-    h_flex()
-        .flex_none()
-        .gap_2()
-        .items_center()
-        .children(shown.iter().map(|label| {
-            let color: Hsla = label_color(&label.color).unwrap_or(theme.muted_foreground);
-            h_flex()
-                .flex_none()
-                .gap_1()
-                .items_center()
-                .child(
-                    div()
-                        .size(px(LABEL_DOT))
-                        .flex_none()
-                        .rounded_full()
-                        .bg(color),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .max_w(px(LABEL_MAX_WIDTH))
-                        .truncate()
-                        .child(label.name.clone()),
-                )
-        }))
-        .children(more)
-}
-
-fn diff_stat(pr: &PullRequest, cx: &App) -> Div {
-    h_flex()
-        .w(px(DIFF_WIDTH))
-        .flex_none()
-        .justify_end()
-        .child(ui::diff_stat(pr.additions, pr.deletions, cx))
 }
 
 fn comments(count: u32, cx: &App) -> Div {

@@ -18,7 +18,7 @@ use crate::review::status_badge::status_badge;
 use crate::theme::density;
 use crate::ui;
 
-const ROW_HEIGHT: f32 = 26.;
+const ROW_HEIGHT: f32 = 28.;
 const INDENT: f32 = 12.;
 const ROW_PADDING: f32 = 8.;
 const PROGRESS_HEIGHT: f32 = 3.;

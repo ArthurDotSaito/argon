@@ -6,11 +6,11 @@ mod merge;
 
 use std::rc::Rc;
 
-use argon_core::{PrKey, PullRequest, Side};
+use argon_core::{PrKey, PullRequest, Reason, Side};
 use argon_github::{MergeMethod, PrDetail};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window,
@@ -22,6 +22,7 @@ use super::commits::{CommitsEvent, CommitsTab};
 use super::conversation::{Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
 use super::labels;
+use super::properties;
 use crate::inbox::InboxModel;
 use crate::keymap::PR_VIEW_CONTEXT;
 use crate::review::{ReviewScope, ReviewTab, ReviewTabEvent};
@@ -227,6 +228,13 @@ impl PrView {
             tracing::warn!(%error, url, "failed to open pr in browser");
         }
     }
+
+    fn inbox_reason(&self, cx: &App) -> Option<Reason> {
+        self.inbox
+            .read(cx)
+            .item(&self.key)
+            .map(|item| item.reason.clone())
+    }
 }
 
 fn app_services(cx: &App) -> Option<Services> {
@@ -264,36 +272,44 @@ impl Render for PrView {
             .as_ref()
             .map(|detail| &detail.pr)
             .or(store_pr.as_deref());
-        let head = match pr {
+        let show_panel = detail.is_some() && self.tab != PrTab::Review;
+        let reason = show_panel.then(|| self.inbox_reason(cx)).flatten();
+        let (head, panel) = match pr {
             Some(pr) => {
-                let can_merge = self.can_merge();
-                let can_review_with_ai = self.can_review_with_ai();
-                let closing = self.closing_links(pr, cx);
-                header(
-                    HeaderProps {
-                        pr,
-                        detail: detail.as_deref(),
-                        closing,
-                        can_merge,
-                        can_review_with_ai,
-                        merge_state: &self.merge_state,
-                        refreshing: self.refreshing,
-                        now,
-                    },
-                    cx,
-                )
+                let props = HeaderProps {
+                    pr,
+                    detail: detail.as_deref(),
+                    closing: self.closing_links(pr, cx),
+                    can_merge: self.can_merge(),
+                    can_review_with_ai: self.can_review_with_ai(),
+                    merge_state: &self.merge_state,
+                    refreshing: self.refreshing,
+                    now,
+                };
+                let (actions, panel) = if show_panel {
+                    (
+                        Vec::new(),
+                        Some(properties::panel(&props, reason.as_ref(), cx)),
+                    )
+                } else {
+                    let show_review = self.tab != PrTab::Review;
+                    (
+                        properties::action_buttons(&props, show_review, false, cx),
+                        None,
+                    )
+                };
+                (header(&props, actions, cx), panel)
             }
-            None => body::pr_fallback_header(cx),
+            None => (body::pr_fallback_header(cx), None),
         };
         let banner = self.error_banner(cx);
         let tab_bar = self.tab_bar(cx);
         let body = self.body(cx);
         let theme = cx.theme();
-        v_flex()
-            .key_context(PR_VIEW_CONTEXT)
-            .track_focus(&self.focus_handle)
-            .size_full()
-            .bg(theme.background)
+        let main = v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .child(head)
             .children(banner)
             .child(
@@ -303,6 +319,13 @@ impl Render for PrView {
                     .border_color(theme.border)
                     .child(tab_bar),
             )
-            .child(div().flex_1().min_h_0().child(body))
+            .child(div().flex_1().min_h_0().child(body));
+        h_flex()
+            .key_context(PR_VIEW_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .bg(theme.background)
+            .child(main)
+            .children(panel)
     }
 }

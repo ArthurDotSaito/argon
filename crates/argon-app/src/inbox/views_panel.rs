@@ -4,9 +4,8 @@ use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
-    prelude::FluentBuilder as _, px,
+    IntoElement, ParentElement as _, Render, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::{AccountEntry, OrgEntry};
@@ -21,7 +20,7 @@ use crate::workspace::Workspace;
 
 pub const VIEWS_PANEL: &str = "argon.views";
 
-const ITEM_HEIGHT: f32 = 26.;
+const ITEM_HEIGHT: f32 = 30.;
 const ORG_BADGE_SIZE: f32 = 16.;
 const ACCOUNT_AVATAR_SIZE: f32 = 22.;
 
@@ -107,7 +106,7 @@ impl ViewsPanel {
                 .rounded(theme.radius)
                 .border_1()
                 .border_color(theme.border)
-                .text_size(px(10.))
+                .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(labels::ADMIN_BADGE)
         });
@@ -238,6 +237,7 @@ fn counter(count: usize, accent: Option<(Hsla, Hsla)>, cx: &App) -> Div {
     div()
         .px_1()
         .rounded(theme.radius)
+        .font_family(theme.mono_font_family.clone())
         .text_xs()
         .map(|this| match accent {
             Some((background, foreground)) => {
@@ -257,6 +257,12 @@ fn nav_item(id: (&'static str, usize), selected: bool, cx: &App) -> Stateful<Div
         .gap_2()
         .items_center()
         .rounded(theme.radius)
+        .border_l_2()
+        .border_color(if selected {
+            theme.primary
+        } else {
+            gpui_kit::transparent_black()
+        })
         .cursor_pointer()
         .text_color(theme.foreground)
         .when(selected, |this| this.bg(theme.list_active))
@@ -273,10 +279,10 @@ fn group_title(title: &'static str, cx: &App) -> Div {
     div()
         .px_2()
         .pb_0p5()
-        .text_size(px(11.))
+        .text_xs()
         .font_semibold()
         .text_color(cx.theme().muted_foreground)
-        .child(SharedString::from(title.to_uppercase()))
+        .child(title)
 }
 
 fn hint(text: &'static str, cx: &App) -> Div {

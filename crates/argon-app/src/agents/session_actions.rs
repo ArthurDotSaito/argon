@@ -48,10 +48,20 @@ fn confirm_archive(id: String, worktree: Option<PathBuf>, window: &mut Window, c
     });
 }
 
-pub fn controls(controls: &SessionControls, prefix: &str, cx: &App) -> Option<Div> {
-    let state = AgentSessions::global(cx)
-        .and_then(|sessions| sessions.read(cx).resume_state(&controls.id).cloned());
-    let resuming = matches!(state, Some(ResumeState::Running));
+fn resume_state(controls: &SessionControls, cx: &App) -> Option<ResumeState> {
+    AgentSessions::global(cx)
+        .and_then(|sessions| sessions.read(cx).resume_state(&controls.id).cloned())
+}
+
+pub fn resume_error(controls: &SessionControls, cx: &App) -> Option<String> {
+    match resume_state(controls, cx) {
+        Some(ResumeState::Failed(error)) => Some(labels::resume_failed(&error)),
+        _ => None,
+    }
+}
+
+fn buttons(controls: &SessionControls, prefix: &str, cx: &App) -> (Option<Button>, Option<Button>) {
+    let resuming = matches!(resume_state(controls, cx), Some(ResumeState::Running));
     let resume = controls.resume.map(|action| {
         let label = match action {
             ResumeAction::Continue => labels::CONTINUE,
@@ -91,17 +101,28 @@ pub fn controls(controls: &SessionControls, prefix: &str, cx: &App) -> Option<Di
             confirm_archive(id.clone(), worktree.clone(), window, cx)
         })
     });
-    let error = match state {
-        Some(ResumeState::Failed(error)) => Some(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(cx.theme().danger)
-                .child(labels::resume_failed(&error)),
-        ),
-        _ => None,
-    };
+    (resume, archive)
+}
+
+pub fn row_actions(controls: &SessionControls, prefix: &str, cx: &App) -> Div {
+    let (resume, archive) = buttons(controls, prefix, cx);
+    h_flex()
+        .gap_1p5()
+        .items_center()
+        .children(resume)
+        .children(archive)
+}
+
+pub fn controls(controls: &SessionControls, prefix: &str, cx: &App) -> Option<Div> {
+    let (resume, archive) = buttons(controls, prefix, cx);
+    let error = resume_error(controls, cx).map(|error| {
+        div()
+            .flex_1()
+            .min_w_0()
+            .text_xs()
+            .text_color(cx.theme().danger)
+            .child(error)
+    });
     if resume.is_none() && archive.is_none() && error.is_none() {
         return None;
     }

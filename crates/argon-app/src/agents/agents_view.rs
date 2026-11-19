@@ -9,21 +9,32 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, 
 use gpui_kit::{
     App, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Task, Window, div,
+    Styled as _, Subscription, Task, Window, div, px,
 };
 
-use super::badges::{severity_counts, status_chip};
+use super::badges::{severity_pills, status_chip};
 use super::card_status::SessionFilter;
 use super::catalog::SessionCatalog;
 use super::grouping::{PrGroup, group_by_pr};
 use super::panel_labels as labels;
-use super::session_actions::controls;
+use super::session_actions::{resume_error, row_actions};
 use super::session_tab::open_session_tab;
 use super::sessions::AgentSessions;
 use super::sessions_list::{SessionCard, subject_labels};
+use crate::theme::density;
+use crate::ui::columns;
 use crate::workspace::{Workspace, subject_item};
 
 const TICK: Duration = Duration::from_secs(1);
+const STATUS_WIDTH: f32 = 168.;
+const FINDINGS_WIDTH: f32 = 150.;
+const TIME_WIDTH: f32 = 64.;
+const ACTIONS_WIDTH: f32 = 150.;
+const ROW_INDENT: f32 = 20.;
+const HEADER_INDENT: f32 = 22.;
+const GROUP_HEADER_HEIGHT: f32 = 34.;
+const GROUP_TITLE_MAX_WIDTH: f32 = 420.;
+const ARCHIVED_ROW_HEIGHT: f32 = 32.;
 
 fn open_subject(key: PrKey, kind: SessionKind, window: &mut Window, cx: &mut App) {
     if let Some(workspace) = Workspace::global(cx) {
@@ -134,58 +145,100 @@ impl AgentsView {
             )
     }
 
+    fn column_header(&self, cx: &App) -> Div {
+        columns::column_header(cx)
+            .pl(px(HEADER_INDENT))
+            .child(
+                div()
+                    .w(px(STATUS_WIDTH))
+                    .flex_none()
+                    .child(labels::COLUMN_STATUS),
+            )
+            .child(div().flex_1().min_w_0().child(labels::COLUMN_AGENT))
+            .child(
+                div()
+                    .w(px(FINDINGS_WIDTH))
+                    .flex_none()
+                    .child(labels::COLUMN_FINDINGS),
+            )
+            .child(
+                h_flex()
+                    .w(px(TIME_WIDTH))
+                    .flex_none()
+                    .justify_end()
+                    .child(labels::COLUMN_TIME),
+            )
+            .child(div().w(px(ACTIONS_WIDTH)).flex_none())
+    }
+
     fn session_row(&self, card: SessionCard, cx: &App) -> Stateful<Div> {
         let theme = cx.theme();
         let id = card.id.clone();
-        let actions = controls(&card.controls, "agents-row", cx);
-        let detail = (card.counts.total() > 0 || card.note.is_some()).then(|| {
+        let error = resume_error(&card.controls, cx);
+        let remark = match (error, card.note) {
+            (Some(error), _) => Some((SharedString::from(error), theme.danger)),
+            (None, Some(note)) => Some((note, theme.warning)),
+            (None, None) => None,
+        };
+        columns::list_row(
+            SharedString::from(format!("agents-row-{}", card.id)),
+            false,
+            cx,
+        )
+        .pl(px(ROW_INDENT))
+        .child(
+            div()
+                .w(px(STATUS_WIDTH))
+                .flex_none()
+                .child(status_chip(card.status, cx)),
+        )
+        .child(
             h_flex()
-                .gap_2()
+                .flex_1()
+                .min_w_0()
                 .items_center()
-                .children((card.counts.total() > 0).then(|| severity_counts(card.counts, cx)))
-                .children(card.note.clone().map(|note| {
+                .gap(px(10.))
+                .child(div().flex_none().child(card.agent))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(card.model),
+                )
+                .children(remark.map(|(text, color)| {
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_xs()
-                        .text_color(theme.warning)
-                        .child(note)
-                }))
-        });
-        v_flex()
-            .id(SharedString::from(format!("agents-row-{}", card.id)))
-            .w_full()
-            .pl_8()
-            .pr_3()
-            .py_1p5()
-            .gap_1()
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.list_hover))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(status_chip(card.status, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(card.agent_line),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(card.elapsed),
-                    ),
-            )
-            .children(detail)
-            .children(actions)
-            .on_click(move |_, window, cx| open_session_tab(&id, window, cx))
+                        .text_color(color)
+                        .child(text)
+                })),
+        )
+        .child(
+            div()
+                .w(px(FINDINGS_WIDTH))
+                .flex_none()
+                .child(severity_pills(card.counts, cx)),
+        )
+        .child(
+            h_flex()
+                .w(px(TIME_WIDTH))
+                .flex_none()
+                .justify_end()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(card.elapsed),
+        )
+        .child(
+            row_actions(&card.controls, "agents-row", cx)
+                .w(px(ACTIONS_WIDTH))
+                .flex_none()
+                .justify_end()
+                .gap(px(6.)),
+        )
+        .on_click(move |_, window, cx| open_session_tab(&id, window, cx))
     }
 
     fn archived_toggle(
@@ -207,14 +260,17 @@ impl AgentsView {
                 "agents-archived-{}-{}",
                 pr.host, pr.id.0
             )))
+            .h(px(density::scaled(ARCHIVED_ROW_HEIGHT, cx)))
+            .flex_none()
             .w_full()
-            .pl_8()
+            .pl(px(HEADER_INDENT))
             .pr_3()
-            .py_1()
             .gap_1p5()
             .items_center()
             .text_xs()
             .text_color(theme.muted_foreground)
+            .border_b_1()
+            .border_color(theme.border.opacity(0.45))
             .cursor_pointer()
             .hover(|style| style.bg(theme.list_hover))
             .child(Icon::new(icon).xsmall())
@@ -243,15 +299,13 @@ impl AgentsView {
             .map(|card| self.session_row(card, cx))
             .collect::<Vec<_>>();
         let theme = cx.theme();
-        let header = h_flex()
-            .gap_2()
-            .px_3()
-            .py_1p5()
-            .items_center()
+        let header = columns::group_row(cx)
+            .h(px(density::scaled(GROUP_HEADER_HEIGHT, cx)))
             .child(Icon::new(icon).small().text_color(theme.muted_foreground))
             .child(
                 div()
-                    .min_w_0()
+                    .flex_none()
+                    .max_w(px(GROUP_TITLE_MAX_WIDTH))
                     .truncate()
                     .text_sm()
                     .font_semibold()
@@ -262,7 +316,9 @@ impl AgentsView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
+                    .font_family(theme.mono_font_family.clone())
                     .text_xs()
+                    .font_normal()
                     .text_color(theme.muted_foreground)
                     .child(reference),
             )
@@ -288,7 +344,6 @@ impl AgentsView {
             );
         v_flex()
             .w_full()
-            .pb_2()
             .child(header)
             .children(rows)
             .children(toggle)
@@ -334,6 +389,7 @@ impl Render for AgentsView {
                 .text_color(cx.theme().muted_foreground)
                 .child(text)
         });
+        let columns = (!groups.is_empty()).then(|| self.column_header(cx));
         let groups = groups
             .into_iter()
             .map(|group| self.group(group, cx))
@@ -343,13 +399,13 @@ impl Render for AgentsView {
             .size_full()
             .bg(cx.theme().background)
             .child(header)
+            .children(columns)
             .child(
                 v_flex()
                     .id("agents-view-list")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .py_2()
                     .children(groups)
                     .children(empty),
             )
