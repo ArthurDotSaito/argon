@@ -72,6 +72,7 @@ pub const NO_NONCE_SUMMARY: &str =
 pub const PREVIEW: &str = "Preview";
 pub const PREVIEW_SAMPLE: &str = "Contexto de exemplo";
 pub const PREVIEW_SAMPLE_ISSUE: &str = "Issue de exemplo";
+pub const PREVIEW_SAMPLE_SUMMARY: &str = "PR de exemplo";
 pub const PREVIEW_LOADING: &str = "montando contexto do PR…";
 pub const NO_TEMPLATE_SELECTED: &str = "Selecione um template.";
 pub const LOADING_TEMPLATES: &str = "carregando templates…";

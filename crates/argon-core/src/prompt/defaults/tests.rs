@@ -15,7 +15,13 @@ fn ensure_default_templates_writes_the_embedded_templates() {
     let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["performance", "plan-padrao", "review-padrao", "seguranca"]
+        [
+            "performance",
+            "plan-padrao",
+            "resumo-padrao",
+            "review-padrao",
+            "seguranca"
+        ]
     );
     assert!(
         templates
@@ -29,6 +35,7 @@ fn embedded_templates_declare_their_kind() {
     for (id, source) in DEFAULT_TEMPLATES {
         let expected = match id {
             "plan-padrao" => TemplateKind::Plan,
+            "resumo-padrao" => TemplateKind::Summary,
             _ => TemplateKind::Review,
         };
         let template = parse_template(id, source).unwrap();
@@ -42,6 +49,19 @@ fn plan_padrao_header_matches_the_spec() {
     let template = parse_template("plan-padrao", embedded_source("plan-padrao")).unwrap();
 
     assert_eq!(template.name, "Plano padrão");
+    assert!(
+        template
+            .description
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+    );
+}
+
+#[test]
+fn resumo_padrao_header_matches_the_spec() {
+    let template = parse_template("resumo-padrao", embedded_source("resumo-padrao")).unwrap();
+
+    assert_eq!(template.name, "Resumo padrão");
     assert!(
         template
             .description
@@ -65,6 +85,7 @@ fn ensure_default_templates_does_not_overwrite_user_edits() {
     assert!(dir.path().join("review-padrao.md").is_file());
     assert!(dir.path().join("performance.md").is_file());
     assert!(dir.path().join("plan-padrao.md").is_file());
+    assert!(dir.path().join("resumo-padrao.md").is_file());
 }
 
 #[test]
@@ -99,7 +120,7 @@ const V2_PERFORMANCE: &str = include_str!("../testdata/performance.v2.md");
 fn expected_version(id: &str) -> u32 {
     match id {
         "review-padrao" => 4,
-        "plan-padrao" => 1,
+        "plan-padrao" | "resumo-padrao" => 1,
         _ => 3,
     }
 }
@@ -251,9 +272,9 @@ Minha regra extra.
 }
 
 #[test]
-fn embedded_review_templates_contain_the_profile_slot_and_the_plan_does_not() {
+fn embedded_review_templates_contain_the_profile_slot_and_the_others_do_not() {
     for (id, source) in DEFAULT_TEMPLATES {
-        let expected = id != "plan-padrao";
+        let expected = !matches!(id, "plan-padrao" | "resumo-padrao");
         assert_eq!(source.contains(PROFILE_SLOT), expected, "{id}");
         assert_eq!(
             source.matches(PROFILE_SLOT).count(),

@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use argon_core::{
     PlanComment, PlanContext, PrKey, PromptContext, PromptError, PromptTemplate, PullRequest,
-    TemplateKind, render_plan_prompt, render_prompt, resolve_template,
+    RelatedRepo, SummaryContext, TemplateKind, render_plan_prompt, render_prompt,
+    render_summary_prompt, resolve_template,
 };
 use chrono::DateTime;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -30,6 +31,7 @@ const TARGET_MAX_WIDTH: f32 = 420.;
 enum PreviewInput {
     Review(PromptContext),
     Plan(PlanContext),
+    Summary(SummaryContext),
 }
 
 pub(super) struct Rendered {
@@ -114,6 +116,37 @@ fn sample_plan_context() -> PlanContext {
     }
 }
 
+fn sample_summary_context() -> SummaryContext {
+    SummaryContext {
+        pr_title: "feat(api): paginação no endpoint de agendamentos".into(),
+        pr_number: 482,
+        pr_url: "https://github.com/exemplo/scheduling-api/pull/482".into(),
+        pr_body: "Adiciona paginação por cursor em GET /appointments.".into(),
+        repo: "exemplo/scheduling-api".into(),
+        base: "main".into(),
+        base_sha: "4f2c9e1".into(),
+        head: "feat/pagination".into(),
+        head_sha: "9b1d7a3c5e2f4086a1b3c4d5e6f708192a3b4c5d".into(),
+        related: vec![
+            RelatedRepo {
+                repo: "exemplo/notificacoes-worker".into(),
+                path: Some("C:\\Argon\\worktrees\\notificacoes-worker\\rel-1a2b3c4d".into()),
+                branch: "main".into(),
+                error: None,
+            },
+            RelatedRepo {
+                repo: "exemplo/faturamento-api".into(),
+                path: None,
+                branch: "main".into(),
+                error: Some("repositório não encontrado".into()),
+            },
+        ],
+        project_overview: None,
+        project_nodes: Vec::new(),
+        refresh_project: false,
+    }
+}
+
 fn failed(error: SharedString) -> Rendered {
     Rendered {
         lines: Vec::new(),
@@ -131,6 +164,7 @@ fn render_preview(
     let result = match input {
         PreviewInput::Review(context) => render_prompt(template, context, max_diff_chars),
         PreviewInput::Plan(context) => render_plan_prompt(template, context),
+        PreviewInput::Summary(context) => render_summary_prompt(template, context),
     };
     match result {
         Ok(prompt) => Rendered {
@@ -260,7 +294,9 @@ impl TemplatesSection {
     ) -> Result<Option<PreviewInput>, SharedString> {
         match kind {
             Some(TemplateKind::Plan) => Ok(Some(PreviewInput::Plan(sample_plan_context()))),
-            Some(TemplateKind::Summary) => Ok(None),
+            Some(TemplateKind::Summary) => {
+                Ok(Some(PreviewInput::Summary(sample_summary_context())))
+            }
             Some(TemplateKind::Review) | None => self
                 .preview_context()
                 .map(|context| context.map(PreviewInput::Review)),
@@ -357,19 +393,20 @@ impl TemplatesSection {
             })
             .unwrap_or_default();
         let failed = rendered.is_some_and(|rendered| rendered.error.is_some());
-        let plan = self
-            .current()
-            .is_some_and(|template| template.kind == TemplateKind::Plan);
-        let target: AnyElement = if plan {
-            div()
+        let sample_label = match self.current().map(|template| template.kind) {
+            Some(TemplateKind::Plan) => Some(labels::PREVIEW_SAMPLE_ISSUE),
+            Some(TemplateKind::Summary) => Some(labels::PREVIEW_SAMPLE_SUMMARY),
+            Some(TemplateKind::Review) | None => None,
+        };
+        let target: AnyElement = match sample_label {
+            Some(label) => div()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child(labels::PREVIEW_SAMPLE_ISSUE)
-                .into_any_element()
-        } else {
-            Select::new(&self.preview.target_select)
+                .child(label)
+                .into_any_element(),
+            None => Select::new(&self.preview.target_select)
                 .small()
-                .into_any_element()
+                .into_any_element(),
         };
         let body: AnyElement = if lines == 0 {
             div()
@@ -456,8 +493,21 @@ mod tests {
             0,
         );
 
+        let summary = render_preview(
+            &chip_template(TemplateKind::Summary),
+            &PreviewInput::Summary(sample_summary_context()),
+            0,
+        );
+
         assert_eq!(review.error, None);
         assert_eq!(plan.error, None);
+        assert_eq!(summary.error, None);
+        assert!(
+            summary
+                .lines
+                .iter()
+                .any(|line| line.contains("indisponível"))
+        );
         assert!(
             plan.lines
                 .iter()

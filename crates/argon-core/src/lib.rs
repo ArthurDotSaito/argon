@@ -1,3 +1,4 @@
+mod arch;
 mod config;
 mod diff;
 mod fence;
@@ -12,9 +13,14 @@ mod prompt;
 mod reason;
 mod redact;
 mod review;
+mod summary_output;
 mod time;
 mod views;
 
+pub use arch::{
+    ArchEdge, ArchGraph, ArchNode, Lane, MAX_ARCH_EDGES, MAX_ARCH_NODES, NodeKind, Via, parse_arch,
+    parse_touched,
+};
 pub use config::{
     AgentCfg, AgentKind, AppearanceCfg, Config, ConfigError, Density, MAX_RELATED_REPOS,
     NotificationsCfg, OrgsCfg, PermissionMode, ReviewCfg, SyncCfg, ThemeChoice, repo_key,
@@ -33,9 +39,10 @@ pub use paths::Paths;
 pub use plan_output::parse_plan;
 pub use prompt::{
     InvalidTemplate, PROFILE_END, PROFILE_SLOT, PlanComment, PlanContext, ProfileParts,
-    PromptContext, PromptError, PromptTemplate, RenderedPrompt, TemplateKind, TemplateSet,
-    base_body, base_parts, detached_body, ensure_default_templates, load_templates, profile_parts,
-    render_plan_prompt, render_prompt, resolve_template, scan_templates,
+    PromptContext, PromptError, PromptTemplate, RelatedRepo, RenderedPrompt, SummaryContext,
+    TemplateKind, TemplateSet, base_body, base_parts, detached_body, ensure_default_templates,
+    load_templates, profile_parts, render_plan_prompt, render_prompt, render_summary_prompt,
+    resolve_template, scan_templates,
 };
 pub use reason::{Reason, issue_reason, reason};
 pub use redact::{redact_line, redact_text};
@@ -43,5 +50,6 @@ pub use review::{
     DraftComment, DraftReview, DraftSource, DraftThreadInput, ReviewError, ReviewEvent,
     ReviewSubmission, build_submission, single_comment_submission,
 };
+pub use summary_output::{SummaryOutput, parse_summary};
 pub use time::{DateBucket, date_bucket};
 pub use views::{ViewSet, classify, classify_issue, is_ready};
