@@ -159,13 +159,13 @@ impl StartDialog {
                             .gap_2()
                             .items_center()
                             .child(section_label(labels::TEMPLATE, cx))
-                            .child(div().flex_1().min_w_0().child(template))
-                            .child(edit),
+                            .child(div().flex_1().min_w_0().child(template)),
                     )
                     .child(
                         v_flex()
                             .pl(px(FIELD_LABEL_WIDTH + 8.))
                             .gap_0p5()
+                            .child(h_flex().child(edit))
                             .children(pin.map(|pin| h_flex().child(pin)))
                             .children(notes),
                     ),
