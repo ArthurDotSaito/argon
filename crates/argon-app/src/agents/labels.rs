@@ -77,6 +77,7 @@ pub const CI_HEADING: &str = "Jobs com falha:";
 pub const NO_CI_LOG: &str = "(log vazio)";
 pub const BUTTON_TOOLTIP: &str = "Agent Review deste PR (a)";
 pub const PLAN_BUTTON_TOOLTIP: &str = "Agent Plan desta issue (a)";
+pub const SUMMARIZE_TOOLTIP: &str = "Resumo do PR e do projeto (m)";
 pub const CLOSED_TOOLTIP: &str = "Disponível só para PRs abertos";
 
 pub const LOADING_USAGE: &str = "carregando uso…";

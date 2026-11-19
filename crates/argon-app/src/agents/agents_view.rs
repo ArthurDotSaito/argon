@@ -47,9 +47,8 @@ fn open_subject(key: PrKey, kind: SessionKind, window: &mut Window, cx: &mut App
 fn start_agent(key: PrKey, kind: SessionKind, window: &mut Window, cx: &mut App) {
     if let Some(workspace) = Workspace::global(cx) {
         _ = workspace.update(cx, |workspace, cx| match kind {
-            SessionKind::Review | SessionKind::Summary => {
-                workspace.review_pr_with_ai(key, window, cx)
-            }
+            SessionKind::Review => workspace.review_pr_with_ai(key, window, cx),
+            SessionKind::Summary => workspace.summarize_pr(key, window, cx),
             SessionKind::Plan => workspace.plan_issue_with_agent(key, window, cx),
         });
     }

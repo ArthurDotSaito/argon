@@ -3,11 +3,13 @@ mod body;
 mod closing;
 mod loading;
 mod merge;
+mod summary;
 
 use std::rc::Rc;
 
 use argon_core::{PrKey, PullRequest, Reason, Side};
 use argon_github::{MergeMethod, PrDetail};
+use argon_store::PrSummary;
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
@@ -25,7 +27,7 @@ use super::labels;
 use super::properties;
 use crate::inbox::InboxModel;
 use crate::keymap::PR_VIEW_CONTEXT;
-use crate::review::{ReviewScope, ReviewTab, ReviewTabEvent};
+use crate::review::{DraftsBus, DraftsChanged, ReviewScope, ReviewTab, ReviewTabEvent};
 use crate::services::{AppServices, Services};
 
 pub use body::{
@@ -107,6 +109,9 @@ pub struct PrView {
     review: Entity<ReviewTab>,
     focus_handle: FocusHandle,
     pending_ai_review: bool,
+    pending_summarize: bool,
+    summary: Option<PrSummary>,
+    summary_task: Option<Task<()>>,
     load_task: Option<Task<()>>,
     merge_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -123,6 +128,7 @@ impl PrView {
         let commits = cx.new(|cx| CommitsTab::new(window, cx));
         let actions = cx.new(|cx| ActionsTab::new(window, cx));
         let review = cx.new(|cx| ReviewTab::new(window, cx));
+        let drafts = DraftsBus::global(cx);
         let subscriptions = vec![
             cx.subscribe(&conversation, |this, _, event, cx| match event {
                 ConversationEvent::Commented => {
@@ -153,6 +159,11 @@ impl PrView {
                 }
             }),
             cx.observe(&inbox, |this, _, cx| this.on_inbox_changed(cx)),
+            cx.subscribe(&drafts, |this, _, event: &DraftsChanged, cx| {
+                if event.pr == this.key {
+                    this.reload_summary(cx);
+                }
+            }),
         ];
         let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);
         let seen_updated_at = store_pr.as_ref().map(|pr| pr.updated_at);
@@ -179,11 +190,15 @@ impl PrView {
             review,
             focus_handle: cx.focus_handle(),
             pending_ai_review: false,
+            pending_summarize: false,
+            summary: None,
+            summary_task: None,
             load_task: None,
             merge_task: None,
             _subscriptions: subscriptions,
         };
         this.reload(cx);
+        this.reload_summary(cx);
         this
     }
 
@@ -265,6 +280,7 @@ impl Focusable for PrView {
 impl Render for PrView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.settle_pending_ai_review(window, cx);
+        self.settle_pending_summarize(window, cx);
         let now = Utc::now();
         let detail = self.detail.clone();
         let store_pr = self.store_pr.clone();
@@ -303,6 +319,9 @@ impl Render for PrView {
             None => (body::pr_fallback_header(cx), None),
         };
         let banner = self.error_banner(cx);
+        let summary_banner = (self.tab == PrTab::Conversation)
+            .then(|| self.summary_banner(cx))
+            .flatten();
         let tab_bar = self.tab_bar(cx);
         let body = self.body(cx);
         let theme = cx.theme();
@@ -319,6 +338,7 @@ impl Render for PrView {
                     .border_color(theme.border)
                     .child(tab_bar),
             )
+            .children(summary_banner)
             .child(div().flex_1().min_h_0().child(body));
         h_flex()
             .key_context(PR_VIEW_CONTEXT)

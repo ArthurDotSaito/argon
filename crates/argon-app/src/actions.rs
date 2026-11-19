@@ -23,6 +23,7 @@ gpui_kit::actions!(
         CancelComment,
         StartReview,
         ReviewWithAi,
+        SummarizePr,
         PlanWithAgent,
         ToggleTheme
     ]

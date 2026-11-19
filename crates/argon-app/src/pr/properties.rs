@@ -56,6 +56,15 @@ pub fn action_buttons(
 ) -> Vec<AnyElement> {
     let merging = matches!(props.merge_state, MergeState::Merging);
     let ai_review = ai_review_button(props.can_review_with_ai, full_width, cx);
+    let summarize = Button::new("pr-summarize")
+        .icon(Icon::new(IconName::TextAlignStart))
+        .label(agents::SUMMARIZE)
+        .small()
+        .outline()
+        .when(full_width, |button| button.w_full())
+        .tooltip(agents::SUMMARIZE_TOOLTIP)
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_summarize(window, cx)))
+        .into_any_element();
     let review = (show_review && props.pr.state == PrState::Open).then(|| {
         Button::new("pr-review")
             .icon(Icon::new(IconName::FileDiff))
@@ -89,6 +98,7 @@ pub fn action_buttons(
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_on_github(cx)))
         .into_any_element();
     std::iter::once(ai_review)
+        .chain(std::iter::once(summarize))
         .chain(review)
         .chain(merge)
         .chain(std::iter::once(open))

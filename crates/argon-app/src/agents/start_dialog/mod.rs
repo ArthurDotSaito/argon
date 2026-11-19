@@ -52,7 +52,6 @@ pub struct PlanTarget {
 
 pub enum Target {
     Review(ReviewTarget),
-    #[expect(dead_code)]
     Summary(SummaryTarget),
     Plan(PlanTarget),
 }

@@ -4,7 +4,7 @@ use gpui_kit::component::dock::{InsertTarget, PanelId};
 use gpui_kit::{App, Context, Entity, Focusable as _, Global, WeakEntity, Window, px};
 
 use super::Workspace;
-use crate::actions::{PlanWithAgent, ReviewWithAi};
+use crate::actions::{PlanWithAgent, ReviewWithAi, SummarizePr};
 use crate::agents::{AgentSessions, AgentsEvent, SessionCatalog, SessionFilter};
 use crate::center::CenterItem;
 use crate::dock_items;
@@ -92,6 +92,13 @@ impl Workspace {
         self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
         if let Some(view) = self.pr_view(&pr, cx) {
             view.update(cx, |view, cx| view.open_ai_review(window, cx));
+        }
+    }
+
+    pub fn summarize_pr(&mut self, pr: PrKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
+        if let Some(view) = self.pr_view(&pr, cx) {
+            view.update(cx, |view, cx| view.open_summarize(window, cx));
         }
     }
 
@@ -250,6 +257,19 @@ impl Workspace {
             view.update(cx, |view, cx| view.open_ai_review(window, cx));
         } else if let Some(pr) = self.active_session_pr(window, cx) {
             self.review_pr_with_ai(pr, window, cx);
+        }
+    }
+
+    pub(super) fn on_summarize_pr(
+        &mut self,
+        _: &SummarizePr,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.active_pr_view(window, cx) {
+            view.update(cx, |view, cx| view.open_summarize(window, cx));
+        } else if let Some(pr) = self.active_session_pr(window, cx) {
+            self.summarize_pr(pr, window, cx);
         }
     }
 

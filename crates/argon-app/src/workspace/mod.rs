@@ -239,6 +239,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_check_for_updates))
             .on_action(cx.listener(Self::on_start_review))
             .on_action(cx.listener(Self::on_review_with_ai))
+            .on_action(cx.listener(Self::on_summarize_pr))
             .on_action(cx.listener(Self::on_plan_with_agent))
             .child(title_bar)
             .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
