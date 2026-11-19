@@ -147,6 +147,7 @@ impl AgentSessions {
         let session_id = row.id.clone();
         let pr = row.pr.clone();
         let kind = row.kind;
+        let related_worktrees = row.related_worktrees.clone();
         self.add(
             ActiveSession {
                 session_id: row.id,
@@ -157,6 +158,7 @@ impl AgentSessions {
                 model_label: row.model_label.unwrap_or_else(|| row.model.clone()),
                 model: row.model,
                 worktree,
+                related_worktrees,
                 handle,
                 head_oid: Some(head.clone()),
                 created_at: row.created_at,

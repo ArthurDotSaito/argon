@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use argon_agents::{AgentEvent, WorktreeManager, orphan_worktrees};
 use argon_store::{SessionStatus, StaleWorktree, Store};
-use chrono::{TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use gpui_kit::{App, AsyncApp, Entity};
 
 use super::catalog::SessionCatalog;
@@ -13,9 +13,40 @@ use crate::services::{Services, StoreHandle, flatten};
 
 const STALE_AFTER: TimeDelta = TimeDelta::days(7);
 
+#[derive(Debug, PartialEq, Eq)]
+struct StaleSession {
+    session_id: String,
+    paths: Vec<PathBuf>,
+    archive: bool,
+}
+
 struct Recovered {
-    stale: Vec<StaleWorktree>,
+    stale: Vec<StaleSession>,
     known: Vec<PathBuf>,
+}
+
+fn stale_sessions(store: &Store, before: DateTime<Utc>) -> argon_store::Result<Vec<StaleSession>> {
+    store
+        .stale_worktrees(before)?
+        .into_iter()
+        .map(
+            |StaleWorktree {
+                 session_id,
+                 path,
+                 archive,
+             }| {
+                let related = store
+                    .session(&session_id)?
+                    .map(|row| row.related_worktrees)
+                    .unwrap_or_default();
+                Ok(StaleSession {
+                    session_id,
+                    paths: std::iter::once(path).chain(related).collect(),
+                    archive,
+                })
+            },
+        )
+        .collect()
 }
 
 fn recover_store(store: &mut Store) -> argon_store::Result<Recovered> {
@@ -24,29 +55,36 @@ fn recover_store(store: &mut Store) -> argon_store::Result<Recovered> {
         store.append_event(&id, &AgentEvent::Error(APP_CLOSED_REASON.to_owned()))?;
     }
     Ok(Recovered {
-        stale: store.stale_worktrees(Utc::now() - STALE_AFTER)?,
+        stale: stale_sessions(store, Utc::now() - STALE_AFTER)?,
         known: store.worktree_paths()?,
     })
 }
 
-async fn remove_stale(worktrees: &WorktreeManager, store: &StoreHandle, stale: Vec<StaleWorktree>) {
-    for StaleWorktree {
+async fn remove_stale(worktrees: &WorktreeManager, store: &StoreHandle, stale: Vec<StaleSession>) {
+    for StaleSession {
         session_id,
-        path,
+        paths,
         archive,
     } in stale
     {
-        let present = tokio::fs::try_exists(&path).await.unwrap_or(false);
-        if present && let Err(error) = worktrees.remove(&path).await {
-            tracing::warn!(session = %session_id, %error, "failed to remove stale worktree");
-            continue;
+        let mut failed = false;
+        for path in &paths {
+            let present = tokio::fs::try_exists(path).await.unwrap_or(false);
+            if present && let Err(error) = worktrees.remove(path).await {
+                tracing::warn!(session = %session_id, %error, "failed to remove stale worktree");
+                failed = true;
+                continue;
+            }
+            if present {
+                tracing::info!(
+                    session = %session_id,
+                    path = %path.display(),
+                    "removed worktree of a finished agent session"
+                );
+            }
         }
-        if present {
-            tracing::info!(
-                session = %session_id,
-                path = %path.display(),
-                "removed worktree of a finished agent session"
-            );
+        if failed {
+            continue;
         }
         if archive {
             let id = session_id.clone();
@@ -108,5 +146,74 @@ impl AgentSessions {
             reload_catalog(cx);
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use argon_core::{AgentKind, PrKey, SessionKind};
+    use argon_store::NewAgentSession;
+
+    use super::*;
+
+    fn summary_session(id: &str, related: Vec<PathBuf>) -> NewAgentSession {
+        NewAgentSession {
+            id: id.into(),
+            pr: PrKey::new("github.com", "PR_1"),
+            agent: AgentKind::ClaudeCode,
+            model: "default".into(),
+            template: "resumo-padrao".into(),
+            worktree_path: Some(PathBuf::from(r"C:\wt\pr-1")),
+            acp_session_id: Some("acp".into()),
+            transport: "acp".into(),
+            permission_mode: "supervised".into(),
+            nonce: String::new(),
+            allowed_files: Vec::new(),
+            kind: SessionKind::Summary,
+            base_sha: None,
+            related_worktrees: related,
+            repo: Some("acme/api".into()),
+            pr_number: Some(1),
+            refresh_project: false,
+        }
+    }
+
+    fn finished_store(related: Vec<PathBuf>) -> Store {
+        let mut store = Store::open_in_memory().unwrap();
+        store
+            .create_session(&summary_session("s1", related))
+            .unwrap();
+        store
+            .set_session_status("s1", SessionStatus::Completed)
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn stale_sessions_include_the_related_worktrees() {
+        let related = vec![PathBuf::from(r"C:\wt\rel-a"), PathBuf::from(r"C:\wt\rel-b")];
+        let store = finished_store(related.clone());
+        let stale = stale_sessions(&store, Utc::now() + TimeDelta::days(1)).unwrap();
+        assert_eq!(
+            stale,
+            [StaleSession {
+                session_id: "s1".into(),
+                paths: vec![
+                    PathBuf::from(r"C:\wt\pr-1"),
+                    related[0].clone(),
+                    related[1].clone()
+                ],
+                archive: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn related_worktrees_are_known_so_the_orphan_scan_keeps_them() {
+        let related = vec![PathBuf::from(r"C:\wt\rel-a")];
+        let store = finished_store(related.clone());
+        let known = store.worktree_paths().unwrap();
+        assert!(known.contains(&PathBuf::from(r"C:\wt\pr-1")));
+        assert!(known.contains(&related[0]));
     }
 }

@@ -1,9 +1,9 @@
-use argon_core::resolve_template;
+use argon_core::{SessionKind, resolve_template};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{Context, SharedString, Window};
 
 use super::{Gathering, Load, Phase, StartDialog, app_services, fresh_session_id};
-use crate::agents::context::plan_context;
+use crate::agents::context::{plan_context, summary_context};
 use crate::agents::labels;
 use crate::agents::launcher::{LaunchPrompt, LaunchRequest, LaunchStage};
 use crate::agents::launches::{LaunchState, SessionMeta};
@@ -91,6 +91,17 @@ impl StartDialog {
                     .map(|file| file.path.clone())
                     .collect(),
             },
+            Gathering::Summary(gathering) => LaunchPrompt::Summary {
+                template: Box::new(
+                    resolve_template(self.current_template()?, &self.all_templates).ok()?,
+                ),
+                context: Box::new(summary_context(
+                    &gathering.detail,
+                    gathering.overview.as_ref(),
+                    self.refresh_project,
+                )),
+                related: gathering.related.clone(),
+            },
             Gathering::Plan(detail) => LaunchPrompt::Plan {
                 template: Box::new(
                     resolve_template(self.current_template()?, &self.all_templates).ok()?,
@@ -177,6 +188,12 @@ impl StartDialog {
                 self.phase = Phase::Failed(labels::launch_failed(self.kind(), &error).into());
                 self.session_id = fresh_session_id();
             }
+        }
+        if self.kind() == SessionKind::Summary
+            && matches!(self.phase, Phase::Cancelled | Phase::Failed(_))
+        {
+            self.rerender(cx);
+            return;
         }
         cx.notify();
     }

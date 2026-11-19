@@ -24,6 +24,7 @@ pub struct ActiveSession {
     pub model: String,
     pub model_label: String,
     pub worktree: PathBuf,
+    pub related_worktrees: Vec<PathBuf>,
     pub handle: AgentSessionHandle,
     pub head_oid: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -218,6 +219,14 @@ impl AgentSessions {
             .iter()
             .find(|session| session.session_id == session_id)
             .map(|session| session.handle.clone())
+    }
+
+    pub(super) fn related_worktrees(&self, session_id: &str) -> Vec<PathBuf> {
+        self.sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .map(|session| session.related_worktrees.clone())
+            .unwrap_or_default()
     }
 
     pub(super) fn live_handles(&self) -> Vec<(String, AgentSessionHandle)> {

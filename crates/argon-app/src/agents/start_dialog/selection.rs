@@ -1,12 +1,17 @@
 use argon_core::{
-    AgentCfg, AgentKind, PermissionMode, PromptError, PromptTemplate, RenderedPrompt, SessionKind,
-    TemplateKind, render_plan_prompt, render_prompt, repo_key, resolve_template,
+    AgentCfg, AgentKind, PermissionMode, PromptError, PromptTemplate, RelatedRepo, RenderedPrompt,
+    SessionKind, TemplateKind, render_plan_prompt, render_prompt, render_summary_prompt, repo_key,
+    resolve_template,
 };
+use argon_store::ProjectOverview;
 use gpui_kit::{AppContext as _, Context, SharedString, Task, Window};
 
 use super::{Gathering, Load, Preview, StartDialog};
 use crate::agents::choice::Choice;
-use crate::agents::context::{ContextOptions, diff_inline, plan_context, prompt_context};
+use crate::agents::context::{
+    ContextOptions, SummaryGathering, diff_inline, plan_context, planned_related, preview_context,
+    prompt_context,
+};
 use crate::agents::detection::{
     AgentOption, default_agent, default_model, default_template, model_choices,
 };
@@ -262,6 +267,43 @@ impl StartDialog {
         self.rerender(cx);
     }
 
+    pub(super) fn set_refresh_project(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.has_saved_overview() {
+            self.refresh_project = on;
+            self.rerender(cx);
+        }
+    }
+
+    pub(super) fn saved_overview(&self) -> Option<&ProjectOverview> {
+        match self.context.ready()? {
+            Gathering::Summary(gathering) => gathering.overview.as_ref(),
+            Gathering::Review(_) | Gathering::Plan(_) => None,
+        }
+    }
+
+    fn has_saved_overview(&self) -> bool {
+        self.saved_overview().is_some()
+    }
+
+    fn planned_related(
+        &self,
+        gathering: &SummaryGathering,
+        cx: &Context<Self>,
+    ) -> Vec<RelatedRepo> {
+        let (Some(sessions), Ok(session)) = (Self::sessions(cx), &self.session_id) else {
+            return planned_related(&gathering.related, |_| {
+                Err(labels::SERVICES_UNAVAILABLE.to_owned())
+            });
+        };
+        let worktrees = sessions.read(cx).worktrees();
+        let host = self.subject.host();
+        planned_related(&gathering.related, |repo| {
+            worktrees
+                .planned_related_path(host, repo, session)
+                .map_err(|error| error.to_string())
+        })
+    }
+
     pub(super) fn ci_text(&self) -> Option<&str> {
         match &self.ci {
             Some(Load::Ready(text)) => Some(text),
@@ -306,6 +348,16 @@ impl StartDialog {
                     let rendered = render_prompt(&template, &ctx, max_diff_chars)
                         .map_err(|error| render_error(&error));
                     preview(rendered, Some(inline))
+                })
+            }
+            Gathering::Summary(gathering) => {
+                let related = self.planned_related(&gathering, cx);
+                let refresh_project = self.refresh_project;
+                cx.background_spawn(async move {
+                    let ctx = preview_context(&gathering, refresh_project, related);
+                    let rendered = render_summary_prompt(&template, &ctx)
+                        .map_err(|error| render_error(&error));
+                    preview(rendered, None)
                 })
             }
             Gathering::Plan(detail) => cx.background_spawn(async move {

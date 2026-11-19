@@ -1,6 +1,8 @@
 use argon_core::{PermissionMode, SessionKind};
+use chrono::Local;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
@@ -9,10 +11,74 @@ use gpui_kit::component::{
 };
 use gpui_kit::{App, Context, Div, ParentElement as _, SharedString, Styled as _, div, px};
 
-use super::{Load, StartDialog, open_settings};
+use super::{Gathering, Load, StartDialog, open_settings};
 use crate::agents::labels;
 
 const FIELD_LABEL_WIDTH: f32 = 72.;
+const CHECKBOX_INDENT: f32 = 22.;
+
+fn block(title: &'static str, trailing: Option<String>, body: Div, cx: &App) -> Div {
+    let theme = cx.theme();
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .text_xs()
+                .font_semibold()
+                .text_color(theme.muted_foreground)
+                .child(title)
+                .child(div().flex_1())
+                .children(trailing.map(|text| div().font_normal().child(text))),
+        )
+        .child(
+            body.w_full()
+                .p_2()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border),
+        )
+}
+
+fn related_block(related: &[String], cx: &App) -> Div {
+    let theme = cx.theme();
+    let rows = related.iter().map(|repo| {
+        h_flex()
+            .w_full()
+            .gap_2()
+            .text_xs()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme.mono_font_family.clone())
+                    .child(repo.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.muted_foreground)
+                    .child(labels::PLAN_BASE_PENDING),
+            )
+    });
+    let hint = if related.is_empty() {
+        labels::NO_RELATED
+    } else {
+        labels::RELATED_HINT
+    };
+    block(
+        labels::RELATED_PROJECTS,
+        Some(labels::related_count(related.len())),
+        v_flex()
+            .gap_1()
+            .children(rows)
+            .child(note(hint, theme.muted_foreground)),
+        cx,
+    )
+}
 
 fn section_label(text: &'static str, cx: &App) -> Div {
     div()
@@ -64,15 +130,15 @@ impl StartDialog {
             .small()
             .placeholder(model_placeholder)
             .disabled(!has_models || self.is_launching());
-        let plan = self.kind() == SessionKind::Plan;
+        let review = self.kind() == SessionKind::Review;
         let permissions = Select::new(&self.permission_select)
             .small()
-            .disabled(plan || self.selected_option().is_none() || self.is_launching());
-        let risk_note = if plan {
-            Some(note(labels::PLAN_MODE_LOCKED, theme.muted_foreground))
-        } else {
-            (self.permission_mode == PermissionMode::FullAccess)
-                .then(|| note(labels::FULL_ACCESS_RISK, theme.warning))
+            .disabled(!review || self.selected_option().is_none() || self.is_launching());
+        let risk_note = match self.kind() {
+            SessionKind::Plan => Some(note(labels::PLAN_MODE_LOCKED, theme.muted_foreground)),
+            SessionKind::Summary => Some(note(labels::SUMMARY_MODE_LOCKED, theme.muted_foreground)),
+            SessionKind::Review => (self.permission_mode == PermissionMode::FullAccess)
+                .then(|| note(labels::FULL_ACCESS_RISK, theme.warning)),
         }
         .map(|note| note.w_full().min_w_0());
         let template_placeholder = match &self.templates {
@@ -90,7 +156,7 @@ impl StartDialog {
             .ghost()
             .disabled(self.is_launching())
             .on_click(|_, window, cx| open_settings(window, cx));
-        let pin = (!plan && self.template.is_some()).then(|| {
+        let pin = (review && self.template.is_some()).then(|| {
             let pinned = self.is_pinned_to_repo();
             let repo = self.subject.repo();
             let (icon, label) = if pinned {
@@ -174,8 +240,10 @@ impl StartDialog {
     }
 
     pub(super) fn options(&self, cx: &mut Context<Self>) -> Div {
-        if self.kind() == SessionKind::Plan {
-            return self.plan_options(cx);
+        match self.kind() {
+            SessionKind::Plan => return self.plan_options(cx),
+            SessionKind::Summary => return self.summary_options(cx),
+            SessionKind::Review => {}
         }
         let theme = cx.theme();
         let busy = self.is_launching();
@@ -231,6 +299,60 @@ impl StartDialog {
                         cx,
                     )),
             )
+    }
+
+    fn summary_options(&self, cx: &mut Context<Self>) -> Div {
+        let Some(Gathering::Summary(gathering)) = self.context.ready() else {
+            return v_flex();
+        };
+        v_flex()
+            .w_full()
+            .gap_3()
+            .child(self.project_block(cx))
+            .child(related_block(&gathering.related, cx))
+    }
+
+    fn project_block(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let (status, hint, locked) = match self.saved_overview() {
+            Some(overview) => {
+                let saved = overview.updated_at.with_timezone(&Local).date_naive();
+                let today = Local::now().date_naive();
+                (
+                    labels::overview_saved(saved, today, overview.source_pr),
+                    labels::REFRESH_SAVED_HINT,
+                    false,
+                )
+            }
+            None => (
+                labels::NO_OVERVIEW.to_owned(),
+                labels::REFRESH_FIRST_HINT,
+                true,
+            ),
+        };
+        let entity = cx.entity().downgrade();
+        let refresh = Checkbox::new("ai-refresh-project")
+            .label(labels::REFRESH_PROJECT)
+            .checked(self.refresh_project)
+            .disabled(locked || self.is_launching())
+            .small()
+            .on_click(move |on, _, cx| {
+                _ = entity.update(cx, |this, cx| this.set_refresh_project(*on, cx));
+            });
+        block(
+            labels::PROJECT,
+            None,
+            v_flex()
+                .gap_1p5()
+                .child(div().text_xs().child(status))
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(refresh)
+                        .child(note(hint, theme.muted_foreground).pl(px(CHECKBOX_INDENT))),
+                ),
+            cx,
+        )
     }
 
     fn plan_options(&self, cx: &App) -> Div {

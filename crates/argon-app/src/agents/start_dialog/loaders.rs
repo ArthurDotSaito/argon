@@ -2,14 +2,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use argon_agents::detect_all;
-use argon_core::{ensure_default_templates, scan_templates};
+use argon_core::{SessionKind, ensure_default_templates, scan_templates};
 use argon_github::IssueDetail;
 use gpui_kit::{Context, Window};
 
 use super::{
-    Gathering, Load, PlanTarget, ReviewTarget, StartDialog, Subject, Target, app_services,
+    Gathering, Load, PlanTarget, ReviewTarget, StartDialog, Subject, SummaryTarget, Target,
+    app_services,
 };
-use crate::agents::context::{gather, gather_ci};
+use crate::agents::context::{SummaryGathering, gather, gather_ci, gather_summary};
 use crate::agents::detection::AgentOption;
 use crate::agents::labels;
 
@@ -100,6 +101,7 @@ impl StartDialog {
     pub(super) fn load_context(&mut self, target: Target, cx: &mut Context<Self>) {
         match target {
             Target::Review(target) => self.load_review_context(target, cx),
+            Target::Summary(target) => self.load_summary_context(target, cx),
             Target::Plan(target) => self.load_plan_context(target, cx),
         }
     }
@@ -146,7 +148,7 @@ impl StartDialog {
             _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(gathered) => {
-                        this.subject = Subject::Pr(gathered.detail.pr.clone());
+                        this.subject = Subject::Pr(gathered.detail.pr.clone(), SessionKind::Review);
                         this.context = Load::Ready(Gathering::Review(Arc::new(gathered)));
                         if this.include_ci {
                             this.load_ci(cx);
@@ -160,6 +162,44 @@ impl StartDialog {
                 this.rerender(cx);
             });
         }));
+    }
+
+    fn load_summary_context(&mut self, target: SummaryTarget, cx: &mut Context<Self>) {
+        let Some(services) = app_services(cx) else {
+            self.context = Load::Failed(labels::SERVICES_UNAVAILABLE.into());
+            return;
+        };
+        let pr = target.pr;
+        let fetch = target.detail.is_none().then(|| {
+            let id = pr.id.clone();
+            services.spawn_github(cx, pr.host.clone(), move |client| async move {
+                client.pr_detail(&id).await
+            })
+        });
+        let configured = self
+            .config
+            .review
+            .related_repos(&pr.host, &pr.repo)
+            .to_vec();
+        let gathering = gather_summary(target.detail, fetch, services.store(), configured);
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result = gathering.await;
+            _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(gathering) => this.set_summary_gathering(gathering),
+                    Err(error) => {
+                        this.context = Load::Failed(labels::context_failed(&error).into());
+                    }
+                }
+                this.rerender(cx);
+            });
+        }));
+    }
+
+    fn set_summary_gathering(&mut self, gathering: SummaryGathering) {
+        self.subject = Subject::Pr(gathering.detail.pr.clone(), SessionKind::Summary);
+        self.refresh_project = gathering.overview.is_none();
+        self.context = Load::Ready(Gathering::Summary(Arc::new(gathering)));
     }
 
     pub(super) fn load_ci(&mut self, cx: &mut Context<Self>) {

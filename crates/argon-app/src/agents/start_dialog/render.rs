@@ -31,8 +31,11 @@ impl StartDialog {
     pub(super) fn title(&self, cx: &App) -> Div {
         let theme = cx.theme();
         let (title, context) = match &self.subject {
-            Subject::Pr(pr) => (
-                SharedString::from(labels::DIALOG_TITLE),
+            Subject::Pr(pr, kind) => (
+                SharedString::from(match kind {
+                    SessionKind::Summary => labels::SUMMARIZE,
+                    SessionKind::Review | SessionKind::Plan => labels::DIALOG_TITLE,
+                }),
                 labels::context_line(&pr.repo, pr.number, &pr.head),
             ),
             Subject::Issue(issue) => (
