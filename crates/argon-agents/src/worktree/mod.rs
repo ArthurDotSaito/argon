@@ -53,7 +53,7 @@ impl WorktreeManager {
         number: u64,
         session: &str,
     ) -> Result<PathBuf> {
-        self.prepare_kind(WorktreeKind::PullRequest, host, repo, number, session)
+        self.prepare_kind(WorktreeKind::PullRequest, host, repo, Some(number), session)
             .await
             .map(|(path, _)| path)
     }
@@ -65,9 +65,29 @@ impl WorktreeManager {
         number: u64,
         session: &str,
     ) -> Result<PreparedWorktree> {
-        let (path, branch) = self
-            .prepare_kind(WorktreeKind::Issue, host, repo, number, session)
-            .await?;
+        self.prepare_default_checkout(WorktreeKind::Issue, host, repo, Some(number), session)
+            .await
+    }
+
+    pub async fn prepare_related(
+        &self,
+        host: &str,
+        repo: &str,
+        session: &str,
+    ) -> Result<PreparedWorktree> {
+        self.prepare_default_checkout(WorktreeKind::Related, host, repo, None, session)
+            .await
+    }
+
+    async fn prepare_default_checkout(
+        &self,
+        kind: WorktreeKind,
+        host: &str,
+        repo: &str,
+        number: Option<u64>,
+        session: &str,
+    ) -> Result<PreparedWorktree> {
+        let (path, branch) = self.prepare_kind(kind, host, repo, number, session).await?;
         match self.head_oid(&path).await {
             Ok(base_sha) => Ok(PreparedWorktree {
                 path,
@@ -86,7 +106,7 @@ impl WorktreeManager {
         kind: WorktreeKind,
         host: &str,
         repo: &str,
-        number: u64,
+        number: Option<u64>,
         session: &str,
     ) -> Result<(PathBuf, Option<String>)> {
         let host = validate_host(host)?;
@@ -100,8 +120,8 @@ impl WorktreeManager {
         let _guard = lock.lock().await;
 
         mirror::ensure(host, &repo, &mirror).await?;
-        let (reference, branch) = match kind {
-            WorktreeKind::PullRequest => {
+        let (reference, branch) = match (kind, number) {
+            (WorktreeKind::PullRequest, Some(number)) => {
                 let reference = pr_ref(number);
                 Invocation::git_authenticated(&mirror, host)
                     .args(pr_fetch_args(number, &reference))
@@ -109,7 +129,7 @@ impl WorktreeManager {
                     .await?;
                 (reference, None)
             }
-            WorktreeKind::Issue => {
+            _ => {
                 let branch = mirror::default_branch(host, &mirror).await?;
                 Invocation::git_authenticated(&mirror, host)
                     .args(default_fetch_args(&branch))
@@ -136,17 +156,7 @@ impl WorktreeManager {
         number: u64,
         session: &str,
     ) -> Result<PathBuf> {
-        let host = validate_host(host)?;
-        let repo = RepoRef::parse(repo)?;
-        let prefix = session_prefix(session)?;
-        Ok(
-            worktree_parent(&self.worktrees_dir, host, &repo).join(worktree_dir_name(
-                WorktreeKind::PullRequest,
-                number,
-                &prefix,
-                None,
-            )),
-        )
+        self.planned_slot_path(WorktreeKind::PullRequest, host, repo, Some(number), session)
     }
 
     pub fn planned_default_path(
@@ -156,17 +166,26 @@ impl WorktreeManager {
         number: u64,
         session: &str,
     ) -> Result<PathBuf> {
+        self.planned_slot_path(WorktreeKind::Issue, host, repo, Some(number), session)
+    }
+
+    pub fn planned_related_path(&self, host: &str, repo: &str, session: &str) -> Result<PathBuf> {
+        self.planned_slot_path(WorktreeKind::Related, host, repo, None, session)
+    }
+
+    fn planned_slot_path(
+        &self,
+        kind: WorktreeKind,
+        host: &str,
+        repo: &str,
+        number: Option<u64>,
+        session: &str,
+    ) -> Result<PathBuf> {
         let host = validate_host(host)?;
         let repo = RepoRef::parse(repo)?;
         let prefix = session_prefix(session)?;
-        Ok(
-            worktree_parent(&self.worktrees_dir, host, &repo).join(worktree_dir_name(
-                WorktreeKind::Issue,
-                number,
-                &prefix,
-                None,
-            )),
-        )
+        Ok(worktree_parent(&self.worktrees_dir, host, &repo)
+            .join(worktree_dir_name(kind, number, &prefix, None)))
     }
 
     pub async fn discard(&self, path: &Path) -> Result<()> {
@@ -355,6 +374,58 @@ mod tests {
                 .planned_default_path("github.com", "../x", 1, "abc")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn planned_related_path_has_no_number_and_sits_beside_the_other_slots() {
+        let manager = manager();
+        let session = "0190a3b27c117e2f9a10";
+        let path = manager
+            .planned_related_path("github.com", "nuria-tech/nuria-auth", session)
+            .unwrap();
+        assert_eq!(
+            path,
+            Path::new("data/worktrees/github.com/nuria-tech/nuria-auth/rel-0190a3b27c11")
+        );
+        let pr = manager
+            .planned_path("github.com", "nuria-tech/nuria-auth", 1, session)
+            .unwrap();
+        assert_eq!(path.parent(), pr.parent());
+    }
+
+    #[test]
+    fn planned_related_path_rejects_unsafe_input() {
+        let manager = manager();
+        assert!(
+            manager
+                .planned_related_path("github.com", "../x", "abc")
+                .is_err()
+        );
+        assert!(
+            manager
+                .planned_related_path("github.com", "a", "abc")
+                .is_err()
+        );
+        assert!(manager.planned_related_path("a/b", "o/r", "abc").is_err());
+        assert!(manager.planned_related_path("", "o/r", "abc").is_err());
+        assert!(
+            manager
+                .planned_related_path("github.com", "o/r", "../x")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_related_rejects_invalid_repo_and_host_before_touching_disk() {
+        let manager = manager();
+        assert!(matches!(
+            manager.prepare_related("github.com", "../x", "abc").await,
+            Err(WorktreeError::InvalidRepo(_))
+        ));
+        assert!(matches!(
+            manager.prepare_related("a/b", "o/r", "abc").await,
+            Err(WorktreeError::InvalidRepo(_))
+        ));
     }
 
     #[test]
