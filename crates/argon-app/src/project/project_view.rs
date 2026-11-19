@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use argon_agents::defaults::agent_defaults;
-use argon_core::{ArchGraph, RepoKey, repo_key};
+use argon_core::{RepoKey, repo_key};
 use argon_store::{ProjectOverview, Store};
 use chrono::Local;
 use gpui_kit::assets::IconName;
@@ -22,6 +22,7 @@ use crate::config_watch::{self, ConfigChanged};
 use crate::pr;
 use crate::review::{DraftsBus, DraftsChanged};
 use crate::services::{AppServices, flatten};
+use crate::ui::arch_diagram;
 
 const READING_WIDTH: f32 = 760.;
 const NOTE_WIDTH: f32 = 420.;
@@ -75,6 +76,9 @@ pub struct ProjectView {
     tab: ProjectTab,
     load: Load,
     scroll: ScrollHandle,
+    pub(super) arch_zoom: usize,
+    pub(super) arch_selected: Option<String>,
+    pub(super) arch_scroll: ScrollHandle,
     focus_handle: FocusHandle,
     load_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -127,6 +131,9 @@ impl ProjectView {
             tab: ProjectTab::default(),
             load: Load::Loading,
             scroll: ScrollHandle::new(),
+            arch_zoom: arch_diagram::DEFAULT_STEP,
+            arch_selected: None,
+            arch_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             load_task: None,
             _subscriptions: subscriptions,
@@ -388,7 +395,9 @@ impl ProjectView {
             Load::Ready(None) => self.empty_state(cx).into_any_element(),
             Load::Ready(Some(saved)) => match self.visible_tab() {
                 ProjectTab::Overview => self.overview_tab(saved, cx).into_any_element(),
-                ProjectTab::Architecture => architecture_tab(saved.overview.diagram.as_ref(), cx),
+                ProjectTab::Architecture => {
+                    self.architecture_tab(saved.overview.diagram.as_ref(), cx)
+                }
             },
         }
     }
@@ -436,20 +445,6 @@ fn fact(icon: IconName, text: String) -> Div {
         .items_center()
         .child(Icon::new(icon).xsmall())
         .child(text)
-}
-
-fn architecture_tab(graph: Option<&ArchGraph>, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    v_flex()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_1()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child(labels::ARCHITECTURE_PLACEHOLDER)
-        .children(graph.is_none().then_some(labels::NO_DIAGRAM))
-        .into_any_element()
 }
 
 impl Focusable for ProjectView {

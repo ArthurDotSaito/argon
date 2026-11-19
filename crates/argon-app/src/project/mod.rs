@@ -1,3 +1,4 @@
+mod architecture;
 pub(crate) mod labels;
 mod project_view;
 mod related;

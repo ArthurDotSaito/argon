@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use argon_core::RepoKey;
 use chrono::Utc;
 use gpui_kit::assets::IconName;
@@ -12,6 +14,8 @@ use super::ThreadView;
 use crate::agents::panel_labels as labels;
 use crate::agents::safe_markdown::agent_markdown;
 use crate::agents::summary_card::{SummaryPart, summary_card_view};
+use crate::project::labels::repo_name;
+use crate::ui::arch_diagram::ArchExcerpt;
 
 fn part(
     id: SharedString,
@@ -69,6 +73,28 @@ impl ThreadView {
         let project_key = model
             .project_repo()
             .map(|repo| RepoKey::new(info.pr.host.clone(), repo));
+        let excerpt = model
+            .project_overview()
+            .and_then(|overview| overview.diagram.as_ref())
+            .and_then(|graph| {
+                ArchExcerpt::new(
+                    SharedString::from(format!("summary-diagram-{id}")),
+                    graph,
+                    &summary.touched,
+                )
+            })
+            .map(|excerpt| {
+                let excerpt = match model.project_repo() {
+                    Some(repo) => excerpt.title(repo_name(repo).to_owned()),
+                    None => excerpt,
+                };
+                match project_key.clone() {
+                    Some(key) => excerpt.on_open(Rc::new(move |window, cx| {
+                        crate::project::open(key.clone(), window, cx)
+                    })),
+                    None => excerpt,
+                }
+            });
         let copy = view.copy;
         let theme = cx.theme();
         let note = view.note.map(|note| {
@@ -128,7 +154,8 @@ impl ThreadView {
             view.pr,
             has_project,
             cx,
-        );
+        )
+        .children(excerpt);
         v_flex()
             .rounded(theme.radius)
             .border_1()
