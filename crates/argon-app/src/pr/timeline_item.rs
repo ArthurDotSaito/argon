@@ -13,8 +13,10 @@ use super::header::label_chip;
 use super::labels;
 use crate::ui;
 
-const CARD_AVATAR: f32 = 28.;
-const EVENT_ICON_BOX: f32 = 24.;
+const ITEM_AVATAR: f32 = 20.;
+const BODY_INDENT: f32 = 28.;
+const BODY_TOP_GAP: f32 = 6.;
+const DIVIDER_OPACITY: f32 = 0.45;
 const HUNK_TAIL_LINES: usize = 6;
 
 pub fn timestamp(item: &TimelineItem) -> DateTime<Utc> {
@@ -98,17 +100,22 @@ pub fn timeline_item(
     pr_labels: &[Label],
     now: DateTime<Utc>,
     cx: &App,
-) -> AnyElement {
+) -> Div {
     let theme = cx.theme();
     match item {
         TimelineItem::Comment {
             author, created_at, ..
-        } => card(
+        } => flat_item(
             author,
-            card_body(author, div().child(labels::COMMENTED), *created_at, now, cx)
-                .children(entry.body.as_ref().map(|body| card_text(body.view()))),
-        )
-        .into_any_element(),
+            labels::COMMENTED,
+            *created_at,
+            now,
+            entry
+                .body
+                .as_ref()
+                .map(|body| body.view().into_any_element()),
+            cx,
+        ),
         TimelineItem::Review {
             author,
             state,
@@ -116,30 +123,33 @@ pub fn timeline_item(
             comments,
             ..
         } => {
-            let header = h_flex()
+            let action = h_flex()
                 .gap_1p5()
                 .items_center()
                 .child(labels::REVIEWED)
                 .child(review_pill(*state, cx));
-            let mut body_el = card_body(author, header, *submitted_at, now, cx)
-                .children(entry.body.as_ref().map(|body| card_text(body.view())));
-            if !comments.is_empty() {
-                let quotes = comments
-                    .iter()
-                    .zip(&entry.comments)
-                    .map(|(comment, body)| review_comment(author, comment, body, cx));
-                body_el = body_el.child(v_flex().gap_2().p_3().children(quotes));
-            }
-            card(author, body_el).into_any_element()
+            let quotes: Vec<Div> = comments
+                .iter()
+                .zip(&entry.comments)
+                .map(|(comment, body)| review_comment(author, comment, body, cx))
+                .collect();
+            let body = (entry.body.is_some() || !quotes.is_empty()).then(|| {
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .children(entry.body.as_ref().map(MarkdownBlock::view))
+                    .children(quotes)
+                    .into_any_element()
+            });
+            flat_item(author, action, *submitted_at, now, body, cx)
         }
         TimelineItem::Commit {
             oid,
             headline,
+            author,
             committed_at,
-            ..
-        } => event(
-            IconName::GitCommitHorizontal,
-            theme.muted_foreground,
+        } => flat_item(
+            author,
             h_flex()
                 .gap_2()
                 .min_w_0()
@@ -160,18 +170,19 @@ pub fn timeline_item(
                 ),
             *committed_at,
             now,
+            None,
             cx,
         ),
         TimelineItem::ReviewRequested {
             actor,
             reviewer,
             at,
-        } => event(
-            IconName::UserPlus,
-            theme.muted_foreground,
-            div().child(labels::review_requested(actor, reviewer)),
+        } => flat_item(
+            actor,
+            labels::review_requested(reviewer),
             *at,
             now,
+            None,
             cx,
         ),
         TimelineItem::Labeled { actor, label, at } => {
@@ -179,156 +190,79 @@ pub fn timeline_item(
                 .iter()
                 .find(|known| known.name.eq_ignore_ascii_case(label))
                 .map(|known| known.color.as_str());
-            event(
-                IconName::Tag,
-                theme.muted_foreground,
+            flat_item(
+                actor,
                 h_flex()
                     .gap_1p5()
                     .items_center()
-                    .child(labels::labeled(actor))
+                    .child(labels::LABELED)
                     .child(label_chip(label, color, cx)),
                 *at,
                 now,
+                None,
                 cx,
             )
         }
-        TimelineItem::HeadRefForcePushed { actor, at } => event(
-            IconName::GitBranch,
-            theme.warning,
-            div().child(labels::force_pushed(actor)),
-            *at,
-            now,
-            cx,
-        ),
-        TimelineItem::Merged { actor, at } => event(
-            IconName::GitMerge,
-            theme.magenta,
-            div().child(labels::merged(actor)),
-            *at,
-            now,
-            cx,
-        ),
-        TimelineItem::Closed { actor, at } => event(
-            IconName::GitPullRequestClosed,
-            theme.danger,
-            div().child(labels::closed(actor)),
-            *at,
-            now,
-            cx,
-        ),
-        TimelineItem::ReadyForReview { actor, at } => event(
-            IconName::Eye,
-            theme.primary,
-            div().child(labels::ready_for_review(actor)),
-            *at,
-            now,
-            cx,
-        ),
+        TimelineItem::HeadRefForcePushed { actor, at } => {
+            flat_item(actor, labels::FORCE_PUSHED, *at, now, None, cx)
+        }
+        TimelineItem::Merged { actor, at } => flat_item(actor, labels::MERGED, *at, now, None, cx),
+        TimelineItem::Closed { actor, at } => flat_item(actor, labels::CLOSED, *at, now, None, cx),
+        TimelineItem::ReadyForReview { actor, at } => {
+            flat_item(actor, labels::READY_FOR_REVIEW, *at, now, None, cx)
+        }
     }
 }
 
-pub fn card(author: &str, body: Div) -> Div {
-    h_flex()
-        .w_full()
-        .min_w_0()
-        .gap_3()
-        .items_start()
-        .child(ui::avatar(author, CARD_AVATAR))
-        .child(body)
-}
-
-pub fn card_body(
+pub fn flat_item(
     author: &str,
     action: impl IntoElement,
     at: DateTime<Utc>,
     now: DateTime<Utc>,
+    body: Option<AnyElement>,
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
     let header = h_flex()
         .w_full()
-        .px_3()
-        .py_1p5()
-        .gap_1p5()
+        .min_w_0()
+        .gap_2()
         .items_center()
-        .bg(theme.muted)
-        .border_b_1()
-        .border_color(theme.border)
         .text_sm()
         .text_color(theme.muted_foreground)
+        .child(ui::avatar(author, ITEM_AVATAR))
         .child(
             div()
+                .flex_none()
                 .font_semibold()
                 .text_color(theme.foreground)
                 .child(author.to_string()),
         )
-        .child(action)
+        .child(div().min_w_0().overflow_hidden().child(action))
         .child(div().flex_1())
         .child(
             div()
+                .flex_none()
                 .font_family(theme.mono_font_family.clone())
                 .text_xs()
                 .child(ui::age_label(now, at)),
         );
     v_flex()
-        .flex_1()
+        .w_full()
         .min_w_0()
-        .overflow_hidden()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .bg(theme.background)
+        .py_3()
+        .border_b_1()
+        .border_color(theme.border.opacity(DIVIDER_OPACITY))
         .child(header)
-}
-
-pub fn card_text(content: impl IntoElement) -> Div {
-    div()
-        .w_full()
-        .min_w_0()
-        .px_3()
-        .py_2()
-        .text_sm()
-        .child(content)
-}
-
-fn event(
-    icon: IconName,
-    color: Hsla,
-    text: impl IntoElement,
-    at: DateTime<Utc>,
-    now: DateTime<Utc>,
-    cx: &App,
-) -> AnyElement {
-    let theme = cx.theme();
-    h_flex()
-        .w_full()
-        .gap_3()
-        .items_center()
-        .pl(px(2.))
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child(
+        .children(body.map(|body| {
             div()
-                .size(px(EVENT_ICON_BOX))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.background)
-                .child(Icon::new(icon).xsmall().text_color(color)),
-        )
-        .child(div().flex_1().min_w_0().child(text))
-        .child(
-            div()
-                .flex_none()
-                .font_family(theme.mono_font_family.clone())
-                .text_xs()
-                .child(ui::age_label(now, at)),
-        )
-        .into_any_element()
+                .w_full()
+                .min_w_0()
+                .pl(px(BODY_INDENT))
+                .pt(px(BODY_TOP_GAP))
+                .text_sm()
+                .child(body)
+        }))
 }
 
 pub fn review_style(state: ReviewState, cx: &App) -> (IconName, Hsla) {

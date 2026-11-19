@@ -177,7 +177,8 @@ fn card(
                 )
         });
     v_flex()
-        .p_2()
+        .px_3()
+        .py_2p5()
         .gap_1p5()
         .rounded(theme.radius)
         .border_1()

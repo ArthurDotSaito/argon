@@ -2,7 +2,7 @@ use argon_core::Severity;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
-use gpui_kit::{AnyElement, App, Div, Hsla, IntoElement, ParentElement as _, Styled as _, div};
+use gpui_kit::{AnyElement, App, Div, Hsla, IntoElement, ParentElement as _, Styled as _, div, px};
 
 use super::card_status::CardStatus;
 use super::finding_set::SeverityCounts;
@@ -82,6 +82,35 @@ pub fn severity_pill(severity: Severity, cx: &App) -> Div {
         .font_semibold()
         .child(Icon::new(severity_icon(severity)).xsmall())
         .child(labels::severity_label(severity))
+}
+
+pub fn severity_pills(counts: SeverityCounts, cx: &App) -> Div {
+    let theme = cx.theme();
+    if counts.total() == 0 {
+        return h_flex()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(labels::NO_COUNTS);
+    }
+    let entries = [
+        (Severity::High, counts.high),
+        (Severity::Medium, counts.medium),
+        (Severity::Low, counts.low),
+    ];
+    h_flex()
+        .gap_1p5()
+        .children(entries.map(|(severity, count)| {
+            let color = severity_color(severity, cx);
+            div()
+                .flex_none()
+                .px(px(6.))
+                .rounded(px(4.))
+                .bg(color.opacity(0.15))
+                .text_xs()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(color)
+                .child(format!("{} {count}", labels::severity_short(severity)))
+        }))
 }
 
 pub fn severity_counts(counts: SeverityCounts, cx: &App) -> Div {

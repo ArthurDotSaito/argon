@@ -10,6 +10,8 @@ use gpui_kit::{App, Window, WindowAppearance};
 use crate::actions::ToggleTheme;
 use crate::config_watch::{self, ConfigChanged};
 
+pub const BODY_TEXT_SIZE: f32 = 14.;
+
 const ONE_DARK: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/themes/one-dark.json"

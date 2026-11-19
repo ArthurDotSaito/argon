@@ -6,6 +6,7 @@ mod header;
 pub(crate) mod labels;
 mod merge_dialog;
 mod pr_view;
+mod properties;
 mod timeline_item;
 
 pub use pr_view::PrView;

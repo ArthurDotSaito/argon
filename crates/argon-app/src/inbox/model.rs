@@ -162,9 +162,13 @@ impl InboxModel {
         self.rows_revision
     }
 
-    pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
+    pub fn item(&self, key: &PrKey) -> Option<&InboxItem> {
         let ix = *self.index.get(key)?;
-        self.items.get(ix).map(|item| &item.pr)
+        self.items.get(ix)
+    }
+
+    pub fn pr(&self, key: &PrKey) -> Option<&PullRequest> {
+        self.item(key).map(|item| &item.pr)
     }
 
     pub fn is_loading_more(&self) -> bool {

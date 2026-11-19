@@ -6,7 +6,7 @@ pub const REFRESH: &str = "Atualizar";
 pub const MERGE: &str = "Merge";
 pub const REVIEW: &str = "Revisar";
 pub const REVIEW_TOOLTIP: &str = "Abrir a review deste PR";
-pub const AI_REVIEW: &str = "Revisar com IA";
+pub const AI_REVIEW: &str = "Agent Review";
 pub const RETRY: &str = "Tentar de novo";
 pub const COPY_BRANCH: &str = "Copiar branch";
 pub const MERGING: &str = "Fazendo merge…";
@@ -27,6 +27,22 @@ pub const MERGE_METHOD: &str = "Método de merge";
 pub const CANCEL: &str = "Cancelar";
 pub const NOT_IN_INBOX: &str = "PR fora da inbox local.";
 pub const SERVICES_UNAVAILABLE: &str = "serviços em segundo plano indisponíveis";
+pub const LABELED: &str = "adicionou o label";
+pub const FORCE_PUSHED: &str = "fez force-push na branch";
+pub const MERGED: &str = "fez merge deste PR";
+pub const CLOSED: &str = "fechou este PR";
+pub const READY_FOR_REVIEW: &str = "marcou como pronto para review";
+
+pub const PROPERTY_STATE: &str = "Estado";
+pub const PROPERTY_REASON: &str = "Motivo";
+pub const PROPERTY_AUTHOR: &str = "Autor";
+pub const PROPERTY_BRANCHES: &str = "Branches";
+pub const PROPERTY_CI: &str = "CI";
+pub const PROPERTY_REVIEWERS: &str = "Reviewers";
+pub const PROPERTY_CHANGES: &str = "Alterações";
+pub const PROPERTY_LABELS: &str = "Labels";
+pub const BRANCH_JOINER: &str = "em";
+const FILES_JOINER: &str = "em";
 
 pub const TAB_CONVERSATION: &str = "Conversa";
 pub const TAB_COMMITS: &str = "Commits";
@@ -89,38 +105,22 @@ pub fn settled_review(state: Option<ReviewState>, requested: bool) -> Option<Rev
     }
 }
 
-pub fn reviewer_tooltip(login: &str, state: Option<ReviewState>, requested: bool) -> String {
+pub fn reviewer_status(state: Option<ReviewState>, requested: bool) -> &'static str {
     match settled_review(state, requested) {
-        None | Some(ReviewState::Pending) => format!("{login}: review pendente"),
-        Some(ReviewState::Approved) => format!("{login}: aprovou"),
-        Some(ReviewState::ChangesRequested) => format!("{login}: pediu mudanças"),
-        Some(ReviewState::Commented) => format!("{login}: comentou"),
-        Some(ReviewState::Dismissed) => format!("{login}: review descartada"),
+        None | Some(ReviewState::Pending) => "pendente",
+        Some(ReviewState::Approved) => "aprovou",
+        Some(ReviewState::ChangesRequested) => "pediu mudanças",
+        Some(ReviewState::Commented) => "comentou",
+        Some(ReviewState::Dismissed) => "descartada",
     }
 }
 
-pub fn review_requested(actor: &str, reviewer: &str) -> String {
-    format!("{actor} pediu review de {reviewer}")
+pub fn review_requested(reviewer: &str) -> String {
+    format!("pediu review de {reviewer}")
 }
 
-pub fn labeled(actor: &str) -> String {
-    format!("{actor} adicionou o label")
-}
-
-pub fn force_pushed(actor: &str) -> String {
-    format!("{actor} fez force-push na branch")
-}
-
-pub fn merged(actor: &str) -> String {
-    format!("{actor} fez merge deste PR")
-}
-
-pub fn closed(actor: &str) -> String {
-    format!("{actor} fechou este PR")
-}
-
-pub fn ready_for_review(actor: &str) -> String {
-    format!("{actor} marcou como pronto para review")
+pub fn in_changed_files(count: u32) -> String {
+    format!("{FILES_JOINER} {}", changed_files(count))
 }
 
 pub fn line_ref(path: &str, line: Option<u32>) -> String {

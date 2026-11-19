@@ -1,34 +1,48 @@
 mod items;
+mod properties;
 mod tools;
 
 use std::collections::HashSet;
+use std::ops::Range;
 
-use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Entity, FocusHandle, FollowMode, IntoElement,
+    App, AppContext as _, Canvas, Context, Div, Entity, FocusHandle, FollowMode, IntoElement,
     ListAlignment, ListState, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    Window, div, list, px,
+    Window, canvas, div, list, px,
 };
 
-use super::badges::{severity_counts, status_chip};
+use super::badges::status_chip;
 use super::composer::Composer;
 use super::panel_labels as labels;
-use super::session_actions::{SessionControls, controls};
+use super::session_actions::{SessionControls, resume_error, row_actions};
 use super::sessions_list::pr_labels;
 use super::thread_model::ThreadModel;
-use crate::bottom::duration_label;
+use crate::theme::density;
 
+const NARROW_WIDTH: f32 = 640.;
+const TITLE_ERROR_MAX_WIDTH: f32 = 160.;
 const LIST_OVERDRAW: f32 = 600.;
+const TITLE_BAR_HEIGHT: f32 = 44.;
+const TITLE_BAR_GAP: f32 = 12.;
+const CONTENT_PADDING_X: f32 = 16.;
+const TRANSCRIPT_PADDING_Y: f32 = 14.;
+const TRANSCRIPT_MAX_WIDTH: f32 = 780.;
+const ITEM_GAP: f32 = 12.;
+const RADIUS: f32 = 4.;
 
 pub struct ThreadView {
     model: Entity<ThreadModel>,
     composer: Option<Entity<Composer>>,
     expanded: HashSet<SharedString>,
     list: ListState,
-    rows: usize,
+    rows: Vec<Range<usize>>,
+    narrow: bool,
+    panel_override: Option<bool>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -46,7 +60,9 @@ impl ThreadView {
             composer,
             expanded: HashSet::new(),
             list,
-            rows: 0,
+            rows: Vec::new(),
+            narrow: false,
+            panel_override: None,
             _subscriptions: subscriptions,
         };
         this.sync_rows(cx);
@@ -54,14 +70,16 @@ impl ThreadView {
     }
 
     fn sync_rows(&mut self, cx: &mut Context<Self>) {
-        let rows = self.row_count(cx);
-        if rows > self.rows {
-            self.list.splice(self.rows..self.rows, rows - self.rows);
-        } else if rows < self.rows {
-            self.list.reset(rows);
+        let rows = items::group_rows(self.model.read(cx).transcript().items());
+        let count = rows.len() + 1;
+        let shown = self.list.item_count();
+        if count > shown {
+            self.list.splice(shown..shown, count - shown);
+        } else if count < shown {
+            self.list.reset(count);
         }
         self.rows = rows;
-        self.list.remeasure_items(0..rows);
+        self.list.remeasure_items(0..count);
         cx.notify();
     }
 
@@ -75,85 +93,130 @@ impl ThreadView {
         self.expanded.contains(key)
     }
 
-    pub(super) fn toggle(&mut self, key: SharedString, ix: usize, cx: &mut Context<Self>) {
+    pub(super) fn toggle(&mut self, key: SharedString, row: usize, cx: &mut Context<Self>) {
         self.list.pause_following_tail();
         if !self.expanded.remove(&key) {
             self.expanded.insert(key);
         }
-        self.list.remeasure_items(ix..ix + 1);
+        self.list.remeasure_items(row..row + 1);
         cx.notify();
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> Div {
+    fn live_composer(&self, cx: &App) -> Option<&Entity<Composer>> {
+        self.composer
+            .as_ref()
+            .filter(|_| self.model.read(cx).is_live())
+    }
+
+    fn panel_visible(&self) -> bool {
+        self.panel_override.unwrap_or(!self.narrow)
+    }
+
+    fn set_narrow(&mut self, narrow: bool, cx: &mut Context<Self>) {
+        if self.narrow == narrow {
+            return;
+        }
+        self.narrow = narrow;
+        self.panel_override = None;
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    fn toggle_panel(&mut self, cx: &mut Context<Self>) {
+        self.panel_override = Some(!self.panel_visible());
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    fn sync_composer(&self, cx: &mut Context<Self>) {
+        let inline = !self.panel_visible();
+        if let Some(composer) = &self.composer {
+            composer.update(cx, |composer, cx| composer.set_inline_selects(inline, cx));
+        }
+    }
+
+    fn width_probe(&self, cx: &Context<Self>) -> Canvas<()> {
+        let view = cx.weak_entity();
+        let narrow = self.narrow;
+        canvas(
+            move |bounds, window, cx| {
+                let measured = bounds.size.width < px(NARROW_WIDTH);
+                if measured != narrow {
+                    window.defer(cx, move |_, cx| {
+                        let _ = view.update(cx, |this, cx| this.set_narrow(measured, cx));
+                    });
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+
+    fn session_controls(&self, cx: &App) -> SessionControls {
         let model = self.model.read(cx);
         let info = model.info();
-        let (title, reference) = pr_labels(&info.pr, info.number, cx);
-        let meta = format!("{reference} · {} · {}", info.agent_label, info.model_label);
-        let status = model.card_status();
-        let session_controls = SessionControls {
+        SessionControls {
             id: info.session_id.clone(),
-            status,
+            status: model.card_status(),
             resume: model.resume_action(),
             worktree: info.worktree.clone(),
-        };
-        let notice = model.notice().cloned();
-        let counts = model.counts();
-        let elapsed = duration_label(model.elapsed(Utc::now()));
-        let theme = cx.theme();
-        v_flex()
-            .flex_none()
-            .px_2()
-            .py_1p5()
-            .gap_1()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(status_chip(status, cx))
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(elapsed),
-                    ),
-            )
-            .child(div().text_sm().font_semibold().line_clamp(2).child(title))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(meta),
-                    )
-                    .children((counts.total() > 0).then(|| severity_counts(counts, cx))),
-            )
-            .children(notice.map(|notice| {
-                h_flex()
-                    .gap_1p5()
-                    .items_center()
+        }
+    }
+
+    fn title_bar(&self, title: SharedString, panel_visible: bool, cx: &mut Context<Self>) -> Div {
+        let toggle = Button::new("agent-thread-toggle-panel")
+            .icon(Icon::new(IconName::PanelRight))
+            .xsmall()
+            .ghost()
+            .selected(panel_visible)
+            .tooltip(labels::SESSION_DETAILS)
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(cx)));
+        let controls = (!panel_visible).then(|| {
+            let controls = self.session_controls(cx);
+            let error = resume_error(&controls, cx).map(|error| {
+                div()
+                    .min_w_0()
+                    .max_w(px(TITLE_ERROR_MAX_WIDTH))
+                    .truncate()
                     .text_xs()
-                    .text_color(theme.warning)
-                    .child(Icon::new(IconName::TriangleAlert).xsmall())
-                    .child(notice)
-            }))
-            .children(controls(&session_controls, "thread", cx))
+                    .text_color(cx.theme().danger)
+                    .child(error)
+            });
+            h_flex()
+                .flex_none()
+                .gap_1p5()
+                .items_center()
+                .children(error)
+                .child(row_actions(&controls, "thread-bar", cx))
+        });
+        let status = self.model.read(cx).card_status();
+        h_flex()
+            .flex_none()
+            .h(px(density::scaled(TITLE_BAR_HEIGHT, cx)))
+            .px(px(CONTENT_PADDING_X))
+            .gap(px(TITLE_BAR_GAP))
+            .items_center()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(status_chip(status, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_semibold()
+                    .child(title),
+            )
+            .children(controls)
+            .child(toggle)
     }
 
     fn footer(&self, cx: &mut Context<Self>) -> Div {
-        let model = self.model.read(cx);
         let theme = cx.theme();
-        let error = model.action_error().cloned().map(|error| {
+        let error = self.model.read(cx).action_error().cloned().map(|error| {
             h_flex()
-                .px_2()
+                .px(px(CONTENT_PADDING_X))
                 .py_1()
                 .gap_2()
                 .items_center()
@@ -170,11 +233,11 @@ impl ThreadView {
                         })),
                 )
         });
-        let body = match (&self.composer, model.is_live()) {
-            (Some(composer), true) => composer.clone().into_any_element(),
-            _ => div()
-                .px_2()
-                .py_1p5()
+        let body = match self.live_composer(cx) {
+            Some(composer) => composer.clone().into_any_element(),
+            None => div()
+                .px(px(CONTENT_PADDING_X))
+                .py_2p5()
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(labels::SESSION_ENDED)
@@ -191,18 +254,38 @@ impl ThreadView {
 
 impl Render for ThreadView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header = self.header(cx);
+        let info = self.model.read(cx).info();
+        let (title, reference) = pr_labels(&info.pr, info.number, cx);
+        let panel_visible = self.panel_visible();
+        let title_bar = self.title_bar(title, panel_visible, cx);
+        let properties = panel_visible.then(|| self.properties(reference, cx));
         let footer = self.footer(cx);
+        let probe = self.width_probe(cx);
         let view = cx.weak_entity();
         let rows = list(self.list.clone(), move |ix, _, cx| {
             view.update(cx, |this, cx| this.render_row(ix, cx))
                 .unwrap_or_else(|_| div().into_any_element())
         })
         .size_full();
-        v_flex()
+        h_flex()
+            .relative()
             .size_full()
-            .child(header)
-            .child(div().flex_1().min_h_0().pt_2().child(rows))
-            .child(footer)
+            .child(probe)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(title_bar)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .pt(px(TRANSCRIPT_PADDING_Y))
+                            .child(rows),
+                    )
+                    .child(footer),
+            )
+            .children(properties)
     }
 }

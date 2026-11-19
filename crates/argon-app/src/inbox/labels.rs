@@ -2,7 +2,7 @@ use argon_core::{DateBucket, Reason};
 use chrono::{DateTime, Utc};
 
 use super::InboxView;
-use crate::ui;
+use crate::ui::{self, Tone};
 
 pub const PANEL_TITLE: &str = "Visões";
 pub const GROUP_INBOX: &str = "Inbox";
@@ -23,6 +23,12 @@ pub const EMPTY_VIEW: &str = "Nenhum PR nesta visão.";
 pub const EMPTY_FILTER: &str = "Nenhum PR corresponde ao filtro.";
 pub const NEEDS_YOU_SECTION: &str = "Needs you";
 pub const PR_FALLBACK_TITLE: &str = "PR";
+pub const COLUMN_PR: &str = "Pull request";
+pub const COLUMN_REASON: &str = "Motivo";
+pub const COLUMN_CI: &str = "CI";
+pub const COLUMN_REVIEW: &str = "Review";
+pub const COLUMN_DIFF: &str = "Diff";
+pub const COLUMN_UPDATED: &str = "Atualizado";
 
 const TAB_TITLE_MAX_CHARS: usize = 16;
 
@@ -72,6 +78,11 @@ pub fn repo_ref(repo: &str, number: u64) -> String {
     format!("{repo} #{number}")
 }
 
+pub fn short_repo_ref(repo: &str, number: u64) -> String {
+    let name = repo.rsplit_once('/').map_or(repo, |(_, name)| name);
+    format!("{name} #{number}")
+}
+
 pub fn reason_line(reason: &Reason, now: DateTime<Utc>, updated_at: DateTime<Utc>) -> String {
     match reason {
         Reason::ReviewRequestedBy(login) => format!("{login} pediu sua review"),
@@ -90,6 +101,51 @@ pub fn reason_line(reason: &Reason, now: DateTime<Utc>, updated_at: DateTime<Utc
     }
 }
 
+pub fn reason_tone(reason: &Reason) -> Tone {
+    match reason {
+        Reason::ReviewRequestedBy(_) | Reason::AssignedBy(_) => Tone::Action,
+        Reason::CiFailed | Reason::Conflict => Tone::Danger,
+        Reason::ChangesRequestedBy(_) => Tone::Warning,
+        Reason::ReadyToMerge => Tone::Success,
+        Reason::WaitingOn(_) | Reason::ApprovedByYouWaitingAuthor | Reason::Tracking => {
+            Tone::Neutral
+        }
+    }
+}
+
 fn tracking_line(now: DateTime<Utc>, updated_at: DateTime<Utc>) -> String {
     format!("Acompanhando · atualizado {}", ui::ago(now, updated_at))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_repo_ref_drops_the_owner() {
+        assert_eq!(short_repo_ref("argon-labs/argon", 482), "argon #482");
+    }
+
+    #[test]
+    fn short_repo_ref_keeps_a_repo_without_owner() {
+        assert_eq!(short_repo_ref("argon", 482), "argon #482");
+    }
+
+    #[test]
+    fn reason_tone_maps_every_reason() {
+        let cases = [
+            (Reason::ReviewRequestedBy("a".into()), Tone::Action),
+            (Reason::AssignedBy(None), Tone::Action),
+            (Reason::CiFailed, Tone::Danger),
+            (Reason::Conflict, Tone::Danger),
+            (Reason::ChangesRequestedBy("a".into()), Tone::Warning),
+            (Reason::ReadyToMerge, Tone::Success),
+            (Reason::WaitingOn(vec!["a".into()]), Tone::Neutral),
+            (Reason::ApprovedByYouWaitingAuthor, Tone::Neutral),
+            (Reason::Tracking, Tone::Neutral),
+        ];
+        for (reason, tone) in cases {
+            assert_eq!(reason_tone(&reason), tone);
+        }
+    }
 }

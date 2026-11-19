@@ -10,7 +10,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::dock::{DockArea, DockSkin, PanelId, PanelStyle};
 use gpui_kit::{
     Context, Entity, EntityId, FocusHandle, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Window, div,
+    ParentElement as _, Render, Styled as _, Subscription, Window, div, px,
 };
 
 pub use self::agents::SessionPlacement;
@@ -27,6 +27,7 @@ use crate::pr::PrView;
 use crate::settings::SettingsView;
 use crate::status_bar::WorkspaceStatusBar;
 use crate::sync_status::SyncStatus;
+use crate::theme::BODY_TEXT_SIZE;
 use crate::title_bar::{self, AppTitleBar};
 use crate::update;
 
@@ -222,7 +223,7 @@ impl Render for Workspace {
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(theme.font_family.clone())
-            .text_size(theme.font_size)
+            .text_size(px(BODY_TEXT_SIZE))
             .on_action(cx.listener(Self::on_toggle_left_dock))
             .on_action(cx.listener(Self::on_toggle_right_dock))
             .on_action(cx.listener(Self::on_toggle_bottom_dock))

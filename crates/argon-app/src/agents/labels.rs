@@ -1,6 +1,6 @@
 use argon_core::PermissionMode;
 
-pub const DIALOG_TITLE: &str = "Revisar com IA";
+pub const DIALOG_TITLE: &str = "Agent Review";
 pub const AGENT: &str = "Agente";
 pub const GENERIC_AGENT: &str = "agente";
 pub const MODEL: &str = "Modelo";

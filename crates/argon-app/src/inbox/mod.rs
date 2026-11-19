@@ -10,7 +10,7 @@ use argon_core::{PrKey, ViewSet};
 use gpui_kit::{App, SharedString};
 
 pub use inbox_view::InboxPane;
-pub use labels::{PR_FALLBACK_TITLE, needs_you_status};
+pub use labels::{PR_FALLBACK_TITLE, needs_you_status, reason_line, reason_tone};
 pub use model::{InboxEvent, InboxHandle, InboxModel};
 pub use views_panel::{VIEWS_PANEL, ViewsPanel};
 
