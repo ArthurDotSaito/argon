@@ -10,7 +10,8 @@ use crate::error::Result;
 
 const SESSION_COLUMNS: &str = "id, host, pr_id, agent, model, template, status, worktree_path, \
      acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason, \
-     transport, permission_mode, kind, base_sha, related_worktrees";
+     transport, permission_mode, kind, base_sha, related_worktrees, repo, pr_number, \
+     refresh_project";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionStatus {
@@ -86,6 +87,9 @@ pub struct NewAgentSession {
     pub kind: SessionKind,
     pub base_sha: Option<String>,
     pub related_worktrees: Vec<PathBuf>,
+    pub repo: Option<String>,
+    pub pr_number: Option<u64>,
+    pub refresh_project: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +113,9 @@ pub struct SessionRow {
     pub kind: SessionKind,
     pub base_sha: Option<String>,
     pub related_worktrees: Vec<PathBuf>,
+    pub repo: Option<String>,
+    pub pr_number: Option<u64>,
+    pub refresh_project: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +190,11 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         kind: session_kind(&kind).ok_or_else(|| invalid(17, "kind", &kind))?,
         base_sha: row.get(18)?,
         related_worktrees: parse_related_worktrees(related.as_deref()),
+        repo: row.get(20)?,
+        pr_number: row
+            .get::<_, Option<i64>>(21)?
+            .and_then(|number| u64::try_from(number).ok()),
+        refresh_project: row.get(22)?,
     })
 }
 
@@ -193,9 +205,9 @@ impl Store {
             "INSERT INTO agent_sessions
                 (id, host, pr_id, agent, model, template, status, worktree_path, acp_session_id,
                  nonce, allowed_files, created_at, updated_at, transport, permission_mode, kind,
-                 base_sha, related_worktrees)
+                 base_sha, related_worktrees, repo, pr_number, refresh_project)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15, ?16,
-                     ?17)",
+                     ?17, ?18, ?19, ?20)",
             params![
                 session.id,
                 session.pr.host,
@@ -219,6 +231,11 @@ impl Store {
                 (!session.related_worktrees.is_empty())
                     .then(|| serde_json::to_string(&session.related_worktrees))
                     .transpose()?,
+                session.repo,
+                session
+                    .pr_number
+                    .map(|number| i64::try_from(number).unwrap_or(i64::MAX)),
+                session.refresh_project,
             ],
         )?;
         Ok(())

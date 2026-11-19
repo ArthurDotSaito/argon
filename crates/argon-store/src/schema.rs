@@ -248,6 +248,9 @@ CREATE TABLE project_overviews (
     PRIMARY KEY (host, repo)
 );
 ALTER TABLE agent_sessions ADD COLUMN related_worktrees TEXT NULL;
+ALTER TABLE agent_sessions ADD COLUMN repo TEXT NULL;
+ALTER TABLE agent_sessions ADD COLUMN pr_number INTEGER NULL;
+ALTER TABLE agent_sessions ADD COLUMN refresh_project INTEGER NOT NULL DEFAULT 0;
 ";
 
 const MIGRATIONS: &[M<'static>] = &[
@@ -622,6 +625,9 @@ mod tests {
         let store = Store { conn };
         let session = store.session("s1").unwrap().unwrap();
         assert!(session.related_worktrees.is_empty());
+        assert_eq!(session.repo, None);
+        assert_eq!(session.pr_number, None);
+        assert!(!session.refresh_project);
         assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
     }
 }

@@ -20,6 +20,9 @@ fn session(id: &str) -> NewAgentSession {
         kind: argon_core::SessionKind::Review,
         base_sha: None,
         related_worktrees: Vec::new(),
+        repo: None,
+        pr_number: None,
+        refresh_project: false,
     }
 }
 
@@ -140,6 +143,86 @@ async fn plan_is_recorded_under_the_issue_key_and_base_sha() {
     assert_eq!(second.base_sha, "def456");
     assert!(writer.has_plan("s1").await.unwrap());
     assert!(!writer.has_plan("s2").await.unwrap());
+}
+
+fn summary_record(project: Option<&str>) -> SummaryRecord {
+    SummaryRecord {
+        session: "s1".into(),
+        subject: PrKey::new("ghe.example.com", "PR_42"),
+        repo: "acme/api".into(),
+        number: 42,
+        body: "## O que o PR faz".into(),
+        head_sha: "abc123".into(),
+        touched: vec!["api".into()],
+        project: project.map(str::to_owned),
+        arch: None,
+    }
+}
+
+#[tokio::test]
+async fn summary_is_recorded_under_the_pr_key_and_head_sha() {
+    let writer = writer();
+    writer.create_session(session("s1")).await.unwrap();
+
+    assert!(!writer.has_summary("s1").await.unwrap());
+    let first = writer.record_summary(summary_record(None)).await.unwrap();
+    let second = writer
+        .record_summary(summary_record(Some("## O que é e objetivo")))
+        .await
+        .unwrap();
+
+    assert_eq!(first.host, "ghe.example.com");
+    assert_eq!(first.pr_id, "PR_42");
+    assert_eq!(first.session_id, "s1");
+    assert_eq!(first.body, "## O que o PR faz");
+    assert_eq!(first.head_sha, "abc123");
+    assert_eq!(first.touched, ["api"]);
+    assert_ne!(second.id, first.id);
+    assert!(writer.has_summary("s1").await.unwrap());
+    assert!(!writer.has_summary("s2").await.unwrap());
+}
+
+#[tokio::test]
+async fn summary_with_project_overwrites_the_project_overview() {
+    let dir = std::env::temp_dir().join(format!("argon-writer-summary-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("argon.db");
+    let writer = SessionWriter::from_store(Store::open(&db).unwrap()).unwrap();
+    writer.create_session(session("s1")).await.unwrap();
+
+    writer.record_summary(summary_record(None)).await.unwrap();
+    let before = Store::open(&db)
+        .unwrap()
+        .project_overview("ghe.example.com", "acme/api")
+        .unwrap();
+    writer
+        .record_summary(summary_record(Some("## O que é e objetivo")))
+        .await
+        .unwrap();
+    let after = Store::open(&db)
+        .unwrap()
+        .project_overview("ghe.example.com", "acme/api")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(before, None);
+    assert_eq!(after.body, "## O que é e objetivo");
+    assert_eq!(after.source_pr, 42);
+    assert_eq!(after.source_sha, "abc123");
+    assert_eq!(after.session_id, "s1");
+    drop(writer);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn stopped_writer_fails_summary_requests() {
+    let writer = SessionWriter::stopped();
+
+    let recorded = writer.record_summary(summary_record(None)).await;
+
+    assert_eq!(recorded, Err("o gravador de sessões parou".to_owned()));
+    assert!(writer.has_summary("s1").await.is_err());
 }
 
 #[tokio::test]

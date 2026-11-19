@@ -224,7 +224,9 @@ impl Transcript {
             }
             AgentEvent::Error(message) => self.items.push(Item::Error(message.clone())),
             AgentEvent::PlanDraft { draft_id, .. } => self.push_plan_draft(*draft_id),
-            AgentEvent::ModelsAvailable(_) | AgentEvent::Resync { .. } => {}
+            AgentEvent::ModelsAvailable(_)
+            | AgentEvent::Resync { .. }
+            | AgentEvent::Summary { .. } => {}
         }
     }
 

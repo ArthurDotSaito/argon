@@ -44,7 +44,8 @@ const STREAM_ARGS: [&str; 13] = [
     "--strict-mcp-config",
 ];
 const DISALLOWED_TOOLS_FLAG: &str = "--disallowedTools";
-const PLAN_DISALLOWED_TOOLS: &str = "Edit,Write,MultiEdit,NotebookEdit";
+const READ_ONLY_DISALLOWED_TOOLS: &str = "Edit,Write,MultiEdit,NotebookEdit";
+const ADD_DIR_FLAG: &str = "--add-dir";
 const SESSION_ID_FLAG: &str = "--session-id";
 const RESUME_FLAG: &str = "--resume";
 const MODEL_FLAG: &str = "--model";
@@ -56,6 +57,7 @@ const ALLOW_ONCE: &str = "allow_once";
 const ALLOW_ALWAYS: &str = "allow_always";
 const DENIED: &str = "Negado no Argon.";
 const PLAN_DENIED: &str = "Agent Plan é somente leitura: não edite arquivos.";
+const SUMMARY_DENIED: &str = "Summarize é somente leitura: não edite arquivos.";
 const CANCELLED: &str = "Cancelado no Argon.";
 const END_TURN: &str = "end_turn";
 const CANCELLED_REASON: &str = "cancelled";
@@ -77,14 +79,23 @@ enum Start<'a> {
     Resume(&'a str),
 }
 
-fn launch_args(base: &[String], start: Start<'_>, model: &str, kind: SessionKind) -> Vec<String> {
+fn launch_args(
+    base: &[String],
+    start: Start<'_>,
+    model: &str,
+    kind: SessionKind,
+    read_roots: &[PathBuf],
+) -> Vec<String> {
     let mut args = base.to_vec();
     args.extend(STREAM_ARGS.map(str::to_owned));
-    if kind == SessionKind::Plan {
+    if kind.is_read_only() {
         args.extend([
             DISALLOWED_TOOLS_FLAG.to_owned(),
-            PLAN_DISALLOWED_TOOLS.to_owned(),
+            READ_ONLY_DISALLOWED_TOOLS.to_owned(),
         ]);
+        for root in read_roots {
+            args.extend([ADD_DIR_FLAG.to_owned(), root.to_string_lossy().into_owned()]);
+        }
     }
     let (flag, id) = match start {
         Start::New(id) => (SESSION_ID_FLAG, id),
@@ -95,6 +106,10 @@ fn launch_args(base: &[String], start: Start<'_>, model: &str, kind: SessionKind
         args.extend([MODEL_FLAG.to_owned(), model.to_owned()]);
     }
     args
+}
+
+fn existing_dirs(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots.iter().filter(|root| root.is_dir()).cloned().collect()
 }
 
 fn format_uuid(mut bytes: [u8; UUID_BYTES]) -> String {
@@ -125,29 +140,45 @@ fn new_uuid() -> Result<String> {
     Ok(format_uuid(bytes))
 }
 
-fn auto_allowed(
-    ask: &PermissionAsk,
-    tool_name: &str,
-    cwd: &Path,
+struct Scope<'a> {
+    cwd: &'a Path,
+    read_roots: &'a [PathBuf],
     mode: PermissionMode,
     kind: SessionKind,
-    always: &HashSet<String>,
-) -> bool {
-    match decide_permission(ask, cwd, mode, kind) {
-        PermissionDecision::Allow { .. } => true,
-        PermissionDecision::Deny { .. } => false,
-        PermissionDecision::Ask(_) => always.contains(tool_name) && session_grant_applies(ask, cwd),
+}
+
+impl Scope<'_> {
+    fn decide(&self, ask: &PermissionAsk) -> PermissionDecision {
+        decide_permission(ask, self.cwd, self.read_roots, self.mode, self.kind)
     }
 }
 
-fn denial_message(
+fn auto_allowed(
     ask: &PermissionAsk,
-    cwd: &Path,
-    mode: PermissionMode,
-    kind: SessionKind,
-) -> &'static str {
-    match decide_permission(ask, cwd, mode, kind) {
-        PermissionDecision::Deny { .. } => PLAN_DENIED,
+    tool_name: &str,
+    scope: &Scope<'_>,
+    always: &HashSet<String>,
+) -> bool {
+    match scope.decide(ask) {
+        PermissionDecision::Allow { .. } => true,
+        PermissionDecision::Deny { .. } => false,
+        PermissionDecision::Ask(_) => {
+            always.contains(tool_name) && session_grant_applies(ask, scope.cwd)
+        }
+    }
+}
+
+fn read_only_refusal(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Plan => PLAN_DENIED,
+        SessionKind::Summary => SUMMARY_DENIED,
+        SessionKind::Review => DENIED,
+    }
+}
+
+fn denial_message(ask: &PermissionAsk, scope: &Scope<'_>) -> &'static str {
+    match scope.decide(ask) {
+        PermissionDecision::Deny { .. } => read_only_refusal(scope.kind),
         PermissionDecision::Allow { .. } | PermissionDecision::Ask(_) => DENIED,
     }
 }
@@ -291,6 +322,7 @@ struct Session {
     shared: Arc<Shared>,
     spec: AgentSpec,
     cwd: PathBuf,
+    read_roots: Vec<PathBuf>,
     tail: Arc<StderrTail>,
     id: String,
     transcript: bool,
@@ -396,6 +428,7 @@ impl Session {
                 start,
                 &self.launch_model,
                 self.shared.kind(),
+                &existing_dirs(&self.read_roots),
             ),
             ..self.spec.clone()
         };
@@ -579,19 +612,22 @@ impl Session {
         self.id = session_id;
     }
 
+    fn scope(&self) -> Scope<'_> {
+        Scope {
+            cwd: &self.cwd,
+            read_roots: &self.read_roots,
+            mode: self.mode,
+            kind: self.shared.kind(),
+        }
+    }
+
     fn ask(&mut self, request_id: String, tool_name: String, ask: PermissionAsk, input: Value) {
-        if auto_allowed(
-            &ask,
-            &tool_name,
-            &self.cwd,
-            self.mode,
-            self.shared.kind(),
-            &self.always,
-        ) {
+        let scope = self.scope();
+        if auto_allowed(&ask, &tool_name, &scope, &self.always) {
             self.send(allow(&request_id, &input));
             return;
         }
-        let denial = denial_message(&ask, &self.cwd, self.mode, self.shared.kind());
+        let denial = denial_message(&ask, &scope);
         self.asks.insert(
             request_id.clone(),
             Ask {
@@ -676,6 +712,7 @@ fn open(
         shared: Arc::clone(&run.shared),
         spec: run.spec.clone(),
         cwd: run.ctx.cwd.clone(),
+        read_roots: run.ctx.read_roots.clone(),
         tail: Arc::clone(&run.stderr),
         id,
         transcript: run.load.is_some(),

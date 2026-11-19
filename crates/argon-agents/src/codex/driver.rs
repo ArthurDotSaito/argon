@@ -84,6 +84,7 @@ struct Session {
     shared: Arc<Shared>,
     spec: AgentSpec,
     cwd: PathBuf,
+    read_roots: Vec<PathBuf>,
     agent_cwd: PathBuf,
     tail: Arc<StderrTail>,
     untrusted: Vec<String>,
@@ -409,7 +410,14 @@ impl Session {
     }
 
     fn ask(&mut self, id: Value, method: String, params: Value, ask: PermissionAsk) {
-        if auto_allowed(&ask, &self.cwd, self.mode, self.shared.kind(), &self.grants) {
+        if auto_allowed(
+            &ask,
+            &self.cwd,
+            &self.read_roots,
+            self.mode,
+            self.shared.kind(),
+            &self.grants,
+        ) {
             let allowed = PermissionAnswer::Selected(ALLOW_ONCE.to_owned());
             self.respond(id, approval_response(&method, &params, &allowed));
             return;
@@ -566,6 +574,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             shared: Arc::clone(&run.shared),
             spec: run.spec.clone(),
             cwd: run.ctx.cwd.clone(),
+            read_roots: run.ctx.read_roots.clone(),
             agent_cwd: opened.agent_cwd,
             tail: Arc::clone(&run.stderr),
             untrusted: opened.untrusted,

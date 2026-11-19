@@ -229,6 +229,9 @@ mod tests {
                 kind: argon_core::SessionKind::Review,
                 base_sha: None,
                 related_worktrees: Vec::new(),
+                repo: None,
+                pr_number: None,
+                refresh_project: false,
             })
             .unwrap();
         store

@@ -16,7 +16,32 @@ pub(crate) fn new_session(id: &str) -> NewAgentSession {
         kind: argon_core::SessionKind::Review,
         base_sha: None,
         related_worktrees: Vec::new(),
+        repo: None,
+        pr_number: None,
+        refresh_project: false,
     }
+}
+
+#[test]
+fn summary_target_round_trips() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.kind = argon_core::SessionKind::Summary;
+    session.repo = Some("acme/api".to_owned());
+    session.pr_number = Some(42);
+    session.refresh_project = true;
+    store.create_session(&session).unwrap();
+    store.create_session(&new_session("s2")).unwrap();
+
+    let row = store.session("s1").unwrap().unwrap();
+    let plain = store.session("s2").unwrap().unwrap();
+
+    assert_eq!(row.repo.as_deref(), Some("acme/api"));
+    assert_eq!(row.pr_number, Some(42));
+    assert!(row.refresh_project);
+    assert_eq!(plain.repo, None);
+    assert_eq!(plain.pr_number, None);
+    assert!(!plain.refresh_project);
 }
 
 #[test]

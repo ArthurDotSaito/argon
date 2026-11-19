@@ -88,6 +88,11 @@ pub enum AgentEvent {
         draft_id: i64,
         markdown: String,
     },
+    Summary {
+        id: i64,
+        body: String,
+        project_updated: bool,
+    },
     ModelsAvailable(Vec<ModelInfo>),
     Error(String),
     Resync {

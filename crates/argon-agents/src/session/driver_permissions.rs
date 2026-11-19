@@ -1,4 +1,4 @@
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 
 use super::{Shared, State};
 use crate::session::events::{AgentEvent, PendingPermission};
@@ -9,7 +9,17 @@ use crate::session::writer::Op;
 use crate::session::{Result, SessionError};
 
 const PLAN_DENIAL_NOTICE: &str = "Edição negada: Agent Plan é somente leitura.";
+const SUMMARY_DENIAL_NOTICE: &str = "Edição negada: Summarize é somente leitura.";
+const DENIAL_NOTICE: &str = "Edição negada pelo Argon.";
 const TURN_ENDS_HINT: &str = " Mande outra mensagem para continuar.";
+
+fn denial_notice(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Plan => PLAN_DENIAL_NOTICE,
+        SessionKind::Summary => SUMMARY_DENIAL_NOTICE,
+        SessionKind::Review => DENIAL_NOTICE,
+    }
+}
 
 pub(super) struct Pending {
     pub reply: PermissionReply,
@@ -38,6 +48,7 @@ impl Shared {
         match decide(
             &ask,
             &self.config.cwd,
+            &self.config.read_roots,
             state.permission_mode,
             self.config.kind,
         ) {
@@ -73,10 +84,11 @@ impl Shared {
     }
 
     fn announce_denial(&self, state: &mut State) {
+        let notice = denial_notice(self.config.kind);
         let notice = if self.config.denial_ends_turn {
-            format!("{PLAN_DENIAL_NOTICE}{TURN_ENDS_HINT}")
+            format!("{notice}{TURN_ENDS_HINT}")
         } else {
-            PLAN_DENIAL_NOTICE.to_owned()
+            notice.to_owned()
         };
         self.emit_locked(state, AgentEvent::Error(notice));
     }
@@ -92,7 +104,13 @@ impl Shared {
             self.emit_locked(&mut state, AgentEvent::PermissionModeChanged(mode));
         }
         for pending in std::mem::take(&mut state.pending) {
-            match decide(&pending.ask, &self.config.cwd, mode, self.config.kind) {
+            match decide(
+                &pending.ask,
+                &self.config.cwd,
+                &self.config.read_roots,
+                mode,
+                self.config.kind,
+            ) {
                 PermissionDecision::Allow { option_id } => {
                     if let Err(error) = (pending.reply)(PermissionAnswer::Selected(option_id)) {
                         tracing::warn!(%error, "failed to auto-allow pending permission");

@@ -66,6 +66,24 @@ fn granted(tools: &[&str]) -> HashSet<String> {
     tools.iter().map(|tool| (*tool).to_owned()).collect()
 }
 
+fn related(name: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!(r"C:\work\{name}"))
+    } else {
+        PathBuf::from(format!("/work/{name}"))
+    }
+}
+
+fn scope(mode: PermissionMode, kind: SessionKind) -> Scope<'static> {
+    static CWD: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(cwd);
+    Scope {
+        cwd: &CWD,
+        read_roots: &[],
+        mode,
+        kind,
+    }
+}
+
 #[test]
 fn new_session_args_pin_the_session_id_and_model() {
     let args = launch_args(
@@ -73,6 +91,7 @@ fn new_session_args_pin_the_session_id_and_model() {
         Start::New(ID),
         "sonnet",
         SessionKind::Review,
+        &[],
     );
 
     let mut expected = strings(&["--debug"]);
@@ -83,7 +102,7 @@ fn new_session_args_pin_the_session_id_and_model() {
 
 #[test]
 fn resume_args_use_the_resume_flag() {
-    let args = launch_args(&[], Start::Resume(ID), "opus", SessionKind::Review);
+    let args = launch_args(&[], Start::Resume(ID), "opus", SessionKind::Review, &[]);
 
     let mut expected = stream_args();
     expected.extend(strings(&["--resume", ID, "--model", "opus"]));
@@ -91,10 +110,8 @@ fn resume_args_use_the_resume_flag() {
 }
 
 #[test]
-fn plan_args_forbid_the_write_tools_and_review_args_do_not() {
-    let plan = launch_args(&[], Start::New(ID), "", SessionKind::Plan);
-    let review = launch_args(&[], Start::New(ID), "", SessionKind::Review);
-
+fn read_only_args_forbid_the_write_tools_and_review_args_do_not() {
+    let review = launch_args(&[], Start::New(ID), "", SessionKind::Review, &[]);
     let mut expected = stream_args();
     expected.extend(strings(&[
         "--disallowedTools",
@@ -102,31 +119,139 @@ fn plan_args_forbid_the_write_tools_and_review_args_do_not() {
         "--session-id",
         ID,
     ]));
-    assert_eq!(plan, expected);
+    for kind in [SessionKind::Plan, SessionKind::Summary] {
+        let started = launch_args(&[], Start::New(ID), "", kind, &[]);
+        assert_eq!(started, expected, "{kind:?}");
+        let resumed = launch_args(&[], Start::Resume(ID), "", kind, &[]);
+        assert!(
+            resumed.contains(&"--disallowedTools".to_owned()),
+            "{kind:?}"
+        );
+    }
     assert!(!review.contains(&"--disallowedTools".to_owned()));
-    let resumed = launch_args(&[], Start::Resume(ID), "", SessionKind::Plan);
-    assert!(resumed.contains(&"--disallowedTools".to_owned()));
 }
 
 #[test]
-fn only_automatic_plan_denials_use_the_read_only_refusal_message() {
+fn summary_args_add_one_dir_per_read_root_on_start_and_resume() {
+    let roots = [related("rel-abc"), related("rel-def")];
+    let (first, second) = (
+        roots[0].to_string_lossy().into_owned(),
+        roots[1].to_string_lossy().into_owned(),
+    );
+
+    let started = launch_args(&[], Start::New(ID), "", SessionKind::Summary, &roots);
+    let resumed = launch_args(&[], Start::Resume(ID), "opus", SessionKind::Summary, &roots);
+
+    let mut expected = stream_args();
+    expected.extend(strings(&[
+        "--disallowedTools",
+        "Edit,Write,MultiEdit,NotebookEdit",
+        "--add-dir",
+        &first,
+        "--add-dir",
+        &second,
+        "--session-id",
+        ID,
+    ]));
+    assert_eq!(started, expected);
+    let mut expected_resume = stream_args();
+    expected_resume.extend(strings(&[
+        "--disallowedTools",
+        "Edit,Write,MultiEdit,NotebookEdit",
+        "--add-dir",
+        &first,
+        "--add-dir",
+        &second,
+        "--resume",
+        ID,
+        "--model",
+        "opus",
+    ]));
+    assert_eq!(resumed, expected_resume);
+}
+
+#[test]
+fn review_args_never_add_read_roots() {
+    let roots = [related("rel-abc")];
+
+    let args = launch_args(&[], Start::New(ID), "", SessionKind::Review, &roots);
+
+    assert!(!args.contains(&"--add-dir".to_owned()));
+}
+
+#[test]
+fn only_existing_read_roots_become_add_dirs() {
+    let base = std::env::temp_dir().join(format!("argon-claude-add-dir-{}", std::process::id()));
+    let present = base.join("rel-abc");
+    std::fs::create_dir_all(&present).unwrap();
+    let gone = base.join("rel-gone");
+
+    let kept = existing_dirs(&[present.clone(), gone]);
+
+    std::fs::remove_dir_all(&base).unwrap();
+    assert_eq!(kept, [present]);
+}
+
+#[test]
+fn only_automatic_read_only_denials_use_the_read_only_refusal_message() {
     let edit = native_ask("edit", &[inside("src/a.rs")]);
     let command = native_ask("execute", &[]);
     let refusal =
-        |ask: &PermissionAsk, kind| denial_message(ask, &cwd(), PermissionMode::Supervised, kind);
+        |ask: &PermissionAsk, kind| denial_message(ask, &scope(PermissionMode::Supervised, kind));
 
     assert_eq!(
         refusal(&edit, SessionKind::Plan),
         "Agent Plan é somente leitura: não edite arquivos."
     );
+    assert_eq!(
+        refusal(&edit, SessionKind::Summary),
+        "Summarize é somente leitura: não edite arquivos."
+    );
     assert_eq!(refusal(&command, SessionKind::Plan), "Negado no Argon.");
+    assert_eq!(refusal(&command, SessionKind::Summary), "Negado no Argon.");
     assert_eq!(refusal(&edit, SessionKind::Review), "Negado no Argon.");
     assert_eq!(refusal(&command, SessionKind::Review), "Negado no Argon.");
 }
 
 #[test]
+fn summary_reads_in_a_read_root_are_allowed_but_grants_stay_in_the_worktree() {
+    let roots = [related("rel-abc")];
+    let file = roots[0]
+        .join("src")
+        .join("lib.rs")
+        .to_string_lossy()
+        .into_owned();
+    let cwd = cwd();
+    let scope = Scope {
+        cwd: &cwd,
+        read_roots: &roots,
+        mode: PermissionMode::Supervised,
+        kind: SessionKind::Summary,
+    };
+
+    assert!(auto_allowed(
+        &native_ask("read", std::slice::from_ref(&file)),
+        "Read",
+        &scope,
+        &granted(&[])
+    ));
+    assert!(!auto_allowed(
+        &native_ask("edit", std::slice::from_ref(&file)),
+        "Edit",
+        &scope,
+        &granted(&["Edit"])
+    ));
+    assert!(!auto_allowed(
+        &native_ask("read", &[outside()]),
+        "Read",
+        &scope,
+        &granted(&["Read"])
+    ));
+}
+
+#[test]
 fn args_ignore_worktree_settings_and_mcp_config() {
-    let args = launch_args(&[], Start::New(ID), "", SessionKind::Review);
+    let args = launch_args(&[], Start::New(ID), "", SessionKind::Review, &[]);
 
     let sources = args.iter().position(|arg| arg == "--setting-sources");
     assert_eq!(sources.map(|index| args[index + 1].as_str()), Some("user"));
@@ -135,7 +260,7 @@ fn args_ignore_worktree_settings_and_mcp_config() {
 
 #[test]
 fn args_pin_the_default_permission_mode() {
-    let args = launch_args(&[], Start::Resume(ID), "", SessionKind::Review);
+    let args = launch_args(&[], Start::Resume(ID), "", SessionKind::Review, &[]);
 
     let mode = args.iter().position(|arg| arg == "--permission-mode");
     assert_eq!(mode.map(|index| args[index + 1].as_str()), Some("default"));
@@ -144,7 +269,7 @@ fn args_pin_the_default_permission_mode() {
 #[test]
 fn default_or_empty_model_omits_the_model_flag() {
     for model in ["default", ""] {
-        let args = launch_args(&[], Start::New(ID), model, SessionKind::Review);
+        let args = launch_args(&[], Start::New(ID), model, SessionKind::Review, &[]);
 
         assert!(!args.contains(&"--model".to_owned()), "{model}");
         assert_eq!(args.last().map(String::as_str), Some(ID));
@@ -199,9 +324,7 @@ fn mode_rules_still_auto_allow_without_a_session_grant() {
     assert!(auto_allowed(
         &read,
         "Read",
-        &cwd(),
-        PermissionMode::Supervised,
-        SessionKind::Review,
+        &scope(PermissionMode::Supervised, SessionKind::Review),
         &granted(&[])
     ));
 }
@@ -213,33 +336,32 @@ fn session_grant_allows_contained_local_tools() {
     assert!(!auto_allowed(
         &edit,
         "Edit",
-        &cwd(),
-        PermissionMode::Supervised,
-        SessionKind::Review,
+        &scope(PermissionMode::Supervised, SessionKind::Review),
         &granted(&[])
     ));
     assert!(auto_allowed(
         &edit,
         "Edit",
-        &cwd(),
-        PermissionMode::Supervised,
-        SessionKind::Review,
+        &scope(PermissionMode::Supervised, SessionKind::Review),
         &granted(&["Edit"])
     ));
 }
 
 #[test]
-fn plan_sessions_never_auto_allow_edits_even_with_a_grant() {
+fn read_only_sessions_never_auto_allow_edits_even_with_a_grant() {
     let edit = native_ask("edit", &[inside("src/a.rs")]);
 
-    assert!(!auto_allowed(
-        &edit,
-        "Edit",
-        &cwd(),
-        PermissionMode::FullAccess,
-        SessionKind::Plan,
-        &granted(&["Edit"])
-    ));
+    for kind in [SessionKind::Plan, SessionKind::Summary] {
+        assert!(
+            !auto_allowed(
+                &edit,
+                "Edit",
+                &scope(PermissionMode::FullAccess, kind),
+                &granted(&["Edit"])
+            ),
+            "{kind:?}"
+        );
+    }
 }
 
 #[test]
@@ -249,9 +371,7 @@ fn session_grant_never_covers_commands() {
     assert!(!auto_allowed(
         &bash,
         "Bash",
-        &cwd(),
-        PermissionMode::AcceptEdits,
-        SessionKind::Review,
+        &scope(PermissionMode::AcceptEdits, SessionKind::Review),
         &granted(&["Bash"])
     ));
 }
@@ -267,9 +387,7 @@ fn session_grant_never_covers_edits_outside_the_worktree() {
             !auto_allowed(
                 &ask,
                 "Edit",
-                &cwd(),
-                PermissionMode::AcceptEdits,
-                SessionKind::Review,
+                &scope(PermissionMode::AcceptEdits, SessionKind::Review),
                 &granted(&["Edit"])
             ),
             "{:?}",
@@ -471,6 +589,10 @@ fn fake_run(dir: &Path, mode: &str, shared: &Arc<Shared>, tail: Arc<StderrTail>)
             nonce: String::new(),
             allowed_files: Vec::new(),
             cwd: dir.to_path_buf(),
+            read_roots: Vec::new(),
+            repo: "acme/api".to_owned(),
+            number: 1,
+            refresh_project: false,
             model: String::new(),
             permission_mode: PermissionMode::Supervised,
             kind: SessionKind::Review,
@@ -520,6 +642,9 @@ async fn fake(mode: &str) -> Fake {
             kind: argon_core::SessionKind::Review,
             base_sha: None,
             related_worktrees: Vec::new(),
+            repo: None,
+            pr_number: None,
+            refresh_project: false,
         })
         .await
         .unwrap();

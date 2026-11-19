@@ -71,14 +71,22 @@ pub(super) enum WorktreeKind {
     Related,
 }
 
+const RELATED_DIR_PREFIX: &str = "rel";
+
 impl WorktreeKind {
     fn dir_prefix(self) -> &'static str {
         match self {
             WorktreeKind::PullRequest => "pr",
             WorktreeKind::Issue => "issue",
-            WorktreeKind::Related => "rel",
+            WorktreeKind::Related => RELATED_DIR_PREFIX,
         }
     }
+}
+
+pub(crate) fn is_related_dir_name(name: &str) -> bool {
+    name.strip_prefix(RELATED_DIR_PREFIX)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|rest| !rest.is_empty())
 }
 
 pub(super) fn worktree_dir_name(

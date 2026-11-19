@@ -207,6 +207,21 @@ fn plan_draft_round_trips_under_its_own_tag() {
 }
 
 #[test]
+fn summary_round_trips_under_its_own_tag() {
+    let event = AgentEvent::Summary {
+        id: 3,
+        body: "## O que o PR faz".into(),
+        project_updated: true,
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(
+        value,
+        json!({"type": "summary", "data": {"id": 3, "body": "## O que o PR faz", "project_updated": true}})
+    );
+    assert_eq!(serde_json::from_value::<AgentEvent>(value).unwrap(), event);
+}
+
+#[test]
 fn rows_stored_before_plan_drafts_still_deserialize_as_agent_todo_plans() {
     let row = r#"{"type":"plan","data":["Ler o diff","Escrever achados"]}"#;
     assert_eq!(

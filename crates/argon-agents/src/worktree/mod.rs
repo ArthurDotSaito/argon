@@ -15,6 +15,7 @@ use argon_core::Paths;
 use checkout::Slot;
 pub use error::{Result, WorktreeError};
 use invocation::{FETCH_TIMEOUT, Invocation, WORKTREE_TIMEOUT};
+pub(crate) use layout::is_related_dir_name;
 use layout::{
     DEFAULT_REF, RepoRef, WorktreeKind, mirror_dir, mirror_from_gitfile, pr_ref, session_prefix,
     validate_host, worktree_dir_name, worktree_parent,

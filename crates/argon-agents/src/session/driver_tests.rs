@@ -24,6 +24,16 @@ async fn shared_of(
     kind: SessionKind,
     base_sha: Option<&str>,
 ) -> (Shared, SessionWriter) {
+    shared_configured(writer, capacity, kind, base_sha, |config| config).await
+}
+
+async fn shared_configured(
+    writer: SessionWriter,
+    capacity: usize,
+    kind: SessionKind,
+    base_sha: Option<&str>,
+    adjust: impl FnOnce(SharedConfig) -> SharedConfig,
+) -> (Shared, SessionWriter) {
     let subject = PrKey::new("github.com", "PR_1");
     writer
         .create_session(NewAgentSession {
@@ -41,12 +51,15 @@ async fn shared_of(
             kind,
             base_sha: base_sha.map(str::to_owned),
             related_worktrees: Vec::new(),
+            repo: None,
+            pr_number: None,
+            refresh_project: false,
         })
         .await
         .unwrap();
     let (events, _) = broadcast::channel(capacity);
     let shared = Shared::new(
-        config(subject, writer.clone(), kind, base_sha),
+        adjust(config(subject, writer.clone(), kind, base_sha)),
         PermissionMode::Supervised,
         events,
     );
@@ -66,6 +79,10 @@ fn config(
         base_sha: base_sha.map(str::to_owned),
         denial_ends_turn: false,
         cwd: PathBuf::from("repo"),
+        read_roots: Vec::new(),
+        repo: "acme/api".into(),
+        number: 1,
+        refresh_project: false,
         nonce: NONCE.into(),
         allowed_files: vec!["src/lib.rs".into()],
         writer,
@@ -174,12 +191,34 @@ struct PlanSession {
 
 impl PlanSession {
     async fn start(name: &str, base_sha: Option<&str>) -> PlanSession {
+        Self::start_as(name, SessionKind::Plan, base_sha, false).await
+    }
+
+    async fn start_as(
+        name: &str,
+        kind: SessionKind,
+        base_sha: Option<&str>,
+        refresh_project: bool,
+    ) -> PlanSession {
+        Self::start_with(name, kind, base_sha, |config| SharedConfig {
+            refresh_project,
+            ..config
+        })
+        .await
+    }
+
+    async fn start_with(
+        name: &str,
+        kind: SessionKind,
+        base_sha: Option<&str>,
+        adjust: impl FnOnce(SharedConfig) -> SharedConfig,
+    ) -> PlanSession {
         let dir = std::env::temp_dir().join(format!("argon-driver-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let writer =
             SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
-        let (shared, writer) = shared_of(writer, 64, SessionKind::Plan, base_sha).await;
+        let (shared, writer) = shared_configured(writer, 64, kind, base_sha, adjust).await;
         shared.activate(SessionStatus::Running, 0, "sonnet".into(), models());
         PlanSession {
             dir,
@@ -211,6 +250,20 @@ impl PlanSession {
         Store::open(&self.dir.join("argon.db"))
             .unwrap()
             .plans_for_session("s1")
+            .unwrap()
+    }
+
+    fn summaries(&self) -> Vec<argon_store::PrSummary> {
+        Store::open(&self.dir.join("argon.db"))
+            .unwrap()
+            .summaries_for_session("s1")
+            .unwrap()
+    }
+
+    fn overview(&self) -> Option<argon_store::ProjectOverview> {
+        Store::open(&self.dir.join("argon.db"))
+            .unwrap()
+            .project_overview("github.com", "acme/api")
             .unwrap()
     }
 
@@ -354,6 +407,220 @@ async fn failed_plan_save_reports_an_error_and_keeps_the_session() {
     );
     assert_eq!(shared.subscribe().0.status, SessionStatus::Completed);
     assert!(shared.try_acquire());
+}
+
+const SUMMARY_MISSING: &str = "O agente não devolveu um resumo no formato esperado.";
+
+fn summary_message(with_project: bool) -> String {
+    let project = if with_project {
+        format!(
+            "```argon-project-{NONCE}\n## O que é e objetivo\n```\n\n```argon-arch-{NONCE}\n{{\"nodes\":[{{\"id\":\"api\",\"label\":\"API\",\"lane\":\"project\",\"kind\":\"component\"}}],\"edges\":[]}}\n```\n\n"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Pronto.\n{project}```argon-summary-{NONCE}\n## O que o PR faz\n```\n\n```argon-touched-{NONCE}\napi\n```"
+    )
+}
+
+#[tokio::test]
+async fn summary_turn_records_the_summary_and_then_emits_it() {
+    let session = PlanSession::start_as(
+        "summary-recorded",
+        SessionKind::Summary,
+        Some("abc123"),
+        false,
+    )
+    .await;
+
+    let events = session.turn(&summary_message(true)).await;
+
+    let summaries = session.summaries();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Summary {
+            id: summaries[0].id,
+            body: "## O que o PR faz".into(),
+            project_updated: false,
+        })
+    );
+    assert_eq!(summaries[0].host, "github.com");
+    assert_eq!(summaries[0].pr_id, "PR_1");
+    assert_eq!(summaries[0].session_id, "s1");
+    assert_eq!(summaries[0].head_sha, "abc123");
+    assert_eq!(summaries[0].touched, ["api"]);
+    assert_eq!(session.overview(), None);
+    assert_eq!(
+        session.shared.subscribe().0.status,
+        SessionStatus::Completed
+    );
+    session.finish();
+}
+
+#[tokio::test]
+async fn summary_without_a_repo_never_writes_the_project() {
+    let session = PlanSession::start_with(
+        "summary-no-repo",
+        SessionKind::Summary,
+        Some("abc123"),
+        |config| SharedConfig {
+            refresh_project: true,
+            repo: String::new(),
+            ..config
+        },
+    )
+    .await;
+
+    let events = session.turn(&summary_message(true)).await;
+
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Summary {
+            project_updated: false,
+            ..
+        })
+    ));
+    assert_eq!(session.summaries().len(), 1);
+    assert!(
+        Store::open(&session.dir.join("argon.db"))
+            .unwrap()
+            .project_overviews()
+            .unwrap()
+            .is_empty()
+    );
+    session.finish();
+}
+
+#[tokio::test]
+async fn summary_turn_writes_the_project_only_when_asked_to_refresh_it() {
+    let session = PlanSession::start_as(
+        "summary-refresh",
+        SessionKind::Summary,
+        Some("abc123"),
+        true,
+    )
+    .await;
+
+    let without_block = session.turn(&summary_message(false)).await;
+    let after_first = session.overview();
+    let with_block = session.turn(&summary_message(true)).await;
+
+    assert!(matches!(
+        without_block.last(),
+        Some(AgentEvent::Summary {
+            project_updated: false,
+            ..
+        })
+    ));
+    assert_eq!(after_first, None);
+    assert!(matches!(
+        with_block.last(),
+        Some(AgentEvent::Summary {
+            project_updated: true,
+            ..
+        })
+    ));
+    let overview = session.overview().unwrap();
+    assert_eq!(overview.body, "## O que é e objetivo");
+    assert_eq!(overview.source_pr, 1);
+    assert_eq!(overview.source_sha, "abc123");
+    assert_eq!(overview.diagram.map(|graph| graph.nodes.len()), Some(1));
+    assert_eq!(session.summaries().len(), 2);
+    session.finish();
+}
+
+#[tokio::test]
+async fn missing_summary_warns_only_until_the_session_has_one() {
+    let session = PlanSession::start_as(
+        "summary-follow-up",
+        SessionKind::Summary,
+        Some("abc123"),
+        false,
+    )
+    .await;
+
+    let before = session.turn("Ainda lendo o código.").await;
+    let with_summary = session.turn(&summary_message(false)).await;
+    let follow_up = session.turn("Respondido sem resumo novo.").await;
+
+    assert_eq!(
+        before.last(),
+        Some(&AgentEvent::Error(SUMMARY_MISSING.into()))
+    );
+    assert!(matches!(
+        with_summary.last(),
+        Some(AgentEvent::Summary { .. })
+    ));
+    assert!(
+        matches!(follow_up.last(), Some(AgentEvent::TurnEnded { .. })),
+        "{follow_up:?}"
+    );
+    assert_eq!(session.summaries().len(), 1);
+    session.finish();
+}
+
+#[tokio::test]
+async fn summary_session_without_base_sha_reports_the_save_failure() {
+    let session = PlanSession::start_as("summary-no-base", SessionKind::Summary, None, true).await;
+
+    let events = session.turn(&summary_message(true)).await;
+
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Error(
+            "não consegui gravar o resumo: a sessão de resumo não tem o commit do worktree".into()
+        ))
+    );
+    assert!(session.summaries().is_empty());
+    assert_eq!(session.overview(), None);
+    assert!(session.shared.try_acquire());
+    session.finish();
+}
+
+#[tokio::test]
+async fn summary_session_reads_inside_read_roots_and_denies_writes_there() {
+    let related = if cfg!(windows) {
+        PathBuf::from(r"C:\work\rel-abc")
+    } else {
+        PathBuf::from("/work/rel-abc")
+    };
+    let file = related
+        .join("src")
+        .join("lib.rs")
+        .to_string_lossy()
+        .into_owned();
+    let roots = vec![related];
+    let (shared, _writer) =
+        shared_configured(writer(), 64, SessionKind::Summary, Some("abc"), |config| {
+            SharedConfig {
+                read_roots: roots,
+                ..config
+            }
+        })
+        .await;
+    shared.activate(SessionStatus::Running, 0, String::new(), Vec::new());
+    shared.begin_turn("x");
+    let (read_reply, read_answers) = recording_reply();
+    shared.on_permission(ask("read", &[file.as_str()]), read_reply);
+    let (edit_reply, edit_answers) = recording_reply();
+    shared.on_permission(ask("edit", &[file.as_str()]), edit_reply);
+    let (outside_reply, outside_answers) = recording_reply();
+    shared.on_permission(ask("read", &["/etc/passwd"]), outside_reply);
+
+    assert_eq!(
+        *read_answers.lock().unwrap(),
+        [PermissionAnswer::Selected("allow_once".into())]
+    );
+    assert_eq!(
+        *edit_answers.lock().unwrap(),
+        [PermissionAnswer::Selected("reject_once".into())]
+    );
+    assert!(outside_answers.lock().unwrap().is_empty());
+    let (snapshot, _) = shared.subscribe();
+    assert_eq!(snapshot.pending_permissions.len(), 1);
+    assert_eq!(snapshot.pending_permissions[0].kind, "read");
 }
 
 #[tokio::test]

@@ -5,8 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use argon_core::{Finding, PermissionMode, PrKey};
-use argon_store::{NewAgentSession, PlanDraft, SessionStatus, SessionWrite, Store, StoredFinding};
+use argon_core::{ArchGraph, Finding, PermissionMode, PrKey};
+use argon_store::{
+    NewAgentSession, NewProject, NewSummary, PlanDraft, PrSummary, SessionStatus, SessionWrite,
+    Store, StoredFinding,
+};
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 
 use super::events::AgentEvent;
@@ -17,6 +20,38 @@ const IDLE_WAIT: Duration = Duration::from_secs(3600);
 const THREAD_NAME: &str = "argon-agent-writer";
 
 type Reply<T> = oneshot::Sender<Result<T, String>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SummaryRecord {
+    pub session: String,
+    pub subject: PrKey,
+    pub repo: String,
+    pub number: u64,
+    pub body: String,
+    pub head_sha: String,
+    pub touched: Vec<String>,
+    pub project: Option<String>,
+    pub arch: Option<ArchGraph>,
+}
+
+impl SummaryRecord {
+    fn as_new(&self) -> NewSummary<'_> {
+        NewSummary {
+            session_id: &self.session,
+            host: &self.subject.host,
+            pr_id: &self.subject.id.0,
+            repo: &self.repo,
+            pr_number: self.number,
+            body: &self.body,
+            head_sha: &self.head_sha,
+            touched: &self.touched,
+            project: self.project.as_deref().map(|body| NewProject {
+                body,
+                diagram: self.arch.as_ref(),
+            }),
+        }
+    }
+}
 
 pub(crate) enum Op {
     Create(Box<NewAgentSession>, Reply<()>),
@@ -54,6 +89,14 @@ pub(crate) enum Op {
         reply: Reply<PlanDraft>,
     },
     HasPlan {
+        session: String,
+        reply: Reply<bool>,
+    },
+    RecordSummary {
+        record: Box<SummaryRecord>,
+        reply: Reply<PrSummary>,
+    },
+    HasSummary {
         session: String,
         reply: Reply<bool>,
     },
@@ -196,6 +239,14 @@ impl Worker {
             Op::HasPlan { session, reply } => {
                 let plans = self.store.plans_for_session(&session);
                 let _ = reply.send(text(plans).map(|plans| !plans.is_empty()));
+            }
+            Op::RecordSummary { record, reply } => {
+                self.count();
+                let _ = reply.send(text(self.store.record_summary(record.as_new())));
+            }
+            Op::HasSummary { session, reply } => {
+                let summaries = self.store.summaries_for_session(&session);
+                let _ = reply.send(text(summaries).map(|summaries| !summaries.is_empty()));
             }
             Op::EventsSince {
                 session,
@@ -372,6 +423,19 @@ impl SessionWriter {
     pub(crate) async fn has_plan(&self, session: &str) -> Result<bool, String> {
         let session = session.to_owned();
         self.ask(|reply| Op::HasPlan { session, reply }).await
+    }
+
+    pub(crate) async fn record_summary(&self, record: SummaryRecord) -> Result<PrSummary, String> {
+        self.ask(|reply| Op::RecordSummary {
+            record: Box::new(record),
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn has_summary(&self, session: &str) -> Result<bool, String> {
+        let session = session.to_owned();
+        self.ask(|reply| Op::HasSummary { session, reply }).await
     }
 
     pub async fn events_since(

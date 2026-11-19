@@ -46,6 +46,15 @@ pub use writer::SessionWriter;
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const SESSION_ID_BYTES: usize = 16;
 const PLAN_MODE_LOCKED: &str = "a sessão de plano roda só em Supervisionado";
+const SUMMARY_MODE_LOCKED: &str = "a sessão de resumo roda só em Supervisionado";
+
+fn mode_lock(kind: SessionKind) -> Option<&'static str> {
+    match kind {
+        SessionKind::Review => None,
+        SessionKind::Plan => Some(PLAN_MODE_LOCKED),
+        SessionKind::Summary => Some(SUMMARY_MODE_LOCKED),
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -100,6 +109,10 @@ pub struct SessionContext {
     pub nonce: String,
     pub allowed_files: Vec<String>,
     pub cwd: PathBuf,
+    pub read_roots: Vec<PathBuf>,
+    pub repo: String,
+    pub number: u64,
+    pub refresh_project: bool,
     pub model: String,
     pub permission_mode: PermissionMode,
     pub kind: SessionKind,
@@ -216,10 +229,12 @@ impl AgentSessionHandle {
     }
 
     pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
-        if self.shared.kind() == SessionKind::Plan && mode != PermissionMode::Supervised {
+        if let Some(reason) = mode_lock(self.shared.kind())
+            && mode != PermissionMode::Supervised
+        {
             return Err(SessionError::SetPermissionMode {
                 mode: mode.as_str().to_owned(),
-                reason: PLAN_MODE_LOCKED.to_owned(),
+                reason: reason.to_owned(),
             });
         }
         let (reply, response) = oneshot::channel();

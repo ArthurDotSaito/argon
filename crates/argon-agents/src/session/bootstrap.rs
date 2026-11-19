@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::driver::{ENDED_BEFORE_ACTIVATION, Shared, SharedConfig};
 use super::failure::{STDERR_LINES, classify, transport_error, with_stderr};
+use super::permissions::valid_read_roots;
 use super::stderr::StderrTail;
 use super::writer::{Op, SessionWriter};
 use super::{
@@ -108,24 +109,36 @@ fn supervise(
     });
 }
 
-async fn restore_plan_state(writer: &SessionWriter, shared: &Shared, ctx: &SessionContext) {
-    if ctx.kind != SessionKind::Plan {
-        return;
-    }
-    match writer.has_plan(&ctx.id).await {
-        Ok(true) => shared.mark_plan_recorded(),
+async fn restore_output_state(writer: &SessionWriter, shared: &Shared, ctx: &SessionContext) {
+    let recorded = match ctx.kind {
+        SessionKind::Review => return,
+        SessionKind::Plan => writer.has_plan(&ctx.id).await,
+        SessionKind::Summary => writer.has_summary(&ctx.id).await,
+    };
+    match recorded {
+        Ok(true) => shared.mark_output_recorded(),
         Ok(false) => {}
-        Err(error) => tracing::warn!(session = %ctx.id, %error, "failed to read plan drafts"),
+        Err(error) => {
+            tracing::warn!(session = %ctx.id, %error, "failed to read the recorded session output")
+        }
     }
 }
 
 fn pinned_mode(ctx: SessionContext) -> SessionContext {
-    match ctx.kind {
-        SessionKind::Plan | SessionKind::Summary => SessionContext {
+    if ctx.kind.is_read_only() {
+        SessionContext {
             permission_mode: PermissionMode::Supervised,
             ..ctx
-        },
-        SessionKind::Review => ctx,
+        }
+    } else {
+        ctx
+    }
+}
+
+fn checked_read_roots(ctx: SessionContext) -> SessionContext {
+    SessionContext {
+        read_roots: valid_read_roots(&ctx.read_roots),
+        ..ctx
     }
 }
 
@@ -137,7 +150,7 @@ pub(super) async fn launch(
     options: SessionOptions,
     run: fn(DriverRun) -> DriverFuture,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
-    let ctx = pinned_mode(ctx);
+    let ctx = checked_read_roots(pinned_mode(ctx));
     let tail = Arc::new(StderrTail::default());
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let shared = Arc::new(Shared::new(
@@ -148,6 +161,10 @@ pub(super) async fn launch(
             base_sha: ctx.base_sha.clone(),
             denial_ends_turn: spec.transport == Transport::OpencodeServe,
             cwd: ctx.cwd.clone(),
+            read_roots: ctx.read_roots.clone(),
+            repo: ctx.repo.clone(),
+            number: ctx.number,
+            refresh_project: ctx.refresh_project,
             nonce: ctx.nonce.clone(),
             allowed_files: ctx.allowed_files.clone(),
             writer: writer.clone(),
@@ -207,7 +224,10 @@ pub(super) async fn launch(
                 allowed_files: ctx.allowed_files.clone(),
                 kind: ctx.kind,
                 base_sha: ctx.base_sha.clone(),
-                related_worktrees: Vec::new(),
+                related_worktrees: ctx.read_roots.clone(),
+                repo: (!ctx.repo.is_empty()).then(|| ctx.repo.clone()),
+                pr_number: (ctx.number > 0).then_some(ctx.number),
+                refresh_project: ctx.refresh_project,
             })
             .await
             .map(|()| 0),
@@ -219,7 +239,7 @@ pub(super) async fn launch(
             return Err(SessionError::Store(error));
         }
     };
-    restore_plan_state(&writer, &shared, &ctx).await;
+    restore_output_state(&writer, &shared, &ctx).await;
     aborter.disarm();
     let status = if load.is_some() {
         SessionStatus::Completed
@@ -354,6 +374,10 @@ mod tests {
             nonce: NONCE.to_owned(),
             allowed_files: Vec::new(),
             cwd,
+            read_roots: Vec::new(),
+            repo: "acme/api".to_owned(),
+            number: 1,
+            refresh_project: false,
             model: String::new(),
             permission_mode: PermissionMode::Supervised,
             kind: SessionKind::Review,
@@ -369,6 +393,35 @@ mod tests {
             base_sha: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
             ..context(id, cwd)
         }
+    }
+
+    fn summary_context(id: &str, cwd: PathBuf) -> SessionContext {
+        let read_roots = vec![cwd.join("rel-abc"), cwd.join("rel-def")];
+        for root in &read_roots {
+            std::fs::create_dir_all(root).unwrap();
+        }
+        SessionContext {
+            template_id: "resumo-padrao".to_owned(),
+            kind: SessionKind::Summary,
+            base_sha: Some("89abcdef0123456789abcdef0123456789abcdef".to_owned()),
+            read_roots,
+            repo: "acme/api".to_owned(),
+            number: 42,
+            refresh_project: true,
+            ..context(id, cwd)
+        }
+    }
+
+    fn summary_with_invalid_roots(id: &str, cwd: PathBuf) -> SessionContext {
+        let not_related = cwd.join("other");
+        std::fs::create_dir_all(&not_related).unwrap();
+        let mut ctx = summary_context(id, cwd.clone());
+        ctx.read_roots.extend([
+            cwd.join("rel-abc").join(".."),
+            not_related,
+            cwd.join("rel-missing"),
+        ]);
+        ctx
     }
 
     async fn launch_dying(
@@ -447,14 +500,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[tokio::test]
+    async fn new_summary_session_persists_its_read_roots_as_related_worktrees() {
+        let (dir, writer, agent) = launch_dying("summary-kind", summary_context).await;
+        let expected = summary_context("s1", dir.clone());
+
+        let row = Store::open(&dir.join("argon.db"))
+            .unwrap()
+            .session("s1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.kind, SessionKind::Summary);
+        assert_eq!(row.base_sha, expected.base_sha);
+        assert_eq!(row.related_worktrees, expected.read_roots);
+        assert_eq!(row.repo.as_deref(), Some("acme/api"));
+        assert_eq!(row.pr_number, Some(42));
+        assert!(row.refresh_project);
+        drop((writer, agent));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn invalid_read_roots_are_dropped_before_the_session_starts() {
+        let (dir, writer, agent) =
+            launch_dying("summary-invalid-roots", summary_with_invalid_roots).await;
+        let expected = summary_context("s1", dir.clone()).read_roots;
+
+        let row = Store::open(&dir.join("argon.db"))
+            .unwrap()
+            .session("s1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.related_worktrees, expected);
+        assert_eq!(agent.shared.read_roots(), expected.as_slice());
+        drop((writer, agent));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn review_sessions_persist_no_refresh_choice() {
+        let (dir, writer, agent) = launch_dying("review-target", context).await;
+
+        let row = Store::open(&dir.join("argon.db"))
+            .unwrap()
+            .session("s1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.repo.as_deref(), Some("acme/api"));
+        assert_eq!(row.pr_number, Some(1));
+        assert!(!row.refresh_project);
+        drop((writer, agent));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     async fn launch_replying(
+        dir: &Path,
+        writer: &SessionWriter,
+        load: Option<String>,
+    ) -> AgentSessionHandle {
+        launch_replying_as(plan_context, dir, writer, load).await
+    }
+
+    async fn launch_replying_as(
+        build: fn(&str, PathBuf) -> SessionContext,
         dir: &Path,
         writer: &SessionWriter,
         load: Option<String>,
     ) -> AgentSessionHandle {
         let (_, agent) = launch(
             &stream_spec(),
-            plan_context("s1", dir.to_path_buf()),
+            build("s1", dir.to_path_buf()),
             writer.clone(),
             load,
             SessionOptions::default(),
@@ -463,6 +581,73 @@ mod tests {
         .await
         .unwrap();
         agent
+    }
+
+    #[tokio::test]
+    async fn summary_session_warns_only_until_it_has_a_summary_even_after_resume() {
+        let (dir, writer) = temp_store("summary-follow-up");
+        let missing =
+            AgentEvent::Error("O agente não devolveu um resumo no formato esperado.".into());
+        let summary = format!("```argon-summary-{NONCE}\n## O que o PR faz\n```");
+
+        let agent = launch_replying_as(summary_context, &dir, &writer, None).await;
+        let first = reply_turn(&agent, &writer, "Ainda lendo.").await;
+        let second = reply_turn(&agent, &writer, &summary).await;
+        let third = reply_turn(&agent, &writer, "Respondido sem resumo novo.").await;
+        agent.shutdown().await;
+
+        assert_eq!(first.last(), Some(&missing));
+        assert!(
+            matches!(second.last(), Some(AgentEvent::Summary { body, project_updated: false, .. }) if body == "## O que o PR faz"),
+            "{second:?}"
+        );
+        assert!(
+            matches!(third.last(), Some(AgentEvent::TurnEnded { .. })),
+            "{third:?}"
+        );
+
+        let resumed =
+            launch_replying_as(summary_context, &dir, &writer, Some("agent".into())).await;
+        let after_resume = reply_turn(&resumed, &writer, "Outra pergunta respondida.").await;
+        resumed.shutdown().await;
+
+        assert!(
+            matches!(after_resume.last(), Some(AgentEvent::TurnEnded { .. })),
+            "{after_resume:?}"
+        );
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn summary_sessions_run_supervised_and_refuse_to_leave_it() {
+        let (dir, writer) = temp_store("summary-mode");
+        let configured = SessionContext {
+            permission_mode: PermissionMode::FullAccess,
+            ..summary_context("s1", dir.clone())
+        };
+        let (_, agent) = launch(
+            &stream_spec(),
+            configured,
+            writer.clone(),
+            None,
+            SessionOptions::default(),
+            replies_with_the_prompt,
+        )
+        .await
+        .unwrap();
+        let started_mode = agent.shared.subscribe().0.permission_mode;
+        let refused = agent.set_permission_mode(PermissionMode::AcceptEdits).await;
+        agent.shutdown().await;
+
+        assert_eq!(started_mode, PermissionMode::Supervised);
+        assert!(
+            matches!(&refused, Err(SessionError::SetPermissionMode { reason, .. })
+                if reason == "a sessão de resumo roda só em Supervisionado"),
+            "{refused:?}"
+        );
+        drop(writer);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
