@@ -9,7 +9,9 @@ use gpui_kit::{
 
 use super::ThreadView;
 use crate::agents::badges::{severity_pills, status_chip};
-use crate::agents::labels::{PLAN_MODE_LOCKED, SUMMARIZE, permission_mode, permission_mode_hint};
+use crate::agents::labels::{
+    PLAN_MODE_LOCKED, SUMMARIZE, SUMMARY_MODE_LOCKED, permission_mode, permission_mode_hint,
+};
 use crate::agents::panel_labels as labels;
 use crate::agents::session_actions::controls;
 use crate::agents::thread_model::related_label;
@@ -40,10 +42,10 @@ impl ThreadView {
             (None, Some(mode)) => Some(text(permission_mode(mode))),
             (None, None) => None,
         };
-        let hint = if model.is_permission_mode_locked() {
-            Some(PLAN_MODE_LOCKED)
-        } else {
-            mode.map(permission_mode_hint)
+        let hint = match info.kind {
+            SessionKind::Plan => Some(PLAN_MODE_LOCKED),
+            SessionKind::Summary => Some(SUMMARY_MODE_LOCKED),
+            SessionKind::Review => mode.map(permission_mode_hint),
         }
         .map(|hint| properties::row("", note(hint, theme.muted_foreground), cx));
         let turn_hint = (composer.is_some() && model.transcript().in_turn()).then(|| {

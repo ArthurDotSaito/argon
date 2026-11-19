@@ -182,6 +182,16 @@ impl Store {
         Ok(row)
     }
 
+    pub fn project_keys(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT host, repo FROM project_overviews ORDER BY repo, host")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn project_overviews(&self) -> Result<Vec<ProjectOverview>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {OVERVIEW_COLUMNS} FROM project_overviews ORDER BY repo, host"

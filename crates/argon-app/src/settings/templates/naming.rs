@@ -53,7 +53,7 @@ const PLAN_VARIABLES: [&str; 12] = [
     "nonce",
 ];
 
-const SUMMARY_VARIABLES: [&str; 13] = [
+const SUMMARY_VARIABLES: [&str; 14] = [
     "pr.title",
     "pr.number",
     "pr.url",
@@ -66,6 +66,7 @@ const SUMMARY_VARIABLES: [&str; 13] = [
     "related",
     "project_overview",
     "refresh_project",
+    "has_nodes",
     "nonce",
 ];
 

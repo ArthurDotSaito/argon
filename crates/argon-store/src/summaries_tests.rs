@@ -225,3 +225,36 @@ fn project_overviews_are_ordered_by_repo() {
         .collect();
     assert_eq!(repos, ["acme/alpha", "acme/mid", "acme/zeta"]);
 }
+
+#[test]
+fn project_keys_list_host_and_repo_ordered_without_reading_the_views() {
+    let mut store = Store::open_in_memory().unwrap();
+    assert!(store.project_keys().unwrap().is_empty());
+    for (host, repo) in [
+        ("github.com", "acme/zeta"),
+        ("ghe.local", "acme/alpha"),
+        ("github.com", "acme/alpha"),
+    ] {
+        store
+            .record_summary(NewSummary {
+                host,
+                repo,
+                project: Some(NewProject {
+                    body: "visão",
+                    diagram: Some(&graph()),
+                }),
+                ..new("s1", "resumo", "sha1")
+            })
+            .unwrap();
+    }
+    corrupt(&store, "project_overviews", "diagram");
+
+    assert_eq!(
+        store.project_keys().unwrap(),
+        [
+            ("ghe.local".to_owned(), "acme/alpha".to_owned()),
+            ("github.com".to_owned(), "acme/alpha".to_owned()),
+            ("github.com".to_owned(), "acme/zeta".to_owned()),
+        ]
+    );
+}

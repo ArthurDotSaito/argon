@@ -7,7 +7,7 @@ use crate::redact::redact_text;
 #[cfg(test)]
 mod tests;
 
-const KNOWN_SUMMARY_VARIABLES: [&str; 14] = [
+const KNOWN_SUMMARY_VARIABLES: [&str; 15] = [
     "pr",
     "pr.title",
     "pr.number",
@@ -21,6 +21,7 @@ const KNOWN_SUMMARY_VARIABLES: [&str; 14] = [
     "related",
     "project_overview",
     "refresh_project",
+    "has_nodes",
     "nonce",
 ];
 
@@ -135,6 +136,7 @@ fn render_summary_with(
         &[
             &context.pr_title,
             &body,
+            &context.head,
             overview.as_deref().unwrap_or_default(),
             &node_text,
         ],
@@ -161,6 +163,7 @@ fn render_summary_with(
         related => related_lines(&context.related),
         project_overview => project_text(overview.as_deref(), nodes, &nonce),
         refresh_project => context.refresh_project || overview.is_none(),
+        has_nodes => !nodes.is_empty(),
     };
     Ok(RenderedPrompt {
         text: compiled.render(values)?,

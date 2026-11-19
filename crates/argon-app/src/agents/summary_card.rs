@@ -14,6 +14,7 @@ pub struct SummaryPart {
 pub struct SummaryCardView {
     pub note: Option<String>,
     pub project: Option<SummaryPart>,
+    pub project_stale: bool,
     pub pr: SummaryPart,
     pub copy: String,
 }
@@ -40,6 +41,10 @@ pub fn summary_copy_text(project: Option<&SummaryPart>, pr: &SummaryPart) -> Str
         .join("\n\n")
 }
 
+pub fn overview_applies(summary: &PrSummary, overview: &ProjectOverview) -> bool {
+    overview.session_id == summary.session_id || overview.updated_at <= summary.created_at
+}
+
 pub fn summary_card_view(
     summary: &PrSummary,
     overview: Option<&ProjectOverview>,
@@ -47,6 +52,8 @@ pub fn summary_card_view(
     project_updated: bool,
     now: DateTime<Utc>,
 ) -> SummaryCardView {
+    let project_stale = overview.is_some_and(|overview| !overview_applies(summary, overview));
+    let overview = overview.filter(|overview| overview_applies(summary, overview));
     let project = overview.map(|overview| SummaryPart {
         title: labels::summary_project_part(&overview.repo),
         body: overview.body.clone(),
@@ -63,6 +70,7 @@ pub fn summary_card_view(
         ),
         copy: summary_copy_text(project.as_ref(), &pr),
         project,
+        project_stale,
         pr,
     }
 }
@@ -139,6 +147,42 @@ mod tests {
             view.copy,
             "## O projeto · acme/agenda-api\n\nServiço de agenda.\n\n## Este PR · #214\n\nO PR muda a agenda."
         );
+    }
+
+    #[test]
+    fn the_overview_applies_when_it_is_older_or_from_the_same_session() {
+        let summary = summary();
+        let mut overview = overview();
+
+        overview.updated_at = at(10);
+        assert!(overview_applies(&summary, &overview));
+        overview.updated_at = summary.created_at;
+        assert!(overview_applies(&summary, &overview));
+        overview.updated_at = at(25);
+        assert!(!overview_applies(&summary, &overview));
+        overview.session_id = summary.session_id.clone();
+        assert!(overview_applies(&summary, &overview));
+    }
+
+    #[test]
+    fn a_newer_overview_is_left_out_of_the_card_and_the_copy() {
+        let mut newer = overview();
+        newer.updated_at = at(25);
+
+        let view = summary_card_view(&summary(), Some(&newer), Some(214), false, at(26));
+
+        assert_eq!(view.project, None);
+        assert!(view.project_stale);
+        assert_eq!(view.note, None);
+        assert_eq!(view.copy, "## Este PR · #214\n\nO PR muda a agenda.");
+    }
+
+    #[test]
+    fn an_applicable_overview_is_not_stale() {
+        let view = summary_card_view(&summary(), Some(&overview()), Some(214), false, at(19));
+        assert!(!view.project_stale);
+        let none = summary_card_view(&summary(), None, Some(214), false, at(19));
+        assert!(!none.project_stale);
     }
 
     #[test]

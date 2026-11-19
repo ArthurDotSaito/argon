@@ -83,16 +83,20 @@ impl LaunchRequest {
     fn planned_paths(&self) -> Result<Vec<PathBuf>, WorktreeError> {
         let mut paths = vec![self.planned_path()?];
         if let LaunchPrompt::Summary { related, .. } = &self.prompt {
-            for repo in related {
-                paths.push(self.worktrees.planned_related_path(
-                    &self.pr.host,
-                    repo,
-                    &self.session_id,
-                )?);
-            }
+            paths.extend(plannable_paths(related, |repo| {
+                self.worktrees
+                    .planned_related_path(&self.pr.host, repo, &self.session_id)
+            }));
         }
         Ok(paths)
     }
+}
+
+fn plannable_paths<E>(
+    repos: &[String],
+    planned: impl Fn(&str) -> Result<PathBuf, E>,
+) -> Vec<PathBuf> {
+    repos.iter().filter_map(|repo| planned(repo).ok()).collect()
 }
 
 pub struct Launched {
@@ -504,6 +508,21 @@ mod tests {
         assert_eq!(repo.branch, "develop");
         assert_eq!(repo.error, None);
         assert_eq!(path, Some(PathBuf::from("wt-fila")));
+    }
+
+    #[test]
+    fn a_related_repo_whose_planned_path_fails_does_not_block_the_others() {
+        let repos = ["acme/a".to_owned(), "acme".to_owned(), "acme/c".to_owned()];
+
+        let paths = plannable_paths(&repos, |repo| match repo {
+            "acme" => Err("invalid repo"),
+            other => Ok(PathBuf::from(format!("wt-{other}"))),
+        });
+
+        assert_eq!(
+            paths,
+            [PathBuf::from("wt-acme/a"), PathBuf::from("wt-acme/c")]
+        );
     }
 
     #[test]

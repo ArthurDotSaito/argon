@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use argon_core::{MAX_RELATED_REPOS, RelatedRepo, SummaryContext};
+use argon_core::{MAX_RELATED_REPOS, RelatedRepo, SummaryContext, is_repo_full_name};
 use argon_github::PrDetail;
 use argon_store::ProjectOverview;
 use gpui_kit::Task;
@@ -22,7 +22,7 @@ pub fn related_list(configured: &[String], own_repo: &str) -> Vec<String> {
         let duplicate = related
             .iter()
             .any(|existing| existing.eq_ignore_ascii_case(repo));
-        if repo.is_empty() || repo.eq_ignore_ascii_case(own_repo) || duplicate {
+        if !is_repo_full_name(repo) || repo.eq_ignore_ascii_case(own_repo) || duplicate {
             continue;
         }
         related.push(repo.to_owned());
@@ -258,6 +258,12 @@ mod tests {
         );
         let configured = strings(&["acme/a", "ACME/A", "acme/b"]);
         assert_eq!(related_list(&configured, "acme/x"), ["acme/a", "acme/b"]);
+    }
+
+    #[test]
+    fn related_list_drops_names_that_are_not_owner_slash_repo() {
+        let configured = strings(&["acme", "acme/", "/repo", "../x/y", "acme/fila", "a b/c"]);
+        assert_eq!(related_list(&configured, "acme/widgets"), ["acme/fila"]);
     }
 
     #[test]

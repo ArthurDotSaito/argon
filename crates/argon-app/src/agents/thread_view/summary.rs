@@ -6,14 +6,14 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, ClipboardItem, Context, IntoElement, ParentElement as _, SharedString, Styled as _,
-    div,
+    AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, div,
 };
 
 use super::ThreadView;
 use crate::agents::panel_labels as labels;
 use crate::agents::safe_markdown::agent_markdown;
-use crate::agents::summary_card::{SummaryPart, summary_card_view};
+use crate::agents::summary_card::{SummaryPart, overview_applies, summary_card_view};
 use crate::project::labels::repo_name;
 use crate::ui::arch_diagram::ArchExcerpt;
 
@@ -75,6 +75,7 @@ impl ThreadView {
             .map(|repo| RepoKey::new(info.pr.host.clone(), repo));
         let excerpt = model
             .project_overview()
+            .filter(|overview| overview_applies(summary, overview))
             .and_then(|overview| overview.diagram.as_ref())
             .and_then(|graph| {
                 ArchExcerpt::new(
@@ -90,7 +91,7 @@ impl ThreadView {
                 };
                 match project_key.clone() {
                     Some(key) => excerpt.on_open(Rc::new(move |window, cx| {
-                        crate::project::open(key.clone(), window, cx)
+                        crate::project::open_architecture(key.clone(), window, cx)
                     })),
                     None => excerpt,
                 }
@@ -103,7 +104,26 @@ impl ThreadView {
                 .text_color(theme.muted_foreground)
                 .child(note)
         });
-        let open_project = project_key.map(|key| {
+        let stale_notice = view.project_stale.then(|| {
+            let link = project_key.clone().map(|key| {
+                div()
+                    .id(SharedString::from(format!("summary-project-stale-{id}")))
+                    .text_color(theme.link)
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_click(move |_, window, cx| crate::project::open(key.clone(), window, cx))
+                    .child(labels::VIEW_PROJECT)
+            });
+            h_flex()
+                .px_3p5()
+                .py_3()
+                .gap_2()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(labels::PROJECT_UPDATED_AFTER)
+                .children(link)
+        });
+        let open_project = project_key.filter(|_| !view.project_stale).map(|key| {
             Button::new(SharedString::from(format!("summary-project-{id}")))
                 .icon(Icon::new(IconName::BookOpen))
                 .label(labels::VIEW_PROJECT)
@@ -138,7 +158,7 @@ impl ThreadView {
                     }),
             )
             .children(open_project);
-        let has_project = view.project.is_some();
+        let has_project = view.project.is_some() || stale_notice.is_some();
         let project = view.project.map(|project| {
             part(
                 SharedString::from(format!("summary-project-body-{id}")),
@@ -163,6 +183,7 @@ impl ThreadView {
             .overflow_hidden()
             .child(header)
             .children(project)
+            .children(stale_notice)
             .child(pr)
             .into_any_element()
     }

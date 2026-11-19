@@ -54,6 +54,14 @@ pub fn open(key: RepoKey, window: &mut Window, cx: &mut App) {
     }
 }
 
+pub fn open_architecture(key: RepoKey, window: &mut Window, cx: &mut App) {
+    if let Some(workspace) = Workspace::global(cx) {
+        _ = workspace.update(cx, |workspace, cx| {
+            workspace.open_project_architecture(key, window, cx)
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

@@ -103,10 +103,9 @@ impl ViewsPanel {
                 services
                     .store()
                     .call(|store| {
-                        store.project_overviews().map(|overviews| {
-                            overviews
-                                .into_iter()
-                                .map(|overview| RepoKey::new(overview.host, overview.repo))
+                        store.project_keys().map(|keys| {
+                            keys.into_iter()
+                                .map(|(host, repo)| RepoKey::new(host, repo))
                                 .collect::<Vec<_>>()
                         })
                     })

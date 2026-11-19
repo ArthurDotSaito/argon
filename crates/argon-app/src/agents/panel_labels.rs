@@ -90,6 +90,7 @@ pub const PROJECT_REREAD: &str = "relido nesta sessão";
 pub const PROJECT_SAVED: &str = "visão salva";
 pub const PROJECT_NONE: &str = "sem visão salva";
 pub const PROJECT_REREAD_NOTE: &str = "projeto relido nesta sessão";
+pub const PROJECT_UPDATED_AFTER: &str = "A visão do projeto foi atualizada depois deste resumo.";
 
 pub const EDIT_PLAN: &str = "Editar";
 pub const EDIT_PLAN_CAPTION: &str = "Editando o plano — o texto salvo é o que será publicado";

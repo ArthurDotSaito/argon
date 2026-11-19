@@ -188,6 +188,10 @@ impl ProjectView {
         }
     }
 
+    pub fn show_architecture(&mut self, cx: &mut Context<Self>) {
+        self.set_tab(ProjectTab::Architecture, cx);
+    }
+
     pub(super) fn open_on_github(&self) {
         let url = repo_url(&self.key);
         if let Err(error) = open::that_detached(&url) {

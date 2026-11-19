@@ -161,7 +161,7 @@ impl ThreadModel {
     }
 
     pub fn is_permission_mode_locked(&self) -> bool {
-        self.info.kind == SessionKind::Plan
+        self.info.kind.is_read_only()
     }
 
     pub fn is_changing_permission_mode(&self) -> bool {
