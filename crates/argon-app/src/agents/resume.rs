@@ -210,6 +210,7 @@ mod tests {
             failure_reason: None,
             kind: SessionKind::Review,
             base_sha: None,
+            related_worktrees: Vec::new(),
         }
     }
 

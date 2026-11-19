@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 
 use crate::Store;
-use crate::agents::{FindingState, SessionStatus};
+use crate::agents::{FindingState, SessionStatus, parse_related_worktrees};
 use crate::drafts::insert_draft;
 use crate::error::Result;
 
@@ -35,13 +35,24 @@ impl Store {
     }
 
     pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT worktree_path FROM agent_sessions WHERE worktree_path IS NOT NULL")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT worktree_path, related_worktrees FROM agent_sessions
+             WHERE worktree_path IS NOT NULL OR related_worktrees IS NOT NULL",
+        )?;
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows.into_iter().map(PathBuf::from).collect())
+        let mut paths = Vec::new();
+        for (worktree, related) in rows {
+            paths.extend(worktree.map(PathBuf::from));
+            paths.extend(parse_related_worktrees(related.as_deref()));
+        }
+        Ok(paths)
     }
 
     pub fn set_session_model_label(&mut self, id: &str, label: &str) -> Result<()> {

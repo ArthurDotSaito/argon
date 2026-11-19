@@ -15,7 +15,32 @@ pub(crate) fn new_session(id: &str) -> NewAgentSession {
         allowed_files: vec!["src/a.rs".to_owned(), "README.md".to_owned()],
         kind: argon_core::SessionKind::Review,
         base_sha: None,
+        related_worktrees: Vec::new(),
     }
+}
+
+#[test]
+fn related_worktrees_round_trip_and_feed_worktree_paths() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.related_worktrees = vec![PathBuf::from(r"C:\wt\rel-a"), PathBuf::from(r"C:\wt\rel-b")];
+    store.create_session(&session).unwrap();
+    store.create_session(&new_session("s2")).unwrap();
+
+    let row = store.session("s1").unwrap().unwrap();
+    assert_eq!(row.related_worktrees, session.related_worktrees);
+    assert!(
+        store
+            .session("s2")
+            .unwrap()
+            .unwrap()
+            .related_worktrees
+            .is_empty()
+    );
+    let paths = store.worktree_paths().unwrap();
+    assert!(paths.contains(&PathBuf::from(r"C:\wt\rel-a")));
+    assert!(paths.contains(&PathBuf::from(r"C:\wt\rel-b")));
+    assert_eq!(paths.len(), 4);
 }
 
 #[test]

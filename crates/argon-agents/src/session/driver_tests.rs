@@ -40,6 +40,7 @@ async fn shared_of(
             allowed_files: vec!["src/lib.rs".into()],
             kind,
             base_sha: base_sha.map(str::to_owned),
+            related_worktrees: Vec::new(),
         })
         .await
         .unwrap();

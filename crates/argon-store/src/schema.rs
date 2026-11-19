@@ -223,6 +223,33 @@ CREATE INDEX idx_plan_drafts_issue ON plan_drafts(host, issue_id);
 CREATE INDEX idx_plan_drafts_session ON plan_drafts(session_id);
 ";
 
+const PR_SUMMARIES: &str = "
+CREATE TABLE pr_summaries (
+    id INTEGER PRIMARY KEY,
+    host TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    touched TEXT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_pr_summaries_pr ON pr_summaries(host, pr_id);
+CREATE INDEX idx_pr_summaries_session ON pr_summaries(session_id);
+CREATE TABLE project_overviews (
+    host TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    body TEXT NOT NULL,
+    diagram TEXT NULL,
+    source_sha TEXT NOT NULL,
+    source_pr INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (host, repo)
+);
+ALTER TABLE agent_sessions ADD COLUMN related_worktrees TEXT NULL;
+";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
@@ -233,6 +260,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(SESSION_PERMISSION_MODE),
     M::up(ISSUE_TABLES),
     M::up(SESSION_KIND_AND_PLAN_DRAFTS),
+    M::up(PR_SUMMARIES),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -565,6 +593,35 @@ mod tests {
         let session = store.session("s1").unwrap().unwrap();
         assert_eq!(session.kind, argon_core::SessionKind::Review);
         assert_eq!(session.base_sha, None);
+        assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
+    }
+
+    #[test]
+    fn migration_ten_adds_summary_tables_and_related_worktrees() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 9).unwrap();
+        let tables = names(&conn, "table");
+        assert!(!tables.contains(&"pr_summaries".to_string()));
+        assert!(!tables.contains(&"project_overviews".to_string()));
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let tables = names(&conn, "table");
+        assert!(tables.contains(&"pr_summaries".to_string()));
+        assert!(tables.contains(&"project_overviews".to_string()));
+        let indexes = names(&conn, "index");
+        assert!(indexes.contains(&"idx_pr_summaries_pr".to_string()));
+        assert!(indexes.contains(&"idx_pr_summaries_session".to_string()));
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert!(session.related_worktrees.is_empty());
         assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
     }
 }

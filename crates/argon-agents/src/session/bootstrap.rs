@@ -207,6 +207,7 @@ pub(super) async fn launch(
                 allowed_files: ctx.allowed_files.clone(),
                 kind: ctx.kind,
                 base_sha: ctx.base_sha.clone(),
+                related_worktrees: Vec::new(),
             })
             .await
             .map(|()| 0),

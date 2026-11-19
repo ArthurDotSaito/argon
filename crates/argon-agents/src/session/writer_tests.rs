@@ -19,6 +19,7 @@ fn session(id: &str) -> NewAgentSession {
         allowed_files: vec!["a.rs".into()],
         kind: argon_core::SessionKind::Review,
         base_sha: None,
+        related_worktrees: Vec::new(),
     }
 }
 

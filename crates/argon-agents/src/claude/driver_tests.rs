@@ -519,6 +519,7 @@ async fn fake(mode: &str) -> Fake {
             allowed_files: Vec::new(),
             kind: argon_core::SessionKind::Review,
             base_sha: None,
+            related_worktrees: Vec::new(),
         })
         .await
         .unwrap();

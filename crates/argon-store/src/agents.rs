@@ -10,7 +10,7 @@ use crate::error::Result;
 
 const SESSION_COLUMNS: &str = "id, host, pr_id, agent, model, template, status, worktree_path, \
      acp_session_id, nonce, allowed_files, created_at, updated_at, model_label, failure_reason, \
-     transport, permission_mode, kind, base_sha";
+     transport, permission_mode, kind, base_sha, related_worktrees";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionStatus {
@@ -85,6 +85,7 @@ pub struct NewAgentSession {
     pub allowed_files: Vec<String>,
     pub kind: SessionKind,
     pub base_sha: Option<String>,
+    pub related_worktrees: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +108,7 @@ pub struct SessionRow {
     pub permission_mode: String,
     pub kind: SessionKind,
     pub base_sha: Option<String>,
+    pub related_worktrees: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,12 +149,18 @@ pub(crate) fn millis(index: usize, value: i64) -> rusqlite::Result<DateTime<Utc>
         .ok_or_else(|| invalid(index, "timestamp", &value.to_string()))
 }
 
+pub(crate) fn parse_related_worktrees(json: Option<&str>) -> Vec<PathBuf> {
+    json.and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or_default()
+}
+
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
     let agent: String = row.get(3)?;
     let status: String = row.get(6)?;
     let worktree: Option<String> = row.get(7)?;
     let allowed: String = row.get(10)?;
     let kind: String = row.get(17)?;
+    let related: Option<String> = row.get(19)?;
     Ok(SessionRow {
         id: row.get(0)?,
         pr: PrKey::new(row.get::<_, String>(1)?, row.get::<_, String>(2)?),
@@ -174,6 +182,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         permission_mode: row.get(16)?,
         kind: session_kind(&kind).ok_or_else(|| invalid(17, "kind", &kind))?,
         base_sha: row.get(18)?,
+        related_worktrees: parse_related_worktrees(related.as_deref()),
     })
 }
 
@@ -184,8 +193,9 @@ impl Store {
             "INSERT INTO agent_sessions
                 (id, host, pr_id, agent, model, template, status, worktree_path, acp_session_id,
                  nonce, allowed_files, created_at, updated_at, transport, permission_mode, kind,
-                 base_sha)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15, ?16)",
+                 base_sha, related_worktrees)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15, ?16,
+                     ?17)",
             params![
                 session.id,
                 session.pr.host,
@@ -206,6 +216,9 @@ impl Store {
                 session.permission_mode,
                 session.kind.as_str(),
                 session.base_sha,
+                (!session.related_worktrees.is_empty())
+                    .then(|| serde_json::to_string(&session.related_worktrees))
+                    .transpose()?,
             ],
         )?;
         Ok(())
