@@ -22,7 +22,7 @@ pub enum SessionPlacement {
 
 pub fn subject_item(key: PrKey, kind: SessionKind) -> CenterItem {
     match kind {
-        SessionKind::Review => CenterItem::Pr(key),
+        SessionKind::Review | SessionKind::Summary => CenterItem::Pr(key),
         SessionKind::Plan => CenterItem::Issue(key),
     }
 }
@@ -276,7 +276,7 @@ impl Workspace {
 
     pub(super) fn active_session_pr(&self, window: &Window, cx: &App) -> Option<PrKey> {
         match self.active_session_subject(window, cx)? {
-            (pr, SessionKind::Review) => Some(pr),
+            (pr, SessionKind::Review | SessionKind::Summary) => Some(pr),
             (_, SessionKind::Plan) => None,
         }
     }

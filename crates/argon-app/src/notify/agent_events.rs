@@ -109,6 +109,7 @@ fn completed_text(session: &SessionSnapshot) -> String {
             findings_text(session.findings)
         ),
         SessionKind::Plan => format!("Agent Plan{subject} concluído — rascunho pronto"),
+        SessionKind::Summary => format!("Summarize{subject} concluído"),
     }
 }
 
@@ -117,6 +118,7 @@ fn failed_text(session: &SessionSnapshot) -> String {
     match session.kind {
         SessionKind::Review => format!("Review{subject} falhou"),
         SessionKind::Plan => format!("Agent Plan{subject} falhou"),
+        SessionKind::Summary => format!("Summarize{subject} falhou"),
     }
 }
 

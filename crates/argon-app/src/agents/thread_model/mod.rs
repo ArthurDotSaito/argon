@@ -272,6 +272,7 @@ impl ThreadModel {
             match this.info.kind {
                 SessionKind::Review => this.reload_findings(cx),
                 SessionKind::Plan => this.reload_plans(cx),
+                SessionKind::Summary => {}
             }
         }));
     }

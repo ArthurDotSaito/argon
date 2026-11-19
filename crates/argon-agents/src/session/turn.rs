@@ -4,6 +4,7 @@ use super::events::AgentEvent;
 
 const END_TURN: &str = "end_turn";
 const PLAN_MISSING: &str = "O agente não devolveu um plano no formato esperado.";
+const SUMMARY_MISSING: &str = "O agente não devolveu um resumo no formato esperado.";
 
 #[derive(Debug, Default)]
 pub struct TurnBuffer {
@@ -51,6 +52,7 @@ pub fn finish_turn(
             || TurnOutcome::Unreadable(PLAN_MISSING.to_owned()),
             TurnOutcome::Plan,
         ),
+        SessionKind::Summary => TurnOutcome::Unreadable(SUMMARY_MISSING.to_owned()),
     }
 }
 

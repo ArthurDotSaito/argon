@@ -17,6 +17,7 @@ pub(super) fn template_kind(kind: SessionKind) -> TemplateKind {
     match kind {
         SessionKind::Review => TemplateKind::Review,
         SessionKind::Plan => TemplateKind::Plan,
+        SessionKind::Summary => TemplateKind::Summary,
     }
 }
 
@@ -36,7 +37,7 @@ pub(super) fn session_permission_mode(
 ) -> PermissionMode {
     match kind {
         SessionKind::Review => requested,
-        SessionKind::Plan => PermissionMode::Supervised,
+        SessionKind::Plan | SessionKind::Summary => PermissionMode::Supervised,
     }
 }
 

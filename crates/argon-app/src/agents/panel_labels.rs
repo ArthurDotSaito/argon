@@ -5,6 +5,7 @@ use super::card_status::{CardStatus, SessionFilter};
 pub const PANEL_TITLE: &str = "Agentes";
 pub const REVIEW_PR: &str = "Nova review";
 pub const OPEN_PR: &str = "Abrir PR";
+pub const SUMMARIZE_PR: &str = "Summarize";
 pub const PLAN_ISSUE: &str = "Novo plano";
 pub const OPEN_ISSUE: &str = "Abrir issue";
 pub const COLUMN_STATUS: &str = "Status";
@@ -122,14 +123,14 @@ pub fn plan_update_failed(error: &str) -> String {
 
 pub fn subject_property(kind: SessionKind) -> &'static str {
     match kind {
-        SessionKind::Review => PROPERTY_PR,
+        SessionKind::Review | SessionKind::Summary => PROPERTY_PR,
         SessionKind::Plan => PROPERTY_ISSUE,
     }
 }
 
 pub fn unknown_subject(kind: SessionKind) -> &'static str {
     match kind {
-        SessionKind::Review => UNKNOWN_PR,
+        SessionKind::Review | SessionKind::Summary => UNKNOWN_PR,
         SessionKind::Plan => UNKNOWN_ISSUE,
     }
 }

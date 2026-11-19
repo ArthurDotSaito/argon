@@ -215,7 +215,17 @@ fn session_kind_and_base_sha_round_trip() {
         })
         .unwrap();
     store.create_session(&new_session("review1")).unwrap();
+    store
+        .create_session(&crate::NewAgentSession {
+            kind: SessionKind::Summary,
+            ..new_session("summary1")
+        })
+        .unwrap();
 
+    assert_eq!(
+        store.session("summary1").unwrap().unwrap().kind,
+        SessionKind::Summary
+    );
     let plan = store.session("plan1").unwrap().unwrap();
     assert_eq!(plan.kind, SessionKind::Plan);
     assert_eq!(plan.base_sha.as_deref(), Some("abc123"));

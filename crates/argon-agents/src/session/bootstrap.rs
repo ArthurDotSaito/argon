@@ -121,7 +121,7 @@ async fn restore_plan_state(writer: &SessionWriter, shared: &Shared, ctx: &Sessi
 
 fn pinned_mode(ctx: SessionContext) -> SessionContext {
     match ctx.kind {
-        SessionKind::Plan => SessionContext {
+        SessionKind::Plan | SessionKind::Summary => SessionContext {
             permission_mode: PermissionMode::Supervised,
             ..ctx
         },

@@ -130,6 +130,7 @@ impl StartDialog {
                     .label(match self.kind() {
                         SessionKind::Review => labels::START,
                         SessionKind::Plan => labels::START_PLAN,
+                        SessionKind::Summary => labels::START_SUMMARY,
                     })
                     .small()
                     .primary()

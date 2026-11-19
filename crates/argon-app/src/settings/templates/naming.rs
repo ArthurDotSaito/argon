@@ -47,10 +47,27 @@ const PLAN_VARIABLES: [&str; 12] = [
     "nonce",
 ];
 
+const SUMMARY_VARIABLES: [&str; 13] = [
+    "pr.title",
+    "pr.number",
+    "pr.url",
+    "pr.body",
+    "pr.repo",
+    "base",
+    "base_sha",
+    "head",
+    "head_sha",
+    "related",
+    "project_overview",
+    "refresh_project",
+    "nonce",
+];
+
 pub fn variables(kind: TemplateKind) -> &'static [&'static str] {
     match kind {
         TemplateKind::Review => &REVIEW_VARIABLES,
         TemplateKind::Plan => &PLAN_VARIABLES,
+        TemplateKind::Summary => &SUMMARY_VARIABLES,
     }
 }
 

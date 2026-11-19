@@ -129,6 +129,7 @@ fn session_kind(value: &str) -> Option<SessionKind> {
     match value {
         "review" => Some(SessionKind::Review),
         "plan" => Some(SessionKind::Plan),
+        "summary" => Some(SessionKind::Summary),
         _ => None,
     }
 }

@@ -331,7 +331,7 @@ pub fn decide(
 ) -> PermissionDecision {
     let mode = match kind {
         SessionKind::Review => mode,
-        SessionKind::Plan => PermissionMode::Supervised,
+        SessionKind::Plan | SessionKind::Summary => PermissionMode::Supervised,
     };
     if kind == SessionKind::Plan
         && let Some(option_id) = denied_in_plan(ask)

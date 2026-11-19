@@ -187,7 +187,9 @@ impl StartDialog {
                     self.subject.number(),
                 );
                 match self.kind() {
-                    SessionKind::Review => worktrees.planned_path(&key.host, repo, number, id),
+                    SessionKind::Review | SessionKind::Summary => {
+                        worktrees.planned_path(&key.host, repo, number, id)
+                    }
                     SessionKind::Plan => {
                         worktrees.planned_default_path(&key.host, repo, number, id)
                     }

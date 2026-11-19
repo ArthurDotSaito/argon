@@ -155,24 +155,31 @@ fn is_false(value: &bool) -> bool {
 pub struct ReviewCfg {
     pub default_template: String,
     pub default_plan_template: String,
+    pub default_summary_template: String,
     pub max_diff_chars: usize,
     pub use_worktree: bool,
     pub include_previous_reviews: bool,
     pub include_ci_failures: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub repo_templates: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub repo_related: BTreeMap<String, Vec<String>>,
 }
+
+pub const MAX_RELATED_REPOS: usize = 8;
 
 impl Default for ReviewCfg {
     fn default() -> Self {
         Self {
             default_template: "review-padrao".into(),
             default_plan_template: "plan-padrao".into(),
+            default_summary_template: "resumo-padrao".into(),
             max_diff_chars: 0,
             use_worktree: true,
             include_previous_reviews: true,
             include_ci_failures: false,
             repo_templates: BTreeMap::new(),
+            repo_related: BTreeMap::new(),
         }
     }
 }
@@ -192,7 +199,14 @@ impl ReviewCfg {
                 .chain([self.default_template.as_str()])
                 .collect(),
             TemplateKind::Plan => vec![self.default_plan_template.as_str()],
+            TemplateKind::Summary => vec![self.default_summary_template.as_str()],
         }
+    }
+
+    pub fn related_repos(&self, host: &str, repo: &str) -> &[String] {
+        self.repo_related
+            .get(&repo_key(host, repo))
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn repo_template(&self, host: &str, repo: &str) -> Option<&str> {
@@ -370,6 +384,7 @@ mod tests {
             review: ReviewCfg {
                 default_template: "seguranca".into(),
                 default_plan_template: "meu-plano".into(),
+                default_summary_template: "meu-resumo".into(),
                 max_diff_chars: 50_000,
                 use_worktree: false,
                 include_previous_reviews: false,
@@ -377,6 +392,10 @@ mod tests {
                 repo_templates: BTreeMap::from([(
                     "github.com/acme/api".into(),
                     "perfil-api".into(),
+                )]),
+                repo_related: BTreeMap::from([(
+                    "github.com/acme/api".into(),
+                    vec!["acme/contracts".into(), "acme/web".into()],
                 )]),
             },
             appearance: AppearanceCfg {
@@ -506,8 +525,45 @@ mod tests {
             review.template_candidates(TemplateKind::Plan, "github.com", "acme/api"),
             ["plan-padrao"]
         );
+        assert_eq!(
+            review.template_candidates(TemplateKind::Summary, "github.com", "acme/api"),
+            ["resumo-padrao"]
+        );
         assert_eq!(review.repos_using("perfil-api"), ["github.com/acme/api"]);
         assert!(review.repos_using("review-padrao").is_empty());
+    }
+
+    #[test]
+    fn default_summary_template_is_read_back_and_defaults_when_absent() {
+        assert_eq!(
+            Config::default().review.default_summary_template,
+            "resumo-padrao"
+        );
+        let text = "[review]\ndefault_summary_template = \"meu-resumo\"\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(parsed.review.default_summary_template, "meu-resumo");
+        let parsed: Config = toml::from_str("[review]\nuse_worktree = false\n").unwrap();
+        assert_eq!(parsed.review.default_summary_template, "resumo-padrao");
+    }
+
+    #[test]
+    fn repo_related_is_omitted_when_empty_and_read_back_when_set() {
+        let text = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(!text.contains("repo_related"), "{text}");
+        let text = "[review.repo_related]\n\"github.com/acme/api\" = [\"acme/web\"]\n";
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert_eq!(
+            parsed.review.related_repos("github.com", "acme/api"),
+            ["acme/web"]
+        );
+        assert!(
+            parsed
+                .review
+                .related_repos("github.com", "acme/web")
+                .is_empty()
+        );
+        let written = toml::to_string_pretty(&parsed).unwrap();
+        assert!(written.contains("repo_related"), "{written}");
     }
 
     #[test]

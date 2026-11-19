@@ -347,6 +347,7 @@ impl TemplatesSection {
         let no_nonce_text = match current.kind {
             TemplateKind::Review => labels::NO_NONCE,
             TemplateKind::Plan => labels::NO_NONCE_PLAN,
+            TemplateKind::Summary => labels::NO_NONCE_SUMMARY,
         };
         let chips: Vec<_> = variables(current.kind)
             .iter()

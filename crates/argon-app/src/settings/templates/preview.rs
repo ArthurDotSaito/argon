@@ -260,6 +260,7 @@ impl TemplatesSection {
     ) -> Result<Option<PreviewInput>, SharedString> {
         match kind {
             Some(TemplateKind::Plan) => Ok(Some(PreviewInput::Plan(sample_plan_context()))),
+            Some(TemplateKind::Summary) => Ok(None),
             Some(TemplateKind::Review) | None => self
                 .preview_context()
                 .map(|context| context.map(PreviewInput::Review)),

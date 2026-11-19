@@ -84,7 +84,10 @@ fn unknown_kind_is_an_invalid_header() {
         message.contains("unknown template kind `triage`"),
         "{message}"
     );
-    assert!(message.contains("`review` or `plan`"), "{message}");
+    assert!(
+        message.contains("`review`, `plan` or `summary`"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -112,9 +115,14 @@ fn unknown_kind_is_listed_as_invalid_by_the_scan() {
 
 #[test]
 fn template_kind_text_round_trips() {
-    for kind in [TemplateKind::Review, TemplateKind::Plan] {
+    for kind in [
+        TemplateKind::Review,
+        TemplateKind::Plan,
+        TemplateKind::Summary,
+    ] {
         assert_eq!(TemplateKind::parse(kind.as_str()), Some(kind));
     }
+    assert_eq!(TemplateKind::Summary.as_str(), "summary");
     assert_eq!(TemplateKind::parse("plano"), None);
     assert_eq!(TemplateKind::default(), TemplateKind::Review);
 }

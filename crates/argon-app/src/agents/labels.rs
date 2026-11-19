@@ -45,6 +45,7 @@ pub const STARTING_AGENT: &str = "iniciando o agente…";
 pub const PICK_AGENT: &str = "escolha um agente disponível";
 pub const START: &str = "Iniciar review";
 pub const START_PLAN: &str = "Iniciar plano";
+pub const START_SUMMARY: &str = "Iniciar resumo";
 pub const CANCEL: &str = "Cancelar";
 pub const COPY_ERROR: &str = "Copiar";
 pub const CANCEL_START: &str = "Cancelar início";
@@ -131,7 +132,7 @@ pub fn permission_mode_hint(mode: PermissionMode) -> &'static str {
 
 pub fn permissions_warning(agent: &str, kind: SessionKind) -> String {
     let subject = match kind {
-        SessionKind::Review => "do PR",
+        SessionKind::Review | SessionKind::Summary => "do PR",
         SessionKind::Plan => "da issue",
     };
     format!(
@@ -185,6 +186,7 @@ pub fn launch_failed(kind: SessionKind, error: &str) -> String {
     match kind {
         SessionKind::Review => format!("Falha ao iniciar a review: {error}"),
         SessionKind::Plan => format!("Falha ao iniciar o plano: {error}"),
+        SessionKind::Summary => format!("Falha ao iniciar o resumo: {error}"),
     }
 }
 
