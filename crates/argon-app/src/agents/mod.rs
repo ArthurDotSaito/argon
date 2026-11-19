@@ -47,10 +47,11 @@ pub use labels::{
     AGENT_PLAN, BUTTON_TOOLTIP, CLOSED_TOOLTIP, ISSUE_CLOSED, PLAN_BUTTON_TOOLTIP, PR_CLOSED,
     SUMMARIZE, SUMMARIZE_TOOLTIP,
 };
-pub(crate) use labels::{FULL_ACCESS_RISK, permission_mode_hint};
+pub(crate) use labels::{FULL_ACCESS_RISK, MONTHS, permission_mode_hint};
 pub(crate) use model_listing::Trigger;
 pub use panel_labels::filter_label as session_filter_label;
 pub use panel_labels::status_bar as activity_label;
+pub(crate) use safe_markdown::agent_markdown;
 pub use session_tab::{SessionTab, session_tab_title};
 pub use sessions::{Activity, AgentSessions, AgentsEvent};
 pub use start_dialog::{

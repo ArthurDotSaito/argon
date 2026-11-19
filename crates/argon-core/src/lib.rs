@@ -18,8 +18,8 @@ mod time;
 mod views;
 
 pub use arch::{
-    ArchEdge, ArchGraph, ArchNode, Lane, MAX_ARCH_EDGES, MAX_ARCH_NODES, NodeKind, Via, parse_arch,
-    parse_touched,
+    ArchEdge, ArchGraph, ArchNode, Lane, MAX_ARCH_EDGES, MAX_ARCH_NODES, NodeKind, Via,
+    is_repo_full_name, parse_arch, parse_touched,
 };
 pub use config::{
     AgentCfg, AgentKind, AppearanceCfg, Config, ConfigError, Density, MAX_RELATED_REPOS,
@@ -33,7 +33,7 @@ pub use mention::{is_mention_candidate, mentions_login};
 pub use model::{
     ChecksState, DEFAULT_HOST, Involvement, Issue, IssueLabel, IssueRef, IssueState,
     IssueStateReason, LatestReview, LinkedPr, Mergeable, PrId, PrKey, PrState, PullRequest,
-    ReviewDecision, ReviewState, SessionKind, Side, SubIssues, SubjectKind,
+    RepoKey, ReviewDecision, ReviewState, SessionKind, Side, SubIssues, SubjectKind,
 };
 pub use paths::Paths;
 pub use plan_output::parse_plan;

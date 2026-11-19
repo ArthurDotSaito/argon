@@ -4,15 +4,16 @@ use gpui_kit::{Action, SharedString};
 
 use super::ranking::Candidate;
 use crate::actions::{
-    CheckForUpdates, CloseActiveItem, GoToAgents, GoToView, OpenSettings, PlanWithAgent,
-    ReviewWithAi, StartReview, SummarizePr, SyncNow, ToggleBottomDock, ToggleLeftDock,
-    ToggleRightDock, ToggleTheme,
+    CheckForUpdates, CloseActiveItem, GoToAgents, GoToView, OpenProject, OpenSettings,
+    PlanWithAgent, ReviewWithAi, StartReview, SummarizePr, SyncNow, ToggleBottomDock,
+    ToggleLeftDock, ToggleRightDock, ToggleTheme,
 };
 use crate::inbox::InboxView;
 use crate::issue::IssueStatus;
 
 const REVIEW_WITH_AI_TITLE: &str = "Agent Review no PR atual";
 const SUMMARIZE_TITLE: &str = "Summarize no PR atual";
+const OPEN_PROJECT_TITLE: &str = "Abrir projeto do PR atual";
 const PLAN_WITH_AGENT_TITLE: &str = "Agent Plan na issue atual";
 
 pub struct PrEntry {
@@ -157,6 +158,7 @@ pub fn command_specs() -> Vec<CommandSpec> {
             CommandSpec::new("Enviar review", IconName::Send, StartReview),
             CommandSpec::new(REVIEW_WITH_AI_TITLE, IconName::Sparkles, ReviewWithAi),
             CommandSpec::new(SUMMARIZE_TITLE, IconName::TextAlignStart, SummarizePr),
+            CommandSpec::new(OPEN_PROJECT_TITLE, IconName::BookOpen, OpenProject),
             CommandSpec::new(PLAN_WITH_AGENT_TITLE, IconName::Sparkles, PlanWithAgent),
             CommandSpec::new("Abrir configurações", IconName::Settings, OpenSettings),
             CommandSpec::new(

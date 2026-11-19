@@ -1,7 +1,7 @@
 use argon_core::{MAX_RELATED_REPOS, PermissionMode, SessionKind};
 use chrono::{Datelike as _, NaiveDate};
 
-const MONTHS: [&str; 12] = [
+pub(crate) const MONTHS: [&str; 12] = [
     "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
 ];
 
@@ -27,7 +27,7 @@ pub const REFRESH_FIRST_HINT: &str =
     "A primeira leitura demora mais e gasta mais tokens. A visão fica salva para os próximos PRs.";
 pub const RELATED_PROJECTS: &str = "Projetos relacionados";
 pub const RELATED_HINT: &str = "O Argon clona a branch padrão de cada um, só para leitura.";
-pub const NO_RELATED: &str = "Nenhum projeto relacionado. Eles se configuram na página do projeto.";
+pub const NO_RELATED: &str = "Nenhum projeto relacionado.";
 pub const EDIT_IN_SETTINGS: &str = "Editar em Configurações";
 pub const DETECTING: &str = "detectando…";
 pub const NOT_FOUND: &str = "não encontrado no PATH";

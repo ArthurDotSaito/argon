@@ -1,10 +1,10 @@
-use argon_core::{PrKey, SessionKind, Side};
+use argon_core::{PrKey, RepoKey, SessionKind, Side};
 use gpui_kit::component::Placement;
 use gpui_kit::component::dock::{InsertTarget, PanelId};
 use gpui_kit::{App, Context, Entity, Focusable as _, Global, WeakEntity, Window, px};
 
 use super::Workspace;
-use crate::actions::{PlanWithAgent, ReviewWithAi, SummarizePr};
+use crate::actions::{OpenProject, PlanWithAgent, ReviewWithAi, SummarizePr};
 use crate::agents::{AgentSessions, AgentsEvent, SessionCatalog, SessionFilter};
 use crate::center::CenterItem;
 use crate::dock_items;
@@ -270,6 +270,26 @@ impl Workspace {
             view.update(cx, |view, cx| view.open_summarize(window, cx));
         } else if let Some(pr) = self.active_session_pr(window, cx) {
             self.summarize_pr(pr, window, cx);
+        }
+    }
+
+    pub(super) fn on_open_project(
+        &mut self,
+        _: &OpenProject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self
+            .active_pr_view(window, cx)
+            .and_then(|view| view.read(cx).project_key())
+            .or_else(|| {
+                let pr = self.active_session_pr(window, cx)?;
+                let inbox = self.inbox.read(cx);
+                let pr = inbox.pr(&pr)?;
+                Some(RepoKey::new(pr.host.clone(), pr.repo.clone()))
+            });
+        if let Some(key) = key {
+            self.open_item(CenterItem::Project(key), false, window, cx);
         }
     }
 

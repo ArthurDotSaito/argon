@@ -32,6 +32,7 @@ pub struct HeaderProps<'a> {
     pub merge_state: &'a MergeState,
     pub refreshing: bool,
     pub now: DateTime<Utc>,
+    pub overview_at: Option<DateTime<Utc>>,
 }
 
 pub fn header(props: &HeaderProps<'_>, actions: Vec<AnyElement>, cx: &mut Context<PrView>) -> Div {

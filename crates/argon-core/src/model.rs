@@ -21,6 +21,21 @@ impl PrKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RepoKey {
+    pub host: String,
+    pub repo: String,
+}
+
+impl RepoKey {
+    pub fn new(host: impl Into<String>, repo: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            repo: repo.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrState {
     Open,

@@ -1,4 +1,4 @@
-use argon_core::{PermissionMode, SessionKind};
+use argon_core::{PermissionMode, RepoKey, SessionKind};
 use chrono::Local;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -11,8 +11,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::{App, Context, Div, ParentElement as _, SharedString, Styled as _, div, px};
 
-use super::{Gathering, Load, StartDialog, open_settings};
+use super::{Gathering, Load, StartDialog, open_project, open_settings};
 use crate::agents::labels;
+use crate::project::labels as project_labels;
 
 const FIELD_LABEL_WIDTH: f32 = 72.;
 const CHECKBOX_INDENT: f32 = 22.;
@@ -42,7 +43,7 @@ fn block(title: &'static str, trailing: Option<String>, body: Div, cx: &App) -> 
         )
 }
 
-fn related_block(related: &[String], cx: &App) -> Div {
+fn related_block(related: &[String], project: RepoKey, locked: bool, cx: &App) -> Div {
     let theme = cx.theme();
     let rows = related.iter().map(|repo| {
         h_flex()
@@ -75,7 +76,15 @@ fn related_block(related: &[String], cx: &App) -> Div {
         v_flex()
             .gap_1()
             .children(rows)
-            .child(note(hint, theme.muted_foreground)),
+            .child(note(hint, theme.muted_foreground))
+            .child(
+                Button::new("ai-edit-related")
+                    .label(project_labels::EDIT_IN_PROJECT)
+                    .xsmall()
+                    .link()
+                    .disabled(locked)
+                    .on_click(move |_, window, cx| open_project(project.clone(), window, cx)),
+            ),
         cx,
     )
 }
@@ -309,7 +318,12 @@ impl StartDialog {
             .w_full()
             .gap_3()
             .child(self.project_block(cx))
-            .child(related_block(&gathering.related, cx))
+            .child(related_block(
+                &gathering.related,
+                RepoKey::new(self.subject.host(), self.subject.repo()),
+                self.is_launching(),
+                cx,
+            ))
     }
 
     fn project_block(&self, cx: &mut Context<Self>) -> Div {

@@ -9,6 +9,7 @@ use crate::ui::{self, Tone};
 pub const PANEL_TITLE: &str = "Visões";
 pub const GROUP_INBOX: &str = "Inbox";
 pub const GROUP_AGENTS: &str = "Agentes";
+pub const GROUP_PROJECTS: &str = "Projetos";
 pub const GROUP_YOUR_PRS: &str = "Seus PRs";
 pub const GROUP_ISSUES: &str = "Issues";
 pub const GROUP_REVIEWED: &str = "Revisados";

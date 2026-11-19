@@ -24,6 +24,7 @@ gpui_kit::actions!(
         StartReview,
         ReviewWithAi,
         SummarizePr,
+        OpenProject,
         PlanWithAgent,
         ToggleTheme
     ]

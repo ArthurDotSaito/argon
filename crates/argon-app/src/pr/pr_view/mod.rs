@@ -7,7 +7,7 @@ mod summary;
 
 use std::rc::Rc;
 
-use argon_core::{PrKey, PullRequest, Reason, Side};
+use argon_core::{PrKey, PullRequest, Reason, RepoKey, Side};
 use argon_github::{MergeMethod, PrDetail};
 use argon_store::PrSummary;
 use chrono::{DateTime, Utc};
@@ -112,6 +112,7 @@ pub struct PrView {
     pending_summarize: bool,
     summary: Option<PrSummary>,
     summary_task: Option<Task<()>>,
+    overview_at: Option<DateTime<Utc>>,
     load_task: Option<Task<()>>,
     merge_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -193,6 +194,7 @@ impl PrView {
             pending_summarize: false,
             summary: None,
             summary_task: None,
+            overview_at: None,
             load_task: None,
             merge_task: None,
             _subscriptions: subscriptions,
@@ -242,6 +244,11 @@ impl PrView {
         if let Err(error) = open::that_detached(&url) {
             tracing::warn!(%error, url, "failed to open pr in browser");
         }
+    }
+
+    pub fn project_key(&self) -> Option<RepoKey> {
+        self.pr()
+            .map(|pr| RepoKey::new(pr.host.clone(), pr.repo.clone()))
     }
 
     fn inbox_reason(&self, cx: &App) -> Option<Reason> {
@@ -301,6 +308,7 @@ impl Render for PrView {
                     merge_state: &self.merge_state,
                     refreshing: self.refreshing,
                     now,
+                    overview_at: self.overview_at,
                 };
                 let (actions, panel) = if show_panel {
                     (

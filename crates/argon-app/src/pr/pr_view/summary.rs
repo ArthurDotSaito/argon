@@ -77,16 +77,30 @@ impl PrView {
             return;
         };
         let (host, id) = (self.key.host.clone(), self.key.id.0.clone());
+        let repo = self.pr().map(|pr| pr.repo.clone());
         self.summary_task = Some(cx.spawn(async move |this, cx| {
             let stored = flatten(
                 services
                     .store()
-                    .call(move |store| store.latest_summary_for_pr(&host, &id))
+                    .call(move |store| {
+                        let summary = store
+                            .latest_summary_for_pr(&host, &id)
+                            .map_err(|error| error.to_string())?;
+                        let overview_at = match repo {
+                            Some(repo) => store
+                                .project_overview(&host, &repo)
+                                .map_err(|error| error.to_string())?
+                                .map(|overview| overview.updated_at),
+                            None => None,
+                        };
+                        Ok::<_, String>((summary, overview_at))
+                    })
                     .await,
             );
             _ = this.update(cx, |this, cx| match stored {
-                Ok(summary) => {
+                Ok((summary, overview_at)) => {
                     this.summary = summary;
+                    this.overview_at = overview_at;
                     cx.notify();
                 }
                 Err(error) => tracing::warn!(%error, "failed to load the pr summary"),

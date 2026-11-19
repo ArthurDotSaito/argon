@@ -13,7 +13,7 @@ use std::sync::Arc;
 use argon_agents::new_session_id;
 use argon_core::{
     AgentKind, Config, InvalidTemplate, Issue, PermissionMode, PrKey, PromptTemplate, PullRequest,
-    RenderedPrompt, SessionKind,
+    RenderedPrompt, RepoKey, SessionKind,
 };
 use argon_github::{IssueDetail, PrDetail};
 use gpui_kit::component::WindowExt as _;
@@ -29,6 +29,7 @@ use super::launcher::LaunchStage;
 use super::sessions::AgentSessions;
 use crate::actions::OpenSettings;
 use crate::agents::choice::{Choice, permission_choices};
+use crate::project;
 use crate::services::{AppServices, Services};
 
 const DIALOG_WIDTH: f32 = 980.;
@@ -202,6 +203,11 @@ fn open_settings(window: &mut Window, cx: &mut App) {
     window.defer(cx, |window, cx| {
         window.dispatch_action(Box::new(OpenSettings), cx)
     });
+}
+
+fn open_project(key: RepoKey, window: &mut Window, cx: &mut App) {
+    window.close_dialog(cx);
+    window.defer(cx, move |window, cx| project::open(key, window, cx));
 }
 
 fn fresh_session_id() -> Result<String, SharedString> {

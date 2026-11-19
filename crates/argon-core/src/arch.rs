@@ -125,12 +125,14 @@ fn is_repo_part(part: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
+pub fn is_repo_full_name(value: &str) -> bool {
+    value
+        .split_once('/')
+        .is_some_and(|(owner, name)| is_repo_part(owner) && is_repo_part(name))
+}
+
 fn valid_repo(repo: Option<String>) -> Option<String> {
-    repo.filter(|value| {
-        value
-            .split_once('/')
-            .is_some_and(|(owner, name)| is_repo_part(owner) && is_repo_part(name))
-    })
+    repo.filter(|value| is_repo_full_name(value))
 }
 
 fn normalize_node(node: ArchNode) -> Option<ArchNode> {
