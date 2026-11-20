@@ -2,7 +2,7 @@
 name = "Resumo padrão"
 description = "Explica o projeto (objetivo, finalidade, arquitetura, integrações) e o que o PR faz e propõe."
 kind = "summary"
-argon_template_version = 2
+argon_template_version = 3
 +++
 Resuma o pull request #{{pr.number}} de {{pr.repo}} ({{pr.url}}). O worktree tem o código do PR no commit {{head_sha}}, com base `{{base}}` @ {{base_sha}}.
 
@@ -41,7 +41,7 @@ Para ver o diff, use `gh pr diff {{pr.number}} --repo {{pr.repo}}`{% if base_sha
 {% if related %}
 ## Projetos relacionados
 
-Estes repositórios se ligam ao projeto (fila, rede, pacote compartilhado). O Argon deixou cada um na branch padrão, numa pasta à parte, só para leitura:
+Estes projetos se ligam ao projeto do PR (fila, rede, pacote compartilhado). Cada um está numa pasta à parte, só para leitura: os repositórios na branch padrão, e as pastas locais como estão na máquina, inclusive mudanças não commitadas:
 
 {{related}}
 

@@ -62,7 +62,10 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 5] = [
     ("plan-padrao", &[]),
     (
         "resumo-padrao",
-        &["bfde08b631c1e26095680accd8794d769e01f575faca70705a3bdac98e2e96a0"],
+        &[
+            "bfde08b631c1e26095680accd8794d769e01f575faca70705a3bdac98e2e96a0",
+            "517f97e4d2064776d0573425e0eaab94e78bfb5890e71ad30ec6bf60a9a643d1",
+        ],
     ),
 ];
 

@@ -121,7 +121,7 @@ fn expected_version(id: &str) -> u32 {
     match id {
         "review-padrao" => 4,
         "plan-padrao" => 1,
-        "resumo-padrao" => 2,
+        "resumo-padrao" => 3,
         _ => 3,
     }
 }
@@ -135,19 +135,23 @@ fn embedded_templates_carry_the_version_header() {
 }
 
 const V1_RESUMO_PADRAO: &str = include_str!("../testdata/resumo-padrao.v1.md");
+const V2_RESUMO_PADRAO: &str = include_str!("../testdata/resumo-padrao.v2.md");
 
 #[test]
-fn unedited_v1_resumo_padrao_is_upgraded_to_the_current_template() {
-    let dir = TempDir::new("ensure-upgrades-resumo-v1");
-    let path = dir.path().join("resumo-padrao.md");
-    fs::write(&path, V1_RESUMO_PADRAO.replace('\n', "\r\n")).unwrap();
+fn unedited_previous_resumo_padrao_versions_are_upgraded_to_the_current_template() {
+    for (version, source) in [("v1", V1_RESUMO_PADRAO), ("v2", V2_RESUMO_PADRAO)] {
+        let dir = TempDir::new(&format!("ensure-upgrades-resumo-{version}"));
+        let path = dir.path().join("resumo-padrao.md");
+        fs::write(&path, source.replace('\n', "\r\n")).unwrap();
 
-    ensure_default_templates(dir.path()).unwrap();
+        ensure_default_templates(dir.path()).unwrap();
 
-    assert_eq!(
-        fs::read_to_string(&path).unwrap(),
-        embedded_source("resumo-padrao")
-    );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            embedded_source("resumo-padrao"),
+            "{version}"
+        );
+    }
 }
 
 #[test]
