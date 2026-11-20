@@ -2,7 +2,7 @@
 name = "Resumo padrão"
 description = "Explica o projeto (objetivo, finalidade, arquitetura, integrações) e o que o PR faz e propõe."
 kind = "summary"
-argon_template_version = 1
+argon_template_version = 2
 +++
 Resuma o pull request #{{pr.number}} de {{pr.repo}} ({{pr.url}}). O worktree tem o código do PR no commit {{head_sha}}, com base `{{base}}` @ {{base_sha}}.
 

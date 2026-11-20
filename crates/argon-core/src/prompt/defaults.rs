@@ -60,7 +60,10 @@ const PREVIOUS_VERSION_HASHES: [(&str, &[&str]); 5] = [
         ],
     ),
     ("plan-padrao", &[]),
-    ("resumo-padrao", &[]),
+    (
+        "resumo-padrao",
+        &["bfde08b631c1e26095680accd8794d769e01f575faca70705a3bdac98e2e96a0"],
+    ),
 ];
 
 fn content_hash(content: &str) -> String {

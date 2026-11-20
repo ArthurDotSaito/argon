@@ -120,7 +120,8 @@ const V2_PERFORMANCE: &str = include_str!("../testdata/performance.v2.md");
 fn expected_version(id: &str) -> u32 {
     match id {
         "review-padrao" => 4,
-        "plan-padrao" | "resumo-padrao" => 1,
+        "plan-padrao" => 1,
+        "resumo-padrao" => 2,
         _ => 3,
     }
 }
@@ -131,6 +132,22 @@ fn embedded_templates_carry_the_version_header() {
         let header = format!("argon_template_version = {}", expected_version(id));
         assert!(source.lines().take(6).any(|line| line == header), "{id}");
     }
+}
+
+const V1_RESUMO_PADRAO: &str = include_str!("../testdata/resumo-padrao.v1.md");
+
+#[test]
+fn unedited_v1_resumo_padrao_is_upgraded_to_the_current_template() {
+    let dir = TempDir::new("ensure-upgrades-resumo-v1");
+    let path = dir.path().join("resumo-padrao.md");
+    fs::write(&path, V1_RESUMO_PADRAO.replace('\n', "\r\n")).unwrap();
+
+    ensure_default_templates(dir.path()).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        embedded_source("resumo-padrao")
+    );
 }
 
 #[test]
