@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use argon_agents::ToolStatus;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::spinner::Spinner;
@@ -10,9 +12,11 @@ use gpui_kit::{
 
 use super::{RADIUS, ThreadView};
 use crate::agents::panel_labels as labels;
+use crate::agents::thread_model::is_in_related;
 use crate::agents::transcript::{Item, ThoughtItem, ToolItem};
 use crate::theme::density;
 
+const READ_KIND: &str = "read";
 const OUTPUT_LIMIT: usize = 20_000;
 const TOOL_ROW_HEIGHT: f32 = 30.;
 const TOOL_PADDING_X: f32 = 10.;
@@ -71,6 +75,7 @@ pub(super) struct ToolLine {
     status: ToolStatus,
     has_output: bool,
     output: Option<String>,
+    related: bool,
 }
 
 fn output_key(id: &str) -> SharedString {
@@ -138,17 +143,18 @@ impl ThreadView {
             .into_any_element()
     }
 
-    pub(super) fn tool_lines(&self, items: &[Item]) -> Vec<ToolLine> {
+    pub(super) fn tool_lines(&self, items: &[Item], cx: &App) -> Vec<ToolLine> {
+        let roots = self.model.read(cx).read_roots();
         items
             .iter()
             .filter_map(|item| match item {
-                Item::Tool(tool) => Some(self.tool_line_data(tool)),
+                Item::Tool(tool) => Some(self.tool_line_data(tool, &roots)),
                 _ => None,
             })
             .collect()
     }
 
-    fn tool_line_data(&self, tool: &ToolItem) -> ToolLine {
+    fn tool_line_data(&self, tool: &ToolItem, roots: &[PathBuf]) -> ToolLine {
         let expanded = self.is_expanded(&output_key(&tool.id));
         ToolLine {
             id: tool.id.clone(),
@@ -157,6 +163,7 @@ impl ThreadView {
             status: tool.status,
             has_output: tool.output.is_some(),
             output: tool.output.as_deref().filter(|_| expanded).map(clipped),
+            related: tool.kind == READ_KIND && is_in_related(&tool.title, roots, cfg!(windows)),
         }
     }
 
@@ -197,6 +204,16 @@ impl ThreadView {
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), row, cx)))
         });
         let theme = cx.theme();
+        let related_tag = tool.related.then(|| {
+            div()
+                .flex_none()
+                .px_1()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border)
+                .text_color(theme.muted_foreground)
+                .child(labels::RELATED_TAG)
+        });
         let divider = theme.border.opacity(DIVIDER_OPACITY);
         let output = tool.output.map(|output| {
             div()
@@ -242,6 +259,7 @@ impl ThreadView {
                             .font_family(theme.mono_font_family.clone())
                             .child(tool.title),
                     )
+                    .children(related_tag)
                     .children(toggle)
                     .child(status_icon(tool.status, cx)),
             )

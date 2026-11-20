@@ -16,6 +16,7 @@ pub enum TemplateKind {
     #[default]
     Review,
     Plan,
+    Summary,
 }
 
 impl TemplateKind {
@@ -23,11 +24,12 @@ impl TemplateKind {
         match self {
             Self::Review => "review",
             Self::Plan => "plan",
+            Self::Summary => "summary",
         }
     }
 
     pub fn parse(value: &str) -> Option<TemplateKind> {
-        [Self::Review, Self::Plan]
+        [Self::Review, Self::Plan, Self::Summary]
             .into_iter()
             .find(|kind| kind.as_str() == value)
     }
@@ -108,9 +110,10 @@ fn template_kind(value: Option<&str>) -> Result<TemplateKind, String> {
     };
     TemplateKind::parse(value).ok_or_else(|| {
         format!(
-            "unknown template kind `{value}`, expected `{}` or `{}`",
+            "unknown template kind `{value}`, expected `{}`, `{}` or `{}`",
             TemplateKind::Review.as_str(),
-            TemplateKind::Plan.as_str()
+            TemplateKind::Plan.as_str(),
+            TemplateKind::Summary.as_str()
         )
     })
 }

@@ -68,28 +68,44 @@ pub(super) fn worktree_parent(worktrees_root: &Path, host: &str, repo: &RepoRef)
 pub(super) enum WorktreeKind {
     PullRequest,
     Issue,
+    Related,
 }
+
+const RELATED_DIR_PREFIX: &str = "rel";
 
 impl WorktreeKind {
     fn dir_prefix(self) -> &'static str {
         match self {
             WorktreeKind::PullRequest => "pr",
             WorktreeKind::Issue => "issue",
+            WorktreeKind::Related => RELATED_DIR_PREFIX,
         }
     }
 }
 
+pub(crate) fn is_related_dir_name(name: &str) -> bool {
+    name.strip_prefix(RELATED_DIR_PREFIX)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|rest| !rest.is_empty())
+}
+
 pub(super) fn worktree_dir_name(
     kind: WorktreeKind,
-    number: u64,
+    number: Option<u64>,
     session_prefix: &str,
     suffix: Option<&str>,
 ) -> String {
-    let prefix = kind.dir_prefix();
-    match suffix {
-        Some(suffix) => format!("{prefix}-{number}-{session_prefix}-{suffix}"),
-        None => format!("{prefix}-{number}-{session_prefix}"),
+    let mut name = kind.dir_prefix().to_owned();
+    if let Some(number) = number {
+        name.push_str(&format!("-{number}"));
     }
+    name.push('-');
+    name.push_str(session_prefix);
+    if let Some(suffix) = suffix {
+        name.push('-');
+        name.push_str(suffix);
+    }
+    name
 }
 
 pub(super) fn pr_ref(number: u64) -> String {
@@ -311,11 +327,16 @@ mod tests {
                 .join("nuria-auth")
         );
         assert_eq!(
-            worktree_dir_name(WorktreeKind::PullRequest, 42, "0190a3b2-7c1", None),
+            worktree_dir_name(WorktreeKind::PullRequest, Some(42), "0190a3b2-7c1", None),
             "pr-42-0190a3b2-7c1"
         );
         assert_eq!(
-            worktree_dir_name(WorktreeKind::PullRequest, 42, "0190a3b2-7c1", Some("a1f0")),
+            worktree_dir_name(
+                WorktreeKind::PullRequest,
+                Some(42),
+                "0190a3b2-7c1",
+                Some("a1f0")
+            ),
             "pr-42-0190a3b2-7c1-a1f0"
         );
     }
@@ -323,12 +344,24 @@ mod tests {
     #[test]
     fn issue_worktrees_use_the_issue_prefix() {
         assert_eq!(
-            worktree_dir_name(WorktreeKind::Issue, 7, "0190a3b2-7c1", None),
+            worktree_dir_name(WorktreeKind::Issue, Some(7), "0190a3b2-7c1", None),
             "issue-7-0190a3b2-7c1"
         );
         assert_eq!(
-            worktree_dir_name(WorktreeKind::Issue, 7, "0190a3b2-7c1", Some("a1f0")),
+            worktree_dir_name(WorktreeKind::Issue, Some(7), "0190a3b2-7c1", Some("a1f0")),
             "issue-7-0190a3b2-7c1-a1f0"
+        );
+    }
+
+    #[test]
+    fn related_worktrees_have_no_number() {
+        assert_eq!(
+            worktree_dir_name(WorktreeKind::Related, None, "0190a3b2-7c1", None),
+            "rel-0190a3b2-7c1"
+        );
+        assert_eq!(
+            worktree_dir_name(WorktreeKind::Related, None, "0190a3b2-7c1", Some("a1f0")),
+            "rel-0190a3b2-7c1-a1f0"
         );
     }
 

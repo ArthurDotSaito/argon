@@ -15,7 +15,86 @@ pub(crate) fn new_session(id: &str) -> NewAgentSession {
         allowed_files: vec!["src/a.rs".to_owned(), "README.md".to_owned()],
         kind: argon_core::SessionKind::Review,
         base_sha: None,
+        related_worktrees: Vec::new(),
+        repo: None,
+        pr_number: None,
+        refresh_project: false,
+        local_roots: Vec::new(),
     }
+}
+
+#[test]
+fn local_roots_round_trip_and_never_feed_worktree_cleanup() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.related_worktrees = vec![PathBuf::from(r"C:\wt\rel-a")];
+    session.local_roots = vec![
+        PathBuf::from(r"D:\src\pacientes-api"),
+        PathBuf::from(r"D:\src\fila"),
+    ];
+    store.create_session(&session).unwrap();
+    store.create_session(&new_session("s2")).unwrap();
+    store
+        .set_session_status("s1", SessionStatus::Completed)
+        .unwrap();
+
+    let row = store.session("s1").unwrap().unwrap();
+    assert_eq!(row.local_roots, session.local_roots);
+    assert!(store.session("s2").unwrap().unwrap().local_roots.is_empty());
+    let known = store.worktree_paths().unwrap();
+    let stale = store
+        .stale_worktrees(chrono::Utc::now() + chrono::TimeDelta::days(1))
+        .unwrap();
+    for local in &session.local_roots {
+        assert!(!known.contains(local));
+        assert!(stale.iter().all(|stale| &stale.path != local));
+    }
+}
+
+#[test]
+fn summary_target_round_trips() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.kind = argon_core::SessionKind::Summary;
+    session.repo = Some("acme/api".to_owned());
+    session.pr_number = Some(42);
+    session.refresh_project = true;
+    store.create_session(&session).unwrap();
+    store.create_session(&new_session("s2")).unwrap();
+
+    let row = store.session("s1").unwrap().unwrap();
+    let plain = store.session("s2").unwrap().unwrap();
+
+    assert_eq!(row.repo.as_deref(), Some("acme/api"));
+    assert_eq!(row.pr_number, Some(42));
+    assert!(row.refresh_project);
+    assert_eq!(plain.repo, None);
+    assert_eq!(plain.pr_number, None);
+    assert!(!plain.refresh_project);
+}
+
+#[test]
+fn related_worktrees_round_trip_and_feed_worktree_paths() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut session = new_session("s1");
+    session.related_worktrees = vec![PathBuf::from(r"C:\wt\rel-a"), PathBuf::from(r"C:\wt\rel-b")];
+    store.create_session(&session).unwrap();
+    store.create_session(&new_session("s2")).unwrap();
+
+    let row = store.session("s1").unwrap().unwrap();
+    assert_eq!(row.related_worktrees, session.related_worktrees);
+    assert!(
+        store
+            .session("s2")
+            .unwrap()
+            .unwrap()
+            .related_worktrees
+            .is_empty()
+    );
+    let paths = store.worktree_paths().unwrap();
+    assert!(paths.contains(&PathBuf::from(r"C:\wt\rel-a")));
+    assert!(paths.contains(&PathBuf::from(r"C:\wt\rel-b")));
+    assert_eq!(paths.len(), 4);
 }
 
 #[test]

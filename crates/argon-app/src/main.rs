@@ -18,6 +18,7 @@ mod notify;
 mod palette;
 mod placeholders;
 mod pr;
+mod project;
 mod review;
 mod services;
 mod settings;

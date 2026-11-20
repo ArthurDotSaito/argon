@@ -60,6 +60,7 @@ impl PrView {
         self.review
             .update(cx, |tab, cx| tab.set_detail(detail.clone(), cx));
         self.detail = Some(detail);
+        self.reload_summary(cx);
         cx.notify();
     }
 

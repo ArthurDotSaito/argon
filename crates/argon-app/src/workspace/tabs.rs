@@ -1,3 +1,4 @@
+use argon_core::RepoKey;
 use gpui_kit::component::dock::{DockPlacement, InsertTarget, NodeId, PanelId, panel_handle};
 use gpui_kit::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 
@@ -6,6 +7,7 @@ use crate::actions::CloseActiveItem;
 use crate::agents::SessionCatalog;
 use crate::center::{CenterItem, CenterPanel, CenterPanelEvent};
 use crate::dock_items;
+use crate::project::ProjectView;
 
 impl Workspace {
     pub fn open_item(
@@ -49,6 +51,39 @@ impl Workspace {
         };
         panel.read(cx).focus_handle(cx).focus(window, cx);
         window.refresh();
+    }
+
+    pub fn open_project_architecture(
+        &mut self,
+        key: RepoKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let item = CenterItem::Project(key);
+        self.open_item(item.clone(), false, window, cx);
+        let view = self
+            .center_panels(cx)
+            .into_iter()
+            .find(|panel| panel.read(cx).item() == &item)
+            .and_then(|panel| panel.read(cx).view().clone().downcast::<ProjectView>().ok());
+        if let Some(view) = view {
+            view.update(cx, |view, cx| view.show_architecture(cx));
+        }
+    }
+
+    pub fn close_item(&mut self, item: &CenterItem, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self
+            .center_panels(cx)
+            .into_iter()
+            .find(|panel| panel.read(cx).item() == item)
+        else {
+            return;
+        };
+        if self.last_focused == Some(PanelId::from(panel.entity_id())) {
+            self.last_focused = None;
+        }
+        self.dock_area
+            .update(cx, |area, cx| area.remove_panel(panel, window, cx));
     }
 
     pub fn close_active_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {

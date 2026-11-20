@@ -43,6 +43,7 @@ fn decide_acp(
     decide(
         &acp_ask(request, known_kind),
         &cwd(),
+        &[],
         mode,
         SessionKind::Review,
     )
@@ -561,33 +562,70 @@ fn prompt_title_never_leaves_a_space_before_the_marker() {
     );
 }
 
+const READ_ONLY_SESSIONS: [SessionKind; 2] = [SessionKind::Plan, SessionKind::Summary];
+
+fn decide_read_only(
+    request: &Value,
+    mode: PermissionMode,
+    kind: SessionKind,
+    read_roots: &[PathBuf],
+) -> PermissionDecision {
+    decide(&acp_ask(request, None), &cwd(), read_roots, mode, kind)
+}
+
 fn decide_plan(request: &Value, mode: PermissionMode) -> PermissionDecision {
-    decide(&acp_ask(request, None), &cwd(), mode, SessionKind::Plan)
+    decide_read_only(request, mode, SessionKind::Plan, &[])
 }
 
 fn denied_with(decision: &PermissionDecision, expected: &str) -> bool {
     matches!(decision, PermissionDecision::Deny { option_id } if option_id == expected)
 }
 
-const PLAN_DENIED_KINDS: [&str; 5] = ["edit", "delete", "move", "switch_mode", "permissions"];
+const READ_ONLY_DENIED_KINDS: [&str; 5] = ["edit", "delete", "move", "switch_mode", "permissions"];
 
 #[test]
-fn plan_sessions_deny_write_kinds_with_the_reject_option() {
-    for mode in [
-        PermissionMode::Supervised,
-        PermissionMode::AcceptEdits,
-        PermissionMode::FullAccess,
-    ] {
-        for kind in PLAN_DENIED_KINDS {
-            for paths in [
-                vec![inside("src/a.rs")],
-                vec![outside().to_string()],
-                vec![],
-            ] {
-                let decision = decide_plan(&request(Some(kind), &paths, json!({})), mode);
+fn read_only_sessions_deny_write_kinds_with_the_reject_option() {
+    for session in READ_ONLY_SESSIONS {
+        for mode in [
+            PermissionMode::Supervised,
+            PermissionMode::AcceptEdits,
+            PermissionMode::FullAccess,
+        ] {
+            for kind in READ_ONLY_DENIED_KINDS {
+                for paths in [
+                    vec![inside("src/a.rs")],
+                    vec![outside().to_string()],
+                    vec![],
+                ] {
+                    let decision = decide_read_only(
+                        &request(Some(kind), &paths, json!({})),
+                        mode,
+                        session,
+                        &[],
+                    );
+                    assert!(
+                        denied_with(&decision, "reject-once"),
+                        "{session:?} {mode:?} {kind} {paths:?}: {decision:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn read_only_sessions_ask_for_write_kinds_that_offer_no_reject_option() {
+    for session in READ_ONLY_SESSIONS {
+        for kind in READ_ONLY_DENIED_KINDS {
+            let mut req = request(Some(kind), &[inside("src/a.rs")], json!({}));
+            req["options"] = json!([
+                {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "reject-always", "name": "Never", "kind": "reject_always"}
+            ]);
+            for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
                 assert!(
-                    denied_with(&decision, "reject-once"),
-                    "{mode:?} {kind} {paths:?}: {decision:?}"
+                    asks(&decide_read_only(&req, mode, session, &[])),
+                    "{session:?} {mode:?} {kind}"
                 );
             }
         }
@@ -595,25 +633,16 @@ fn plan_sessions_deny_write_kinds_with_the_reject_option() {
 }
 
 #[test]
-fn plan_sessions_ask_for_write_kinds_that_offer_no_reject_option() {
-    for kind in PLAN_DENIED_KINDS {
-        let mut req = request(Some(kind), &[inside("src/a.rs")], json!({}));
-        req["options"] = json!([
-            {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
-            {"optionId": "reject-always", "name": "Never", "kind": "reject_always"}
-        ]);
-        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
-            assert!(asks(&decide_plan(&req, mode)), "{mode:?} {kind}");
-        }
-    }
-}
-
-#[test]
-fn plan_sessions_keep_other_kinds_as_cards() {
-    for kind in ["execute", "fetch", "other", "think"] {
-        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
-            let req = request(Some(kind), &[], json!({"command": "ls"}));
-            assert!(asks(&decide_plan(&req, mode)), "{mode:?} {kind}");
+fn read_only_sessions_keep_other_kinds_as_cards() {
+    for session in READ_ONLY_SESSIONS {
+        for kind in ["execute", "fetch", "other", "think"] {
+            for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+                let req = request(Some(kind), &[], json!({"command": "ls"}));
+                assert!(
+                    asks(&decide_read_only(&req, mode, session, &[])),
+                    "{session:?} {mode:?} {kind}"
+                );
+            }
         }
     }
 }
@@ -626,6 +655,397 @@ fn plan_sessions_read_inside_the_worktree_and_ask_outside() {
         assert!(allowed(&decide_plan(&inside_read, mode)), "{mode:?}");
         assert!(asks(&decide_plan(&outside_read, mode)), "{mode:?}");
     }
+}
+
+fn related_root() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(r"C:\work\rel-abc")
+    } else {
+        PathBuf::from("/work/rel-abc")
+    }
+}
+
+fn in_related(name: &str) -> String {
+    related_root().join(name).to_string_lossy().into_owned()
+}
+
+#[test]
+fn reads_and_searches_inside_a_read_root_are_allowed_in_every_mode() {
+    let roots = [related_root()];
+    let cases = [
+        request(Some("read"), &[in_related("src/lib.rs")], json!({})),
+        request(Some("search"), &[in_related("src")], json!({})),
+        request(
+            Some("search"),
+            &[],
+            json!({"glob": format!("{}/**/*.rs", related_root().display())}),
+        ),
+        request(
+            Some("read"),
+            &[inside("src/a.rs"), in_related("src/lib.rs")],
+            json!({}),
+        ),
+    ];
+    for session in READ_ONLY_SESSIONS {
+        for mode in [
+            PermissionMode::Supervised,
+            PermissionMode::AcceptEdits,
+            PermissionMode::FullAccess,
+        ] {
+            for req in &cases {
+                let decision = decide_read_only(req, mode, session, &roots);
+                assert!(
+                    allowed(&decision),
+                    "{session:?} {mode:?} {req}: {decision:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn writes_inside_a_read_root_are_denied_in_read_only_sessions() {
+    let roots = [related_root()];
+    for session in READ_ONLY_SESSIONS {
+        for kind in ["edit", "delete", "move"] {
+            for mode in [
+                PermissionMode::Supervised,
+                PermissionMode::AcceptEdits,
+                PermissionMode::FullAccess,
+            ] {
+                let req = request(Some(kind), &[in_related("src/lib.rs")], json!({}));
+                let decision = decide_read_only(&req, mode, session, &roots);
+                assert!(
+                    denied_with(&decision, "reject-once"),
+                    "{session:?} {mode:?} {kind}: {decision:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn read_roots_never_cover_commands_or_unknown_kinds() {
+    let roots = [related_root()];
+    for kind in [Some("execute"), Some("fetch"), Some("other"), None] {
+        let req = request(kind, &[in_related("src/lib.rs")], json!({}));
+        let decision = decide_read_only(
+            &req,
+            PermissionMode::Supervised,
+            SessionKind::Summary,
+            &roots,
+        );
+        assert!(asks(&decision), "{kind:?}: {decision:?}");
+    }
+}
+
+#[test]
+fn reads_outside_the_worktree_and_every_read_root_ask() {
+    let roots = [related_root()];
+    let sibling = related_root()
+        .with_file_name("rel-other")
+        .join("a.rs")
+        .to_string_lossy()
+        .into_owned();
+    for paths in [
+        vec![outside().to_string()],
+        vec![sibling],
+        vec![in_related("src/lib.rs"), outside().to_string()],
+        vec![in_related("../repo-secret/a.rs")],
+        vec![],
+    ] {
+        let req = request(Some("read"), &paths, json!({}));
+        let decision = decide_read_only(
+            &req,
+            PermissionMode::Supervised,
+            SessionKind::Summary,
+            &roots,
+        );
+        assert!(asks(&decision), "{paths:?}: {decision:?}");
+    }
+}
+
+#[test]
+fn a_path_that_only_shares_the_read_root_prefix_is_outside() {
+    let short = if cfg!(windows) {
+        PathBuf::from(r"C:\work\rel-ab")
+    } else {
+        PathBuf::from("/work/rel-ab")
+    };
+    let req = request(Some("read"), &[in_related("src/lib.rs")], json!({}));
+    let decision = decide_read_only(
+        &req,
+        PermissionMode::Supervised,
+        SessionKind::Summary,
+        &[short],
+    );
+    assert!(asks(&decision), "{decision:?}");
+}
+
+#[test]
+fn filesystem_roots_and_relative_read_roots_are_ignored() {
+    let filesystem_root = if cfg!(windows) {
+        PathBuf::from(r"C:\")
+    } else {
+        PathBuf::from("/")
+    };
+    let dotted_root = if cfg!(windows) {
+        PathBuf::from(r"C:\x\..")
+    } else {
+        PathBuf::from("/x/..")
+    };
+    for root in [
+        filesystem_root,
+        dotted_root,
+        PathBuf::new(),
+        PathBuf::from("rel-abc"),
+    ] {
+        let req = request(Some("read"), &[outside().to_string()], json!({}));
+        let decision = decide_read_only(
+            &req,
+            PermissionMode::Supervised,
+            SessionKind::Summary,
+            std::slice::from_ref(&root),
+        );
+        assert!(asks(&decision), "{root:?}: {decision:?}");
+    }
+}
+
+struct TempTree(PathBuf);
+
+impl TempTree {
+    fn new(name: &str) -> TempTree {
+        let base = std::env::temp_dir().join(format!("argon-roots-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("rel-abc").join("src")).unwrap();
+        std::fs::create_dir_all(base.join("other")).unwrap();
+        std::fs::write(base.join("rel-file"), "").unwrap();
+        TempTree(base)
+    }
+}
+
+impl Drop for TempTree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn only_existing_related_directories_are_valid_read_roots() {
+    let tree = TempTree::new("valid");
+    let base = &tree.0;
+    let related = base.join("rel-abc");
+
+    let kept = valid_read_roots(&[
+        related.clone(),
+        related.join(".."),
+        base.join("rel-abc").join("src").join("..").join(".."),
+        base.join("other"),
+        base.join("rel-missing"),
+        base.join("rel-file"),
+        PathBuf::from("rel-abc"),
+        if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/")
+        },
+    ]);
+
+    assert_eq!(kept, [related]);
+}
+
+fn local_root() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(r"D:\src\pacientes-api")
+    } else {
+        PathBuf::from("/src/pacientes-api")
+    }
+}
+
+fn in_local(name: &str) -> String {
+    local_root().join(name).to_string_lossy().into_owned()
+}
+
+#[test]
+fn a_local_folder_is_read_and_searched_but_never_written_in_read_only_sessions() {
+    let roots = [related_root(), local_root()];
+    let reads = [
+        request(Some("read"), &[in_local("src/lib.rs")], json!({})),
+        request(Some("search"), &[in_local("src")], json!({})),
+        request(
+            Some("search"),
+            &[],
+            json!({"glob": format!("{}/**/*.cs", local_root().display())}),
+        ),
+        request(
+            Some("read"),
+            &[in_related("a.rs"), in_local("b.cs"), inside("c.rs")],
+            json!({}),
+        ),
+    ];
+    for session in READ_ONLY_SESSIONS {
+        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            for req in &reads {
+                let decision = decide_read_only(req, mode, session, &roots);
+                assert!(
+                    allowed(&decision),
+                    "{session:?} {mode:?} {req}: {decision:?}"
+                );
+            }
+            for kind in ["edit", "delete", "move"] {
+                let req = request(Some(kind), &[in_local("src/lib.rs")], json!({}));
+                let decision = decide_read_only(&req, mode, session, &roots);
+                assert!(
+                    denied_with(&decision, "reject-once"),
+                    "{session:?} {mode:?} {kind}: {decision:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_local_folder_releases_nothing_in_a_review() {
+    let roots = [local_root()];
+    for kind in ["read", "search", "edit", "delete", "move"] {
+        let req = request(Some(kind), &[in_local("src/lib.rs")], json!({}));
+        let decision = decide(
+            &acp_ask(&req, None),
+            &cwd(),
+            &roots,
+            PermissionMode::AcceptEdits,
+            SessionKind::Review,
+        );
+        assert!(asks(&decision), "{kind}: {decision:?}");
+    }
+}
+
+#[test]
+fn local_roots_keep_real_folders_without_the_related_prefix() {
+    let tree = TempTree::new("local");
+    let base = &tree.0;
+    let drive_root = base.ancestors().last().unwrap().to_path_buf();
+
+    let kept = valid_local_roots(
+        &[
+            base.join("other"),
+            base.join("other").join("..").join("other"),
+            base.join("rel-abc"),
+            base.join("missing"),
+            base.join("rel-file"),
+            PathBuf::from("other"),
+            drive_root,
+            base.clone(),
+        ],
+        Some(base),
+    );
+
+    assert_eq!(
+        kept,
+        [
+            dunce::canonicalize(base.join("other")).unwrap(),
+            dunce::canonicalize(base.join("rel-abc")).unwrap(),
+        ]
+    );
+}
+
+#[test]
+fn related_dir_names_need_the_rel_prefix_and_a_suffix() {
+    assert!(is_related_dir_name("rel-abc"));
+    for name in ["rel", "rel-", "relabc", "other", "pr-1-abc", "issue-2-abc"] {
+        assert!(!is_related_dir_name(name), "{name}");
+    }
+}
+
+#[test]
+fn globs_with_a_parent_segment_after_a_wildcard_ask() {
+    let tree = TempTree::new("globs");
+    let roots = [tree.0.join("rel-abc")];
+    let in_cwd = format!("{}/**/../../x", cwd().display());
+    let in_root = format!("{}/*/../../secret", roots[0].display());
+    for input in [
+        json!({"glob": "src/*/../../x"}),
+        json!({"glob": in_cwd}),
+        json!({"glob": in_root}),
+        json!({"glob": "{..,x}/**"}),
+        json!({"glob": format!("{}/{{..,x}}/**", roots[0].display())}),
+        json!({"include": "**/{x,..}/*"}),
+        json!({"pattern": "**/../../*.env"}),
+        json!({"pattern": "{..,src}/**"}),
+    ] {
+        for session in [SessionKind::Review, SessionKind::Summary] {
+            let decision = decide_read_only(
+                &request(Some("search"), &[], input.clone()),
+                PermissionMode::Supervised,
+                session,
+                &roots,
+            );
+            assert!(asks(&decision), "{session:?} {input}: {decision:?}");
+        }
+    }
+}
+
+#[test]
+fn a_glob_ending_in_a_partial_name_does_not_cover_sibling_folders() {
+    let roots = [related_root()];
+    let sibling_cwd = format!("{}*/**", cwd().display());
+    let sibling_root = format!("{}*/**", related_root().display());
+    for (glob, session) in [
+        (sibling_cwd, SessionKind::Review),
+        (sibling_root, SessionKind::Summary),
+    ] {
+        let decision = decide_read_only(
+            &request(Some("search"), &[], json!({"glob": glob})),
+            PermissionMode::Supervised,
+            session,
+            &roots,
+        );
+        assert!(asks(&decision), "{glob}: {decision:?}");
+    }
+    let inside_partial = format!("{}/src/ma*", cwd().display());
+    let decision = decide_read_only(
+        &request(Some("search"), &[], json!({"glob": inside_partial})),
+        PermissionMode::Supervised,
+        SessionKind::Review,
+        &[],
+    );
+    assert!(allowed(&decision), "{decision:?}");
+}
+
+#[test]
+fn read_roots_release_nothing_in_a_review() {
+    let roots = [related_root()];
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        for kind in ["read", "search", "edit", "delete", "move", "execute"] {
+            let req = request(Some(kind), &[in_related("src/lib.rs")], json!({}));
+            let decision = decide(
+                &acp_ask(&req, None),
+                &cwd(),
+                &roots,
+                mode,
+                SessionKind::Review,
+            );
+            assert!(asks(&decision), "{mode:?} {kind}: {decision:?}");
+        }
+    }
+}
+
+#[test]
+fn session_grant_never_reaches_a_read_root() {
+    let roots = [related_root()];
+    for kind in ["read", "search", "edit"] {
+        let ask = native_ask(kind, &[in_related("src/lib.rs")]);
+        assert!(!session_grant_applies(&ask, &cwd()), "{kind}");
+        assert!(!paths_contained(&ask, &cwd()), "{kind}");
+    }
+    let edit = native_ask("edit", &[in_related("src/lib.rs")]);
+    assert!(asks(&decide(
+        &edit,
+        &cwd(),
+        &roots,
+        PermissionMode::AcceptEdits,
+        SessionKind::Review
+    )));
 }
 
 #[test]

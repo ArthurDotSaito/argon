@@ -223,6 +223,38 @@ CREATE INDEX idx_plan_drafts_issue ON plan_drafts(host, issue_id);
 CREATE INDEX idx_plan_drafts_session ON plan_drafts(session_id);
 ";
 
+const PR_SUMMARIES: &str = "
+CREATE TABLE pr_summaries (
+    id INTEGER PRIMARY KEY,
+    host TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    touched TEXT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_pr_summaries_pr ON pr_summaries(host, pr_id);
+CREATE INDEX idx_pr_summaries_session ON pr_summaries(session_id);
+CREATE TABLE project_overviews (
+    host TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    body TEXT NOT NULL,
+    diagram TEXT NULL,
+    source_sha TEXT NOT NULL,
+    source_pr INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (host, repo)
+);
+ALTER TABLE agent_sessions ADD COLUMN related_worktrees TEXT NULL;
+ALTER TABLE agent_sessions ADD COLUMN repo TEXT NULL;
+ALTER TABLE agent_sessions ADD COLUMN pr_number INTEGER NULL;
+ALTER TABLE agent_sessions ADD COLUMN refresh_project INTEGER NOT NULL DEFAULT 0;
+";
+
+const SESSION_LOCAL_ROOTS: &str = "ALTER TABLE agent_sessions ADD COLUMN local_roots TEXT NULL;";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
@@ -233,6 +265,8 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(SESSION_PERMISSION_MODE),
     M::up(ISSUE_TABLES),
     M::up(SESSION_KIND_AND_PLAN_DRAFTS),
+    M::up(PR_SUMMARIES),
+    M::up(SESSION_LOCAL_ROOTS),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -566,5 +600,64 @@ mod tests {
         assert_eq!(session.kind, argon_core::SessionKind::Review);
         assert_eq!(session.base_sha, None);
         assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
+    }
+
+    #[test]
+    fn migration_ten_adds_summary_tables_and_related_worktrees() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 9).unwrap();
+        let tables = names(&conn, "table");
+        assert!(!tables.contains(&"pr_summaries".to_string()));
+        assert!(!tables.contains(&"project_overviews".to_string()));
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at, updated_at)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let tables = names(&conn, "table");
+        assert!(tables.contains(&"pr_summaries".to_string()));
+        assert!(tables.contains(&"project_overviews".to_string()));
+        let indexes = names(&conn, "index");
+        assert!(indexes.contains(&"idx_pr_summaries_pr".to_string()));
+        assert!(indexes.contains(&"idx_pr_summaries_session".to_string()));
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert!(session.related_worktrees.is_empty());
+        assert_eq!(session.repo, None);
+        assert_eq!(session.pr_number, None);
+        assert!(!session.refresh_project);
+        assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
+    }
+
+    #[test]
+    fn migration_eleven_adds_local_roots_and_keeps_related_worktrees() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 10).unwrap();
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at,
+                 updated_at, kind, related_worktrees, repo, pr_number, refresh_project)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2,
+                     'summary', '[\"C:/wt/rel-a\"]', 'acme/api', 7, 1);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert!(session.local_roots.is_empty());
+        assert_eq!(
+            session.related_worktrees,
+            [std::path::PathBuf::from("C:/wt/rel-a")]
+        );
+        assert_eq!(session.repo.as_deref(), Some("acme/api"));
+        assert!(session.refresh_project);
     }
 }

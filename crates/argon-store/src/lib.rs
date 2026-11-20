@@ -8,6 +8,7 @@ mod local;
 mod plans;
 mod prs;
 mod schema;
+mod summaries;
 mod viewers;
 
 use std::path::Path;
@@ -20,6 +21,7 @@ pub use error::{Result, StoreError};
 pub use lifecycle::{ARCHIVE_PENDING, StaleWorktree};
 pub use local::LocalState;
 pub use plans::PlanDraft;
+pub use summaries::{NewProject, NewSummary, PrSummary, ProjectOverview};
 pub use viewers::{CachedOrg, CachedViewer};
 
 pub struct Store {

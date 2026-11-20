@@ -1,6 +1,7 @@
+use argon_core::{SessionKind, local_folder_name};
 use chrono::Utc;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, Div, InteractiveElement as _, IntoElement as _, ParentElement as _,
     SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
@@ -8,9 +9,12 @@ use gpui_kit::{
 
 use super::ThreadView;
 use crate::agents::badges::{severity_pills, status_chip};
-use crate::agents::labels::{PLAN_MODE_LOCKED, permission_mode, permission_mode_hint};
+use crate::agents::labels::{
+    PLAN_MODE_LOCKED, SUMMARIZE, SUMMARY_MODE_LOCKED, permission_mode, permission_mode_hint,
+};
 use crate::agents::panel_labels as labels;
 use crate::agents::session_actions::controls;
+use crate::agents::thread_model::related_label;
 use crate::bottom::duration_label;
 use crate::ui::properties;
 
@@ -38,10 +42,10 @@ impl ThreadView {
             (None, Some(mode)) => Some(text(permission_mode(mode))),
             (None, None) => None,
         };
-        let hint = if model.is_permission_mode_locked() {
-            Some(PLAN_MODE_LOCKED)
-        } else {
-            mode.map(permission_mode_hint)
+        let hint = match info.kind {
+            SessionKind::Plan => Some(PLAN_MODE_LOCKED),
+            SessionKind::Summary => Some(SUMMARY_MODE_LOCKED),
+            SessionKind::Review => mode.map(permission_mode_hint),
         }
         .map(|hint| properties::row("", note(hint, theme.muted_foreground), cx));
         let turn_hint = (composer.is_some() && model.transcript().in_turn()).then(|| {
@@ -51,9 +55,12 @@ impl ThreadView {
                 cx,
             )
         });
+        let is_summary = info.kind == SessionKind::Summary;
+        let kind = is_summary.then(|| properties::row(labels::PROPERTY_KIND, text(SUMMARIZE), cx));
         let session = properties::group(cx)
             .border_t_0()
             .pt_0()
+            .children(kind)
             .child(properties::row(
                 labels::PROPERTY_STATUS,
                 status_chip(model.card_status(), cx),
@@ -87,17 +94,62 @@ impl ThreadView {
             )
             .children(hint)
             .children(turn_hint);
-        let findings = properties::group(cx).child(properties::row(
-            labels::PROPERTY_FINDINGS,
-            severity_pills(model.counts(), cx),
-            cx,
-        ));
+        let findings = (!is_summary).then(|| {
+            properties::group(cx).child(properties::row(
+                labels::PROPERTY_FINDINGS,
+                severity_pills(model.counts(), cx),
+                cx,
+            ))
+        });
+        let read = is_summary.then(|| {
+            let project = project_state(
+                model.project_refreshed(),
+                model.project_overview().is_some(),
+            );
+            let related: Vec<AnyElement> = model
+                .related_roots()
+                .iter()
+                .map(|path| text(related_label(path)))
+                .chain(
+                    model
+                        .local_roots()
+                        .iter()
+                        .map(|path| text(local_folder_name(path))),
+                )
+                .collect();
+            let related = (!related.is_empty()).then(|| {
+                properties::row(
+                    labels::PROPERTY_RELATED,
+                    v_flex()
+                        .min_w_0()
+                        .gap_0p5()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .children(related),
+                    cx,
+                )
+            });
+            properties::group(cx)
+                .child(
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(theme.muted_foreground)
+                        .child(Icon::new(IconName::BookOpen).xsmall())
+                        .child(labels::READ_GROUP),
+                )
+                .child(properties::row(labels::PROPERTY_PROJECT, text(project), cx))
+                .children(related)
+        });
         properties::panel(cx)
             .id("agent-session-properties")
             .overflow_y_scroll()
             .child(session)
             .child(agent)
-            .child(findings)
+            .children(findings)
+            .children(read)
             .child(div().flex_1())
             .children(self.actions(cx))
     }
@@ -124,6 +176,14 @@ impl ThreadView {
     }
 }
 
+fn project_state(refreshed: bool, has_overview: bool) -> &'static str {
+    match (refreshed, has_overview) {
+        (true, _) => labels::PROJECT_REREAD,
+        (false, true) => labels::PROJECT_SAVED,
+        (false, false) => labels::PROJECT_NONE,
+    }
+}
+
 fn text(value: impl Into<SharedString>) -> AnyElement {
     div()
         .min_w_0()
@@ -134,4 +194,17 @@ fn text(value: impl Into<SharedString>) -> AnyElement {
 
 fn note(value: &'static str, color: gpui_kit::Hsla) -> Div {
     div().w_full().text_xs().text_color(color).child(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_project_line_says_how_the_project_was_read() {
+        assert_eq!(project_state(true, true), "relido nesta sessão");
+        assert_eq!(project_state(true, false), "relido nesta sessão");
+        assert_eq!(project_state(false, true), "visão salva");
+        assert_eq!(project_state(false, false), "sem visão salva");
+    }
 }

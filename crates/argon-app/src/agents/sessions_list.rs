@@ -33,7 +33,7 @@ fn subject_ref(key: &PrKey, kind: SessionKind, cx: &App) -> Option<(String, Stri
     let inbox = InboxModel::global(cx)?;
     let inbox = inbox.read(cx);
     match kind {
-        SessionKind::Review => inbox
+        SessionKind::Review | SessionKind::Summary => inbox
             .pr(key)
             .map(|pr| (pr.title.clone(), pr.repo.clone(), pr.number)),
         SessionKind::Plan => inbox

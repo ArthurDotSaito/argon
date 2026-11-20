@@ -6,6 +6,9 @@ pub struct DraftsChanged {
     pub pr: PrKey,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectsChanged;
+
 pub struct DraftsBus;
 
 struct DraftsBusHandle(Entity<DraftsBus>);
@@ -13,6 +16,8 @@ struct DraftsBusHandle(Entity<DraftsBus>);
 impl Global for DraftsBusHandle {}
 
 impl EventEmitter<DraftsChanged> for DraftsBus {}
+
+impl EventEmitter<ProjectsChanged> for DraftsBus {}
 
 impl DraftsBus {
     pub fn global(cx: &mut App) -> Entity<Self> {
@@ -26,5 +31,9 @@ impl DraftsBus {
 
     pub fn notify(pr: PrKey, cx: &mut App) {
         Self::global(cx).update(cx, |_, cx| cx.emit(DraftsChanged { pr }));
+    }
+
+    pub fn notify_projects(cx: &mut App) {
+        Self::global(cx).update(cx, |_, cx| cx.emit(ProjectsChanged));
     }
 }

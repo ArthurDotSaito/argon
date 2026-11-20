@@ -153,6 +153,7 @@ fn mode_rules_auto_allow_without_a_session_grant() {
     assert!(auto_allowed(
         &read,
         &cwd(),
+        &[],
         PermissionMode::Supervised,
         SessionKind::Review,
         &granted(&[])
@@ -166,6 +167,7 @@ fn session_grant_covers_contained_edits_of_the_granted_kind() {
     assert!(!auto_allowed(
         &edit,
         &cwd(),
+        &[],
         PermissionMode::Supervised,
         SessionKind::Review,
         &granted(&[])
@@ -173,6 +175,7 @@ fn session_grant_covers_contained_edits_of_the_granted_kind() {
     assert!(auto_allowed(
         &edit,
         &cwd(),
+        &[],
         PermissionMode::Supervised,
         SessionKind::Review,
         &granted(&["edit"])
@@ -180,16 +183,51 @@ fn session_grant_covers_contained_edits_of_the_granted_kind() {
 }
 
 #[test]
-fn plan_sessions_never_auto_allow_edits_even_with_a_grant() {
+fn read_only_sessions_never_auto_allow_edits_even_with_a_grant() {
     let edit = native_ask("edit", &[inside("src/a.rs")]);
 
-    assert!(!auto_allowed(
-        &edit,
-        &cwd(),
-        PermissionMode::FullAccess,
-        SessionKind::Plan,
-        &granted(&["edit"])
-    ));
+    for kind in [SessionKind::Plan, SessionKind::Summary] {
+        assert!(
+            !auto_allowed(
+                &edit,
+                &cwd(),
+                &[],
+                PermissionMode::FullAccess,
+                kind,
+                &granted(&["edit"])
+            ),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn summary_commands_ask_even_inside_a_read_root() {
+    let related = cwd().with_file_name("rel-abc");
+    let command = native_ask("execute", &[]);
+    let edit = native_ask(
+        "edit",
+        &[related
+            .join("src")
+            .join("a.rs")
+            .to_string_lossy()
+            .into_owned()],
+    );
+
+    for ask in [command, edit] {
+        assert!(
+            !auto_allowed(
+                &ask,
+                &cwd(),
+                std::slice::from_ref(&related),
+                PermissionMode::Supervised,
+                SessionKind::Summary,
+                &granted(&["execute", "edit"])
+            ),
+            "{}",
+            ask.kind
+        );
+    }
 }
 
 #[test]
@@ -198,6 +236,7 @@ fn session_grant_never_covers_commands_or_escaping_edits() {
     assert!(!auto_allowed(
         &command,
         &cwd(),
+        &[],
         PermissionMode::AcceptEdits,
         SessionKind::Review,
         &granted(&["execute"])
@@ -208,6 +247,7 @@ fn session_grant_never_covers_commands_or_escaping_edits() {
             !auto_allowed(
                 &edit,
                 &cwd(),
+                &[],
                 PermissionMode::Supervised,
                 SessionKind::Review,
                 &granted(&["edit"])
@@ -471,6 +511,11 @@ async fn live_session(mode: PermissionMode, turns: Turns) -> Session {
             allowed_files: Vec::new(),
             kind: argon_core::SessionKind::Review,
             base_sha: None,
+            related_worktrees: Vec::new(),
+            repo: None,
+            pr_number: None,
+            refresh_project: false,
+            local_roots: Vec::new(),
         })
         .await
         .unwrap();
@@ -485,6 +530,7 @@ async fn live_session(mode: PermissionMode, turns: Turns) -> Session {
         shared,
         spec: agent_spec(AgentKind::Codex, &Config::default()),
         cwd: cwd(),
+        read_roots: Vec::new(),
         agent_cwd: cwd(),
         tail,
         untrusted: Vec::new(),

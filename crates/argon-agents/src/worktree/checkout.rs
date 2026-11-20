@@ -27,7 +27,7 @@ impl Slot {
 pub(super) async fn pick_slot(
     parent: &Path,
     kind: WorktreeKind,
-    number: u64,
+    number: Option<u64>,
     session_prefix: &str,
     session: &str,
 ) -> Result<Slot> {
@@ -106,7 +106,7 @@ mod tests {
         let slot = pick_slot(
             &parent,
             WorktreeKind::PullRequest,
-            7,
+            Some(7),
             "abcdef123456",
             "abcdef123456-full",
         )
@@ -122,7 +122,7 @@ mod tests {
         let slot = pick_slot(
             &parent,
             WorktreeKind::Issue,
-            7,
+            Some(7),
             "abcdef123456",
             "abcdef123456-full",
         )
@@ -133,13 +133,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn related_slot_has_no_number() {
+        let parent = tempdir("related");
+        let slot = pick_slot(
+            &parent,
+            WorktreeKind::Related,
+            None,
+            "abcdef123456",
+            "abcdef123456-full",
+        )
+        .await
+        .unwrap();
+        assert_eq!(slot, Slot::Free(parent.join("rel-abcdef123456")));
+        cleanup(&parent);
+    }
+
+    #[tokio::test]
     async fn unregistered_directory_is_flagged_for_cleanup() {
         let parent = tempdir("stale");
         std::fs::create_dir_all(parent.join("pr-7-abcdef123456")).unwrap();
         let slot = pick_slot(
             &parent,
             WorktreeKind::PullRequest,
-            7,
+            Some(7),
             "abcdef123456",
             "abcdef123456-full",
         )
@@ -166,7 +182,7 @@ mod tests {
         let same = pick_slot(
             &parent,
             WorktreeKind::PullRequest,
-            7,
+            Some(7),
             "abcdef123456",
             "abcdef123456-first",
         )
@@ -177,7 +193,7 @@ mod tests {
         let other = pick_slot(
             &parent,
             WorktreeKind::PullRequest,
-            7,
+            Some(7),
             "abcdef123456",
             "abcdef123456-second",
         )

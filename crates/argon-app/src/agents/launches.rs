@@ -5,7 +5,7 @@ use gpui_kit::Context;
 use tokio::sync::watch;
 
 use super::launcher::{
-    LaunchError, LaunchRequest, LaunchStage, Launched, discard_worktree, launch,
+    LaunchError, LaunchRequest, LaunchStage, Launched, discard_worktree, discard_worktrees, launch,
 };
 use super::sessions::{ActiveSession, AgentSessions};
 use crate::services::{ServiceError, Services};
@@ -141,6 +141,7 @@ impl AgentSessions {
                 drop(services.spawn_runtime(async move {
                     launched.handle.shutdown().await;
                     discard_worktree(&worktrees, &launched.worktree).await;
+                    discard_worktrees(&worktrees, &launched.related_worktrees).await;
                 }));
                 LaunchState::Cancelled
             }
@@ -155,6 +156,7 @@ impl AgentSessions {
                         model: identity.model,
                         model_label: identity.meta.model_label,
                         worktree: launched.worktree,
+                        related_worktrees: launched.related_worktrees,
                         handle: launched.handle,
                         head_oid: launched.head,
                         created_at: chrono::Utc::now(),

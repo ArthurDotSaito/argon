@@ -15,7 +15,13 @@ fn ensure_default_templates_writes_the_embedded_templates() {
     let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["performance", "plan-padrao", "review-padrao", "seguranca"]
+        [
+            "performance",
+            "plan-padrao",
+            "resumo-padrao",
+            "review-padrao",
+            "seguranca"
+        ]
     );
     assert!(
         templates
@@ -29,6 +35,7 @@ fn embedded_templates_declare_their_kind() {
     for (id, source) in DEFAULT_TEMPLATES {
         let expected = match id {
             "plan-padrao" => TemplateKind::Plan,
+            "resumo-padrao" => TemplateKind::Summary,
             _ => TemplateKind::Review,
         };
         let template = parse_template(id, source).unwrap();
@@ -42,6 +49,19 @@ fn plan_padrao_header_matches_the_spec() {
     let template = parse_template("plan-padrao", embedded_source("plan-padrao")).unwrap();
 
     assert_eq!(template.name, "Plano padrão");
+    assert!(
+        template
+            .description
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+    );
+}
+
+#[test]
+fn resumo_padrao_header_matches_the_spec() {
+    let template = parse_template("resumo-padrao", embedded_source("resumo-padrao")).unwrap();
+
+    assert_eq!(template.name, "Resumo padrão");
     assert!(
         template
             .description
@@ -65,6 +85,7 @@ fn ensure_default_templates_does_not_overwrite_user_edits() {
     assert!(dir.path().join("review-padrao.md").is_file());
     assert!(dir.path().join("performance.md").is_file());
     assert!(dir.path().join("plan-padrao.md").is_file());
+    assert!(dir.path().join("resumo-padrao.md").is_file());
 }
 
 #[test]
@@ -100,6 +121,7 @@ fn expected_version(id: &str) -> u32 {
     match id {
         "review-padrao" => 4,
         "plan-padrao" => 1,
+        "resumo-padrao" => 3,
         _ => 3,
     }
 }
@@ -109,6 +131,26 @@ fn embedded_templates_carry_the_version_header() {
     for (id, source) in DEFAULT_TEMPLATES {
         let header = format!("argon_template_version = {}", expected_version(id));
         assert!(source.lines().take(6).any(|line| line == header), "{id}");
+    }
+}
+
+const V1_RESUMO_PADRAO: &str = include_str!("../testdata/resumo-padrao.v1.md");
+const V2_RESUMO_PADRAO: &str = include_str!("../testdata/resumo-padrao.v2.md");
+
+#[test]
+fn unedited_previous_resumo_padrao_versions_are_upgraded_to_the_current_template() {
+    for (version, source) in [("v1", V1_RESUMO_PADRAO), ("v2", V2_RESUMO_PADRAO)] {
+        let dir = TempDir::new(&format!("ensure-upgrades-resumo-{version}"));
+        let path = dir.path().join("resumo-padrao.md");
+        fs::write(&path, source.replace('\n', "\r\n")).unwrap();
+
+        ensure_default_templates(dir.path()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            embedded_source("resumo-padrao"),
+            "{version}"
+        );
     }
 }
 
@@ -251,9 +293,9 @@ Minha regra extra.
 }
 
 #[test]
-fn embedded_review_templates_contain_the_profile_slot_and_the_plan_does_not() {
+fn embedded_review_templates_contain_the_profile_slot_and_the_others_do_not() {
     for (id, source) in DEFAULT_TEMPLATES {
-        let expected = id != "plan-padrao";
+        let expected = !matches!(id, "plan-padrao" | "resumo-padrao");
         assert_eq!(source.contains(PROFILE_SLOT), expected, "{id}");
         assert_eq!(
             source.matches(PROFILE_SLOT).count(),

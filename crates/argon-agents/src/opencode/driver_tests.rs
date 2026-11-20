@@ -124,7 +124,7 @@ fn unsafe_permission_route_is_unanswerable_in_any_turn_state() {
 }
 
 #[test]
-fn plan_sessions_never_use_the_session_grant_shortcut() {
+fn read_only_sessions_never_use_the_session_grant_shortcut() {
     let grants: HashSet<String> = ["read".to_owned()].into();
     let cwd = Path::new("repo");
     let ask = PermissionAsk {
@@ -141,12 +141,12 @@ fn plan_sessions_never_use_the_session_grant_shortcut() {
         cwd,
         SessionKind::Review
     ));
-    assert!(!grant_shortcut_applies(
-        &grants,
-        &ask,
-        cwd,
-        SessionKind::Plan
-    ));
+    for kind in [SessionKind::Plan, SessionKind::Summary] {
+        assert!(
+            !grant_shortcut_applies(&grants, &ask, cwd, kind),
+            "{kind:?}"
+        );
+    }
     assert!(!grant_shortcut_applies(
         &HashSet::new(),
         &ask,

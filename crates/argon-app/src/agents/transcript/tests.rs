@@ -427,3 +427,62 @@ fn permission_mode_changes_follow_the_latest_event() {
         Some(PermissionMode::AcceptEdits)
     );
 }
+
+fn summary(id: i64, project_updated: bool) -> AgentEvent {
+    AgentEvent::Summary {
+        id,
+        body: "## Este PR".into(),
+        project_updated,
+    }
+}
+
+#[test]
+fn a_summary_event_becomes_a_card_where_it_happened() {
+    let transcript = replay(&[
+        user("resuma"),
+        message("pronto"),
+        summary(4, true),
+        ended("end_turn"),
+    ]);
+    assert_eq!(
+        transcript.items(),
+        [
+            Item::User("resuma".into()),
+            Item::Agent("pronto".into()),
+            Item::Summary {
+                id: 4,
+                project_updated: true,
+            },
+        ]
+    );
+}
+
+#[test]
+fn each_summary_keeps_its_own_card() {
+    let transcript = replay(&[
+        user("resuma"),
+        summary(1, true),
+        ended("end_turn"),
+        user("de novo"),
+        summary(2, false),
+        ended("end_turn"),
+    ]);
+    let cards: Vec<&Item> = transcript
+        .items()
+        .iter()
+        .filter(|item| matches!(item, Item::Summary { .. }))
+        .collect();
+    assert_eq!(
+        cards,
+        [
+            &Item::Summary {
+                id: 1,
+                project_updated: true,
+            },
+            &Item::Summary {
+                id: 2,
+                project_updated: false,
+            },
+        ]
+    );
+}

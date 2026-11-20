@@ -3,8 +3,8 @@ use gpui_kit::{App, KeyBinding};
 
 use crate::actions::{
     ArchiveSelected, CancelComment, ClearFilter, CloseActiveItem, FocusFilter, OpenPalette,
-    OpenSelected, PlanWithAgent, ReviewWithAi, SelectNext, SelectPrevious, ToggleBottomDock,
-    ToggleDiffMode, ToggleLeftDock, ToggleRead, ToggleRightDock,
+    OpenSelected, PlanWithAgent, ReviewWithAi, SelectNext, SelectPrevious, SummarizePr,
+    ToggleBottomDock, ToggleDiffMode, ToggleLeftDock, ToggleRead, ToggleRightDock,
 };
 use crate::palette::PALETTE_CONTEXT;
 
@@ -40,6 +40,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("s", ToggleDiffMode, Some(DIFF_VIEW_SHORTCUT_CONTEXT)),
         KeyBinding::new("escape", CancelComment, Some(COMMENT_EDITOR_CONTEXT)),
         KeyBinding::new("a", ReviewWithAi, Some(PR_VIEW_SHORTCUT_CONTEXT)),
+        KeyBinding::new("m", SummarizePr, Some(PR_VIEW_SHORTCUT_CONTEXT)),
         KeyBinding::new("a", PlanWithAgent, Some(ISSUE_VIEW_SHORTCUT_CONTEXT)),
     ]);
 }

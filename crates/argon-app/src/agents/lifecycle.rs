@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use argon_agents::AgentSessionHandle;
-use argon_store::{SessionStatus, Store};
+use argon_agents::{AgentSessionHandle, WorktreeManager};
+use argon_store::{SessionRow, SessionStatus, Store};
 use gpui_kit::{App, Context};
 
 use super::sessions::{AgentSessions, AgentsEvent, Closing, ResumeState};
@@ -27,6 +27,44 @@ fn record_archive(store: &mut Store, id: &str, removed: bool) -> argon_store::Re
     } else {
         store.mark_archive_pending(id)
     }
+}
+
+fn archive_paths(
+    worktree: Option<PathBuf>,
+    active_related: Vec<PathBuf>,
+    stored_related: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for path in worktree
+        .into_iter()
+        .chain(active_related)
+        .chain(stored_related.iter().cloned())
+    {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn removable_related(row: Option<SessionRow>) -> Vec<PathBuf> {
+    row.map(|row| row.related_worktrees).unwrap_or_default()
+}
+
+async fn stored_related(store: &StoreHandle, id: &str) -> Result<Vec<PathBuf>, String> {
+    let id = id.to_owned();
+    let row = flatten(store.call(move |store| store.session(&id)).await)?;
+    Ok(removable_related(row))
+}
+
+async fn remove_all(worktrees: &WorktreeManager, paths: &[PathBuf]) -> Result<(), String> {
+    let mut failure = None;
+    for path in paths {
+        if let Err(error) = worktrees.remove(path).await {
+            failure.get_or_insert_with(|| error.to_string());
+        }
+    }
+    failure.map_or(Ok(()), Err)
 }
 
 pub async fn shutdown_all(
@@ -159,6 +197,7 @@ impl AgentSessions {
             return;
         }
         let handle = self.handle(&session_id);
+        let active_related = self.related_worktrees(&session_id);
         let worktrees = self.worktrees();
         let sessions = self.store();
         let store = services.store();
@@ -170,13 +209,13 @@ impl AgentSessions {
                     _ = tokio::time::timeout(FLUSH_TIMEOUT, writer.flush()).await;
                 }
             }
-            let removed = match &worktree {
-                Some(path) => worktrees
-                    .remove(path)
-                    .await
-                    .map_err(|error| error.to_string()),
-                None => Ok(()),
-            };
+            let stored = stored_related(&store, &id).await;
+            let paths = archive_paths(
+                worktree,
+                active_related,
+                stored.as_ref().map(Vec::as_slice).unwrap_or_default(),
+            );
+            let removed = remove_all(&worktrees, &paths).await.and(stored.map(|_| ()));
             let archived = removed.is_ok();
             let stored = flatten(
                 store
@@ -212,6 +251,10 @@ mod tests {
     use super::*;
 
     fn store_with(id: &str) -> Store {
+        store_with_roots(id, Vec::new(), Vec::new())
+    }
+
+    fn store_with_roots(id: &str, related: Vec<PathBuf>, local: Vec<PathBuf>) -> Store {
         let mut store = Store::open_in_memory().unwrap();
         store
             .create_session(&NewAgentSession {
@@ -228,9 +271,42 @@ mod tests {
                 allowed_files: Vec::new(),
                 kind: argon_core::SessionKind::Review,
                 base_sha: None,
+                related_worktrees: related,
+                repo: None,
+                pr_number: None,
+                refresh_project: false,
+                local_roots: local,
             })
             .unwrap();
         store
+    }
+
+    #[test]
+    fn archiving_never_removes_a_local_folder() {
+        let related = PathBuf::from(r"C:\wt\rel-fila");
+        let local = PathBuf::from(r"D:\src\pacientes-api");
+        let store = store_with_roots("s1", vec![related.clone()], vec![local.clone()]);
+
+        let stored = removable_related(store.session("s1").unwrap());
+        let paths = archive_paths(Some(PathBuf::from(r"C:\wt\pr-1")), Vec::new(), &stored);
+
+        assert_eq!(paths, [PathBuf::from(r"C:\wt\pr-1"), related]);
+        assert!(!paths.contains(&local));
+        assert!(removable_related(None).is_empty());
+    }
+
+    #[test]
+    fn archiving_removes_the_pr_worktree_and_every_related_one_once() {
+        let pr = PathBuf::from(r"C:\wt\pr-1");
+        let fila = PathBuf::from(r"C:\wt\rel-fila");
+        let pacientes = PathBuf::from(r"C:\wt\rel-pacientes");
+        let paths = archive_paths(
+            Some(pr.clone()),
+            vec![fila.clone()],
+            &[fila.clone(), pacientes.clone()],
+        );
+        assert_eq!(paths, [pr, fila, pacientes]);
+        assert!(archive_paths(None, Vec::new(), &[]).is_empty());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod gather;
 mod plan;
+mod summary;
 #[cfg(test)]
 mod tests;
 
@@ -12,6 +13,10 @@ use crate::pr::labels::{line_ref, review_state};
 
 pub use gather::{Gathered, gather, gather_ci};
 pub use plan::plan_context;
+pub use summary::{
+    SummaryGathering, gather_summary, local_folders, merge_related, planned_related,
+    preview_context, related_repos, summary_context,
+};
 
 pub const CI_LOG_LINES: usize = 80;
 

@@ -28,6 +28,7 @@ mod sessions;
 mod sessions_list;
 mod sink;
 mod start_dialog;
+mod summary_card;
 mod thread_model;
 mod thread_view;
 mod transcript;
@@ -45,14 +46,18 @@ pub(crate) use context::{ContextOptions, Gathered, gather, prompt_context};
 pub(crate) use detection::{AgentOption, CardState, card_state};
 pub use labels::{
     AGENT_PLAN, BUTTON_TOOLTIP, CLOSED_TOOLTIP, ISSUE_CLOSED, PLAN_BUTTON_TOOLTIP, PR_CLOSED,
+    SUMMARIZE, SUMMARIZE_TOOLTIP,
 };
-pub(crate) use labels::{FULL_ACCESS_RISK, permission_mode_hint};
+pub(crate) use labels::{FULL_ACCESS_RISK, MONTHS, permission_mode_hint};
 pub(crate) use model_listing::Trigger;
 pub use panel_labels::filter_label as session_filter_label;
 pub use panel_labels::status_bar as activity_label;
+pub(crate) use safe_markdown::agent_markdown;
 pub use session_tab::{SessionTab, session_tab_title};
 pub use sessions::{Activity, AgentSessions, AgentsEvent};
-pub use start_dialog::{PlanTarget, ReviewTarget, Target, open as open_start_dialog};
+pub use start_dialog::{
+    PlanTarget, ReviewTarget, SummaryTarget, Target, open as open_start_dialog,
+};
 pub(crate) use usage_cache::{UsageState, needs_consent, plan_usage_consent};
 pub(crate) use usage_format::{Tone, UsageDetail, UsageLine, WindowRow, card_line, detail};
 pub(crate) use usage_view::{open_usage_url, tone_color};

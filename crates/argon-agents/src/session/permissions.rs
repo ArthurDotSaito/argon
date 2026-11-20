@@ -1,15 +1,17 @@
 use std::path::{Component, Path, PathBuf};
 
-use argon_core::{PermissionMode, SessionKind};
+use argon_core::{PermissionMode, SessionKind, checked_local_folder};
 use serde_json::Value;
 
 use super::events::PermissionOption;
 use crate::util::json_text;
+use crate::worktree::is_related_dir_name;
 
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
 pub(crate) const PERMISSIONS_KIND: &str = "permissions";
-const DENIED_IN_PLAN_KINDS: &[&str] = &["edit", "delete", "move", "switch_mode", PERMISSIONS_KIND];
+const DENIED_WHEN_READ_ONLY_KINDS: &[&str] =
+    &["edit", "delete", "move", "switch_mode", PERMISSIONS_KIND];
 pub(crate) const ALLOW_ONCE: &str = "allow_once";
 pub(crate) const ALLOW_ALWAYS: &str = "allow_always";
 pub(crate) const REJECT_ONCE: &str = "reject_once";
@@ -24,6 +26,9 @@ const PATH_KEYS: [&str; 6] = [
 const PATTERN_KEYS: [&str; 3] = ["pattern", "glob", "include"];
 const REGEX_KEY: &str = "pattern";
 const GLOB_CHARS: [char; 4] = ['*', '?', '[', '{'];
+const PATH_SEPARATORS: [char; 2] = ['/', '\\'];
+const SEGMENT_BREAKS: [char; 5] = ['/', '\\', '{', '}', ','];
+const PARENT_SEGMENT: &str = "..";
 const HOME_PREFIX: char = '~';
 const EXPANSION_CHARS: [char; 2] = ['$', '%'];
 const NARROW_TITLE_KINDS: &[&str] = &["read", "search", "edit"];
@@ -128,17 +133,20 @@ fn comparable(path: &Path) -> String {
     }
 }
 
+fn has_parent_segment(text: &str) -> bool {
+    text.split(SEGMENT_BREAKS)
+        .any(|segment| segment == PARENT_SEGMENT)
+}
+
 fn is_unresolvable(candidate: &str) -> bool {
     candidate.starts_with(HOME_PREFIX)
         || candidate.contains(EXPANSION_CHARS)
-        || Path::new(candidate)
-            .components()
-            .any(|component| component == Component::ParentDir)
+        || has_parent_segment(candidate)
 }
 
-pub fn is_inside(cwd: &Path, candidate: &str) -> bool {
+fn target_of(cwd: &Path, candidate: &str) -> Option<String> {
     if is_unresolvable(candidate) {
-        return false;
+        return None;
     }
     let candidate = Path::new(candidate);
     let joined = if candidate.is_absolute() || candidate.has_root() {
@@ -146,17 +154,91 @@ pub fn is_inside(cwd: &Path, candidate: &str) -> bool {
     } else {
         cwd.join(candidate)
     };
-    let root = comparable(&canonical(cwd));
-    let target = comparable(&canonical(&joined));
+    Some(comparable(&canonical(&joined)))
+}
+
+fn is_under(root: &Path, target: &str) -> bool {
+    let root = comparable(&canonical(root));
     target == root || target.starts_with(&format!("{root}/"))
 }
 
+fn is_usable_read_root(root: &Path) -> bool {
+    root.is_absolute() && canonical(root).parent().is_some()
+}
+
+fn is_valid_read_root(root: &Path) -> bool {
+    let Ok(resolved) = dunce::canonicalize(root) else {
+        return false;
+    };
+    resolved.is_dir()
+        && resolved.parent().is_some()
+        && resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_related_dir_name)
+}
+
+pub(crate) fn valid_read_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .filter(|root| {
+            let valid = is_valid_read_root(root);
+            if !valid {
+                tracing::warn!(path = %root.display(), "ignoring an invalid read-only folder");
+            }
+            valid
+        })
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn valid_local_roots(roots: &[PathBuf], home: Option<&Path>) -> Vec<PathBuf> {
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        match checked_local_folder(root, home) {
+            Ok(resolved) => {
+                let resolved = dunce::simplified(&resolved).to_path_buf();
+                if !kept.contains(&resolved) {
+                    kept.push(resolved);
+                }
+            }
+            Err(reason) => {
+                tracing::warn!(path = %root.display(), ?reason, "ignoring an invalid local folder");
+            }
+        }
+    }
+    kept
+}
+
+pub fn is_inside(cwd: &Path, candidate: &str) -> bool {
+    target_of(cwd, candidate).is_some_and(|target| is_under(cwd, &target))
+}
+
+fn is_readable(cwd: &Path, read_roots: &[PathBuf], candidate: &str) -> bool {
+    target_of(cwd, candidate).is_some_and(|target| {
+        is_under(cwd, &target)
+            || read_roots
+                .iter()
+                .filter(|root| is_usable_read_root(root))
+                .any(|root| is_under(root, &target))
+    })
+}
+
 fn literal_prefix(pattern: &str) -> &str {
-    let cut = pattern.find(GLOB_CHARS).unwrap_or(pattern.len());
-    &pattern[..cut]
+    let Some(cut) = pattern.find(GLOB_CHARS) else {
+        return pattern;
+    };
+    let head = &pattern[..cut];
+    match head.rfind(PATH_SEPARATORS) {
+        Some(separator) => &head[..=separator],
+        None => head,
+    }
 }
 
 fn scoped_prefix(pattern: &str) -> String {
+    if has_parent_segment(pattern) {
+        return pattern.to_owned();
+    }
     match literal_prefix(pattern) {
         "" => ".".to_owned(),
         prefix => prefix.to_owned(),
@@ -165,11 +247,7 @@ fn scoped_prefix(pattern: &str) -> String {
 
 fn is_path_like(pattern: &str) -> bool {
     let path = Path::new(pattern);
-    path.is_absolute()
-        || path.has_root()
-        || path
-            .components()
-            .any(|component| component == Component::ParentDir)
+    path.is_absolute() || path.has_root() || has_parent_segment(pattern)
 }
 
 pub(crate) fn input_paths(input: &Value) -> Vec<String> {
@@ -260,10 +338,26 @@ fn is_local(ask: &PermissionAsk, cwd: &Path, kinds: &[&str]) -> bool {
     kinds.contains(&ask.kind.as_str()) && paths_contained(ask, cwd)
 }
 
-fn auto_allowed(ask: &PermissionAsk, cwd: &Path, mode: PermissionMode) -> bool {
+fn is_readable_read(ask: &PermissionAsk, cwd: &Path, read_roots: &[PathBuf]) -> bool {
+    READ_ONLY_KINDS.contains(&ask.kind.as_str())
+        && !ask.paths.is_empty()
+        && ask
+            .paths
+            .iter()
+            .all(|path| is_readable(cwd, read_roots, path))
+}
+
+fn auto_allowed(
+    ask: &PermissionAsk,
+    cwd: &Path,
+    read_roots: &[PathBuf],
+    mode: PermissionMode,
+) -> bool {
     match mode {
-        PermissionMode::Supervised => is_local(ask, cwd, READ_ONLY_KINDS),
-        PermissionMode::AcceptEdits => is_local(ask, cwd, LOCAL_EDIT_KINDS),
+        PermissionMode::Supervised => is_readable_read(ask, cwd, read_roots),
+        PermissionMode::AcceptEdits => {
+            is_local(ask, cwd, LOCAL_EDIT_KINDS) || is_readable_read(ask, cwd, read_roots)
+        }
         PermissionMode::FullAccess => true,
     }
 }
@@ -315,8 +409,8 @@ fn option_of_kind(ask: &PermissionAsk, kind: &str) -> Option<String> {
         .map(|option| option.id.clone())
 }
 
-fn denied_in_plan(ask: &PermissionAsk) -> Option<String> {
-    if DENIED_IN_PLAN_KINDS.contains(&ask.kind.as_str()) {
+fn denied_when_read_only(ask: &PermissionAsk) -> Option<String> {
+    if DENIED_WHEN_READ_ONLY_KINDS.contains(&ask.kind.as_str()) {
         option_of_kind(ask, REJECT_ONCE)
     } else {
         None
@@ -326,20 +420,24 @@ fn denied_in_plan(ask: &PermissionAsk) -> Option<String> {
 pub fn decide(
     ask: &PermissionAsk,
     cwd: &Path,
+    read_roots: &[PathBuf],
     mode: PermissionMode,
     kind: SessionKind,
 ) -> PermissionDecision {
-    let mode = match kind {
-        SessionKind::Review => mode,
-        SessionKind::Plan => PermissionMode::Supervised,
+    let (mode, read_roots) = if kind.is_read_only() {
+        (PermissionMode::Supervised, read_roots)
+    } else {
+        (mode, &[][..])
     };
-    if kind == SessionKind::Plan
-        && let Some(option_id) = denied_in_plan(ask)
+    if kind.is_read_only()
+        && let Some(option_id) = denied_when_read_only(ask)
     {
         return PermissionDecision::Deny { option_id };
     }
     match option_of_kind(ask, ALLOW_ONCE) {
-        Some(option_id) if auto_allowed(ask, cwd, mode) => PermissionDecision::Allow { option_id },
+        Some(option_id) if auto_allowed(ask, cwd, read_roots, mode) => {
+            PermissionDecision::Allow { option_id }
+        }
         _ => PermissionDecision::Ask(PermissionPrompt {
             title: ask.title.clone(),
             kind: ask.kind.clone(),

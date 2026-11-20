@@ -14,6 +14,7 @@ use super::StartDialog;
 use crate::agents::labels;
 
 const PROMPT_HEIGHT: f32 = 210.;
+const SUMMARY_PROMPT_HEIGHT: f32 = 120.;
 const ROW_HEIGHT: f32 = 17.;
 const KEY_WIDTH: f32 = 52.;
 
@@ -133,7 +134,11 @@ impl StartDialog {
                     .child(pane_header(labels::PROMPT_PREVIEW, count, cx))
                     .child(
                         div()
-                            .h(px(PROMPT_HEIGHT))
+                            .h(px(if self.kind() == SessionKind::Summary {
+                                SUMMARY_PROMPT_HEIGHT
+                            } else {
+                                PROMPT_HEIGHT
+                            }))
                             .py_1()
                             .font_family(theme.mono_font_family.clone())
                             .text_xs()
@@ -187,7 +192,9 @@ impl StartDialog {
                     self.subject.number(),
                 );
                 match self.kind() {
-                    SessionKind::Review => worktrees.planned_path(&key.host, repo, number, id),
+                    SessionKind::Review | SessionKind::Summary => {
+                        worktrees.planned_path(&key.host, repo, number, id)
+                    }
                     SessionKind::Plan => {
                         worktrees.planned_default_path(&key.host, repo, number, id)
                     }

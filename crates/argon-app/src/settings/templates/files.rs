@@ -225,7 +225,7 @@ mod tests {
     fn composing_a_saved_built_in_reproduces_its_file() {
         let dir = TempDir::new("compose-built-ins");
         let set = load(&dir.0).unwrap();
-        assert_eq!(set.templates.len(), 4);
+        assert_eq!(set.templates.len(), 5);
         for template in &set.templates {
             let saved = std::fs::read_to_string(template_path(&dir.0, &template.id)).unwrap();
             assert_eq!(compose(template), saved, "{}", template.id);

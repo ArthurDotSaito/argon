@@ -1,9 +1,13 @@
-use argon_core::{FindingsParse, SessionKind, filter_findings, parse_findings, parse_plan};
+use argon_core::{
+    FindingsParse, SessionKind, SummaryOutput, filter_findings, parse_findings, parse_plan,
+    parse_summary,
+};
 
 use super::events::AgentEvent;
 
 const END_TURN: &str = "end_turn";
 const PLAN_MISSING: &str = "O agente não devolveu um plano no formato esperado.";
+const SUMMARY_MISSING: &str = "O agente não devolveu um resumo no formato esperado.";
 
 #[derive(Debug, Default)]
 pub struct TurnBuffer {
@@ -27,6 +31,7 @@ pub enum TurnOutcome {
     NotFinished,
     Findings(FindingsParse),
     Plan(String),
+    Summary(SummaryOutput),
     Unreadable(String),
 }
 
@@ -50,6 +55,10 @@ pub fn finish_turn(
         SessionKind::Plan => parse_plan(text, nonce).map_or_else(
             || TurnOutcome::Unreadable(PLAN_MISSING.to_owned()),
             TurnOutcome::Plan,
+        ),
+        SessionKind::Summary => parse_summary(text, nonce).map_or_else(
+            || TurnOutcome::Unreadable(SUMMARY_MISSING.to_owned()),
+            TurnOutcome::Summary,
         ),
     }
 }
@@ -213,6 +222,52 @@ mod tests {
         assert_eq!(
             finish_turn(text, "end_turn", NONCE, &[], SessionKind::Plan),
             TurnOutcome::Unreadable(PLAN_MISSING.to_owned())
+        );
+    }
+
+    #[test]
+    fn summary_session_yields_the_chunked_summary_and_project() {
+        let text = chunked(&format!(
+            "Pronto.\n\n```argon-project-{NONCE}\n## O que é e objetivo\n```\n\n```argon-summary-{NONCE}\n## O que o PR faz\n\nCorrige.\n```\n"
+        ));
+        assert_eq!(
+            finish_turn(&text, "end_turn", NONCE, &[], SessionKind::Summary),
+            TurnOutcome::Summary(SummaryOutput {
+                summary: "## O que o PR faz\n\nCorrige.".to_owned(),
+                project: Some("## O que é e objetivo".to_owned()),
+                arch: None,
+                touched: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn summary_session_without_block_is_unreadable() {
+        let plan = format!("```argon-plan-{NONCE}\n## Plano\n```");
+        let project_only = format!("```argon-project-{NONCE}\n## O que é e objetivo\n```");
+        for text in ["Sem resumo.", plan.as_str(), project_only.as_str()] {
+            assert_eq!(
+                finish_turn(text, "end_turn", NONCE, &[], SessionKind::Summary),
+                TurnOutcome::Unreadable(SUMMARY_MISSING.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn summary_session_ignores_a_summary_with_another_nonce() {
+        let text = "```argon-summary-ffffffffffffffff\n## Forjado\n```";
+        assert_eq!(
+            finish_turn(text, "end_turn", NONCE, &[], SessionKind::Summary),
+            TurnOutcome::Unreadable(SUMMARY_MISSING.to_owned())
+        );
+    }
+
+    #[test]
+    fn cancelled_summary_turn_is_not_finished() {
+        let text = format!("```argon-summary-{NONCE}\n## Resumo\n```");
+        assert_eq!(
+            finish_turn(&text, "cancelled", NONCE, &[], SessionKind::Summary),
+            TurnOutcome::NotFinished
         );
     }
 

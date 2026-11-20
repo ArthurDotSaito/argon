@@ -102,6 +102,30 @@ mod tests {
     }
 
     #[test]
+    fn related_slot_is_found_at_the_same_depth_as_the_others() {
+        let root = std::env::temp_dir().join(format!("argon-scan-rel-{}", std::process::id()));
+        let manager = WorktreeManager::new(&argon_core::Paths {
+            config_dir: root.join("config"),
+            data_dir: root.clone(),
+        });
+        let session = "0190a3b27c117e2f9a10";
+        let related = manager
+            .planned_related_path("github.com", "o/r", session)
+            .unwrap();
+        let pr = manager
+            .planned_path("github.com", "o/r", 3, session)
+            .unwrap();
+        std::fs::create_dir_all(related.join("src")).unwrap();
+        std::fs::create_dir_all(&pr).unwrap();
+        let mut found: Vec<PathBuf> = manager.scan().into_iter().map(|slot| slot.path).collect();
+        std::fs::remove_dir_all(&root).unwrap();
+        found.sort();
+        let mut expected = vec![related, pr];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
     fn scan_lists_only_slot_directories() {
         let root = std::env::temp_dir().join(format!("argon-scan-{}", std::process::id()));
         let slot = root

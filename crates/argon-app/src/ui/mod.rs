@@ -1,4 +1,5 @@
 mod age;
+pub mod arch_diagram;
 mod avatar;
 mod checks;
 pub mod columns;

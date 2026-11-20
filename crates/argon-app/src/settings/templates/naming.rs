@@ -8,7 +8,13 @@ const RESERVED_IDS: [&str; 22] = [
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-pub const BUILT_IN_IDS: [&str; 4] = ["review-padrao", "seguranca", "performance", "plan-padrao"];
+pub const BUILT_IN_IDS: [&str; 5] = [
+    "review-padrao",
+    "seguranca",
+    "performance",
+    "plan-padrao",
+    "resumo-padrao",
+];
 
 const REVIEW_VARIABLES: [&str; 19] = [
     "pr.title",
@@ -47,10 +53,28 @@ const PLAN_VARIABLES: [&str; 12] = [
     "nonce",
 ];
 
+const SUMMARY_VARIABLES: [&str; 14] = [
+    "pr.title",
+    "pr.number",
+    "pr.url",
+    "pr.body",
+    "pr.repo",
+    "base",
+    "base_sha",
+    "head",
+    "head_sha",
+    "related",
+    "project_overview",
+    "refresh_project",
+    "has_nodes",
+    "nonce",
+];
+
 pub fn variables(kind: TemplateKind) -> &'static [&'static str] {
     match kind {
         TemplateKind::Review => &REVIEW_VARIABLES,
         TemplateKind::Plan => &PLAN_VARIABLES,
+        TemplateKind::Summary => &SUMMARY_VARIABLES,
     }
 }
 

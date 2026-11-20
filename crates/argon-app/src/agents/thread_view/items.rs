@@ -67,7 +67,7 @@ impl ThreadView {
             return div().into_any_element();
         };
         if matches!(first, Item::Tool(_)) {
-            let lines = self.tool_lines(transcript.items().get(range).unwrap_or_default());
+            let lines = self.tool_lines(transcript.items().get(range).unwrap_or_default(), cx);
             return transcript_row(self.tool_table(row, lines, cx));
         }
         let item = first.clone();
@@ -88,6 +88,10 @@ impl ThreadView {
             } => findings_block(weak, &ids, (outside, unreadable), self.model.read(cx), cx)
                 .into_any_element(),
             Item::PlanDraft(id) => self.plan_card(id, cx),
+            Item::Summary {
+                id,
+                project_updated,
+            } => self.summary_card(id, project_updated, cx),
             Item::Interrupted(reason) => self.notice(labels::interrupted(&reason), cx),
             Item::Error(message) => self.error(ix, &message, cx),
         };

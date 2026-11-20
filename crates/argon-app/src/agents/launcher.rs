@@ -7,12 +7,13 @@ use argon_agents::{
     WorktreeManager, start_session,
 };
 use argon_core::{
-    PermissionMode, PlanContext, PrKey, PromptTemplate, RenderedPrompt, SessionKind,
-    render_plan_prompt,
+    PermissionMode, PlanContext, PrKey, PromptTemplate, RelatedEntry, RelatedRepo, RenderedPrompt,
+    SessionKind, SummaryContext, render_plan_prompt, render_summary_prompt,
 };
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
+use super::context::{local_folders, merge_related, related_repos};
 use super::labels;
 use super::sink::SessionStore;
 
@@ -37,6 +38,11 @@ pub enum LaunchPrompt {
         template: Box<PromptTemplate>,
         context: Box<PlanContext>,
     },
+    Summary {
+        template: Box<PromptTemplate>,
+        context: Box<SummaryContext>,
+        related: Vec<RelatedEntry>,
+    },
 }
 
 pub struct LaunchRequest {
@@ -58,6 +64,7 @@ impl LaunchRequest {
         match self.prompt {
             LaunchPrompt::Review { .. } => SessionKind::Review,
             LaunchPrompt::Plan { .. } => SessionKind::Plan,
+            LaunchPrompt::Summary { .. } => SessionKind::Summary,
         }
     }
 
@@ -65,22 +72,45 @@ impl LaunchRequest {
         let (host, repo, number, session) =
             (&self.pr.host, &self.repo, self.number, &self.session_id);
         match self.prompt {
-            LaunchPrompt::Review { .. } => self.worktrees.planned_path(host, repo, number, session),
+            LaunchPrompt::Review { .. } | LaunchPrompt::Summary { .. } => {
+                self.worktrees.planned_path(host, repo, number, session)
+            }
             LaunchPrompt::Plan { .. } => self
                 .worktrees
                 .planned_default_path(host, repo, number, session),
         }
     }
+
+    fn planned_paths(&self) -> Result<Vec<PathBuf>, WorktreeError> {
+        let mut paths = vec![self.planned_path()?];
+        if let LaunchPrompt::Summary { related, .. } = &self.prompt {
+            paths.extend(plannable_paths(&related_repos(related), |repo| {
+                self.worktrees
+                    .planned_related_path(&self.pr.host, repo, &self.session_id)
+            }));
+        }
+        Ok(paths)
+    }
+}
+
+fn plannable_paths<E>(
+    repos: &[String],
+    planned: impl Fn(&str) -> Result<PathBuf, E>,
+) -> Vec<PathBuf> {
+    repos.iter().filter_map(|repo| planned(repo).ok()).collect()
 }
 
 pub struct Launched {
     pub worktree: PathBuf,
+    pub related_worktrees: Vec<PathBuf>,
     pub head: Option<String>,
     pub handle: AgentSessionHandle,
 }
 
 struct Checkout {
     path: PathBuf,
+    related: Vec<PathBuf>,
+    local: Vec<PathBuf>,
     base_sha: Option<String>,
     prompt: RenderedPrompt,
 }
@@ -106,6 +136,89 @@ pub async fn discard_worktree(worktrees: &WorktreeManager, path: &Path) {
     if let Err(error) = worktrees.discard(path).await {
         tracing::warn!(%error, path = %path.display(), "failed to remove worktree after aborted launch");
     }
+}
+
+pub async fn discard_worktrees(worktrees: &WorktreeManager, paths: &[PathBuf]) {
+    for path in paths {
+        discard_worktree(worktrees, path).await;
+    }
+}
+
+struct RelatedCheckout {
+    repos: Vec<RelatedRepo>,
+    paths: Vec<PathBuf>,
+}
+
+fn related_entry(
+    repo: &str,
+    prepared: Result<PreparedWorktree, String>,
+) -> (RelatedRepo, Option<PathBuf>) {
+    match prepared {
+        Ok(prepared) => (
+            RelatedRepo {
+                repo: repo.to_owned(),
+                path: Some(prepared.path.display().to_string()),
+                branch: prepared.branch,
+                error: None,
+                local: false,
+            },
+            Some(prepared.path),
+        ),
+        Err(error) => (
+            RelatedRepo {
+                repo: repo.to_owned(),
+                path: None,
+                branch: labels::PLAN_BASE_PENDING.to_owned(),
+                error: Some(error),
+                local: false,
+            },
+            None,
+        ),
+    }
+}
+
+async fn prepare_related(
+    worktrees: &WorktreeManager,
+    host: &str,
+    session: &str,
+    repos: &[String],
+) -> RelatedCheckout {
+    let jobs = repos.iter().map(|repo| async move {
+        let prepared = worktrees
+            .prepare_related(host, repo, session)
+            .await
+            .map_err(|error| error.to_string());
+        if prepared.is_err()
+            && let Ok(planned) = worktrees.planned_related_path(host, repo, session)
+        {
+            discard_worktree(worktrees, &planned).await;
+        }
+        related_entry(repo, prepared)
+    });
+    let mut checkout = RelatedCheckout {
+        repos: Vec::new(),
+        paths: Vec::new(),
+    };
+    for (repo, path) in futures::future::join_all(jobs).await {
+        checkout.repos.push(repo);
+        checkout.paths.extend(path);
+    }
+    checkout
+}
+
+pub fn summary_prompt(
+    template: &PromptTemplate,
+    context: &SummaryContext,
+    head_sha: &str,
+    related: Vec<RelatedRepo>,
+) -> Result<RenderedPrompt, String> {
+    let context = SummaryContext {
+        head_sha: head_sha.to_owned(),
+        related,
+        ..context.clone()
+    };
+    render_summary_prompt(template, &context)
+        .map_err(|error| labels::render_failed(&error.to_string()))
 }
 
 pub fn plan_prompt(
@@ -138,9 +251,44 @@ async fn checkout(request: &LaunchRequest) -> Result<Checkout, String> {
                 .map_err(|error| error.to_string())?;
             Ok(Checkout {
                 path,
+                related: Vec::new(),
+                local: Vec::new(),
                 base_sha: None,
                 prompt: prompt.clone(),
             })
+        }
+        LaunchPrompt::Summary {
+            template,
+            context,
+            related,
+        } => {
+            let path = worktrees
+                .prepare(host, repo, number, session)
+                .await
+                .map_err(|error| error.to_string())?;
+            let head = match worktrees.head_oid(&path).await {
+                Ok(head) => head,
+                Err(error) => {
+                    discard_worktree(worktrees, &path).await;
+                    return Err(error.to_string());
+                }
+            };
+            let prepared = prepare_related(worktrees, host, session, &related_repos(related)).await;
+            let listed = merge_related(related, prepared.repos);
+            match summary_prompt(template, context, &head, listed) {
+                Ok(prompt) => Ok(Checkout {
+                    path,
+                    related: prepared.paths,
+                    local: local_folders(related),
+                    base_sha: Some(head),
+                    prompt,
+                }),
+                Err(error) => {
+                    discard_worktree(worktrees, &path).await;
+                    discard_worktrees(worktrees, &prepared.paths).await;
+                    Err(error)
+                }
+            }
         }
         LaunchPrompt::Plan { template, context } => {
             let prepared = worktrees
@@ -150,6 +298,8 @@ async fn checkout(request: &LaunchRequest) -> Result<Checkout, String> {
             match plan_prompt(template, context, &prepared) {
                 Ok(prompt) => Ok(Checkout {
                     path: prepared.path,
+                    related: Vec::new(),
+                    local: Vec::new(),
                     base_sha: Some(prepared.base_sha),
                     prompt,
                 }),
@@ -182,17 +332,17 @@ pub async fn launch(
 ) -> Result<Launched, LaunchError> {
     let worktrees = request.worktrees.clone();
     let planned = request
-        .planned_path()
+        .planned_paths()
         .map_err(|error| LaunchError::Failed(error.to_string()))?;
     _ = progress.unbounded_send(LaunchStage::PreparingWorktree);
     let prepare_started = Instant::now();
     let checkout = match unless_cancelled(&mut cancel, checkout(&request)).await {
         None => {
-            discard_worktree(&worktrees, &planned).await;
+            discard_worktrees(&worktrees, &planned).await;
             return Err(LaunchError::Cancelled);
         }
         Some(Err(error)) => {
-            discard_worktree(&worktrees, &planned).await;
+            discard_worktrees(&worktrees, &planned).await;
             return Err(LaunchError::Failed(error));
         }
         Some(Ok(checkout)) => checkout,
@@ -222,6 +372,7 @@ pub async fn launch(
             Ok(()) => {
                 return Ok(Launched {
                     worktree: checkout.path,
+                    related_worktrees: checkout.related,
                     head,
                     handle,
                 });
@@ -233,6 +384,7 @@ pub async fn launch(
         },
     };
     discard_worktree(&worktrees, &checkout.path).await;
+    discard_worktrees(&worktrees, &checkout.related).await;
     outcome
 }
 
@@ -243,7 +395,11 @@ async fn start(request: &LaunchRequest, checkout: &Checkout) -> Result<AgentSess
         .map_err(|error| error.to_string())??;
     let allowed_files = match &request.prompt {
         LaunchPrompt::Review { allowed_files, .. } => allowed_files.clone(),
-        LaunchPrompt::Plan { .. } => Vec::new(),
+        LaunchPrompt::Plan { .. } | LaunchPrompt::Summary { .. } => Vec::new(),
+    };
+    let refresh_project = match &request.prompt {
+        LaunchPrompt::Summary { context, .. } => context.refresh_project,
+        LaunchPrompt::Review { .. } | LaunchPrompt::Plan { .. } => false,
     };
     let ctx = SessionContext {
         id: request.session_id.clone(),
@@ -252,6 +408,11 @@ async fn start(request: &LaunchRequest, checkout: &Checkout) -> Result<AgentSess
         nonce: checkout.prompt.nonce.clone(),
         allowed_files,
         cwd: checkout.path.clone(),
+        read_roots: checkout.related.clone(),
+        local_roots: checkout.local.clone(),
+        repo: request.repo.clone(),
+        number: request.number,
+        refresh_project,
         model: request.model.clone(),
         permission_mode: request.permission_mode,
         kind: request.kind(),
@@ -310,6 +471,140 @@ mod tests {
         .unwrap();
         assert!(prompt.text.starts_with("#7 em develop @ abc123 ("));
         assert!(prompt.text.contains(&prompt.nonce));
+    }
+
+    fn summary_template(body: &str) -> PromptTemplate {
+        PromptTemplate {
+            id: "resumo".into(),
+            name: "Resumo".into(),
+            kind: TemplateKind::Summary,
+            body: body.into(),
+            ..PromptTemplate::default()
+        }
+    }
+
+    fn summary_context() -> SummaryContext {
+        SummaryContext {
+            pr_title: "Slot".into(),
+            pr_number: 7,
+            pr_url: "https://github.com/acme/api/pull/7".into(),
+            pr_body: String::new(),
+            repo: "acme/api".into(),
+            base: "main".into(),
+            base_sha: "base1".into(),
+            head: "fix/slot".into(),
+            head_sha: "definido ao iniciar".into(),
+            related: Vec::new(),
+            project_overview: None,
+            project_nodes: Vec::new(),
+            refresh_project: true,
+        }
+    }
+
+    fn prepared(path: &str) -> PreparedWorktree {
+        PreparedWorktree {
+            path: PathBuf::from(path),
+            base_sha: "feed".into(),
+            branch: "develop".into(),
+        }
+    }
+
+    #[test]
+    fn prepared_related_repo_carries_its_path_and_branch() {
+        let (repo, path) = related_entry("acme/fila", Ok(prepared("wt-fila")));
+        assert_eq!(repo.repo, "acme/fila");
+        assert_eq!(repo.path.as_deref(), Some("wt-fila"));
+        assert_eq!(repo.branch, "develop");
+        assert_eq!(repo.error, None);
+        assert_eq!(path, Some(PathBuf::from("wt-fila")));
+    }
+
+    #[test]
+    fn a_related_repo_whose_planned_path_fails_does_not_block_the_others() {
+        let repos = ["acme/a".to_owned(), "acme".to_owned(), "acme/c".to_owned()];
+
+        let paths = plannable_paths(&repos, |repo| match repo {
+            "acme" => Err("invalid repo"),
+            other => Ok(PathBuf::from(format!("wt-{other}"))),
+        });
+
+        assert_eq!(
+            paths,
+            [PathBuf::from("wt-acme/a"), PathBuf::from("wt-acme/c")]
+        );
+    }
+
+    #[test]
+    fn failed_related_repo_keeps_the_error_and_has_no_path() {
+        let (repo, path) = related_entry("acme/fila", Err("repo não encontrado".into()));
+        assert_eq!(repo.path, None);
+        assert_eq!(repo.error.as_deref(), Some("repo não encontrado"));
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn summary_prompt_uses_the_real_commit_and_marks_the_failed_related_repo() {
+        let (ok, _) = related_entry("acme/fila", Ok(prepared("wt-fila")));
+        let (failed, _) = related_entry("acme/pacientes", Err("repo não encontrado".into()));
+        let prompt = summary_prompt(
+            &summary_template("@ {{head_sha}} ({{nonce}})\n{{related}}"),
+            &summary_context(),
+            "abc123",
+            vec![ok, failed],
+        )
+        .unwrap();
+        assert!(prompt.text.starts_with("@ abc123 ("));
+        assert!(
+            prompt
+                .text
+                .contains("`acme/fila` (branch `develop`): `wt-fila`")
+        );
+        assert!(
+            prompt
+                .text
+                .contains("`acme/pacientes`: indisponível (repo não encontrado)")
+        );
+    }
+
+    #[test]
+    fn summary_prompt_lists_a_local_folder_in_its_configured_place() {
+        let folder = std::env::temp_dir();
+        let entries = vec![
+            RelatedEntry::Local(folder.clone()),
+            RelatedEntry::Repo("acme/fila".into()),
+        ];
+        let (prepared_fila, _) = related_entry("acme/fila", Ok(prepared("wt-fila")));
+
+        let prompt = summary_prompt(
+            &summary_template("{{related}}"),
+            &summary_context(),
+            "abc123",
+            merge_related(&entries, [prepared_fila]),
+        )
+        .unwrap();
+
+        let name = argon_core::local_folder_name(&folder);
+        assert_eq!(
+            prompt.text,
+            format!(
+                "- `{name}` (pasta local, pode ter mudanças não commitadas): `{}`\n- `acme/fila` (branch `develop`): `wt-fila`",
+                folder.display()
+            )
+        );
+        assert_eq!(related_repos(&entries), ["acme/fila"]);
+        assert_eq!(local_folders(&entries), [folder]);
+    }
+
+    #[test]
+    fn summary_prompt_reports_a_broken_template() {
+        let error = summary_prompt(
+            &summary_template("{{ issue.title }}"),
+            &summary_context(),
+            "abc123",
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Falha ao renderizar o prompt"));
     }
 
     #[test]

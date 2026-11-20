@@ -7,18 +7,19 @@ use argon_agents::{
     Support, Transport, WorktreeManager, agent_spec, agent_spec_for, list_models, lists_models,
     new_session_id, start_session_with, support_for,
 };
-use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey, SessionKind};
-use argon_github::{GithubClient, discover_accounts, token_for};
+use argon_core::{AgentKind, Config, Paths, PermissionMode, PrKey, RelatedRepo, SessionKind};
+use argon_github::{GithubClient, PrDetail, discover_accounts, token_for};
 use argon_store::Store;
 use futures::StreamExt;
 use tracing_subscriber::EnvFilter;
 
 mod prompt;
 
-use prompt::{node_id, render};
+use prompt::{node_id, render, render_summary};
 
 const HOST: &str = "github.com";
 const TEMPLATE_ID: &str = "review-padrao";
+const SUMMARY_TEMPLATE_ID: &str = "resumo-padrao";
 const RUN_TIMEOUT: Duration = Duration::from_secs(25 * 60);
 const PREVIEW_CHARS: usize = 160;
 
@@ -34,6 +35,8 @@ struct Args {
     transport: Option<Transport>,
     prompt: Option<String>,
     mode: Option<PermissionMode>,
+    session_kind: SessionKind,
+    related: Vec<String>,
     command: Option<Vec<String>>,
 }
 
@@ -41,8 +44,17 @@ fn usage() -> String {
     "usage: run_session <claude|codex|opencode|command-code> <owner/repo#n> [model] \
      [--cancel-after secs] [--startup-timeout secs] \
      [--transport acp|claude-stream|codex-app-server|opencode-serve] \
-     [--prompt text] [--mode supervised|accept-edits|full-access] [--command program args...]"
+     [--prompt text] [--mode supervised|accept-edits|full-access] \
+     [--kind review|summary] [--related owner/repo]... [--command program args...]"
         .to_owned()
+}
+
+fn parse_kind(value: Option<String>) -> Result<SessionKind, BoxError> {
+    match value.as_deref() {
+        Some("review") => Ok(SessionKind::Review),
+        Some("summary") => Ok(SessionKind::Summary),
+        _ => Err(usage().into()),
+    }
 }
 
 fn parse_mode(value: Option<String>) -> Result<PermissionMode, BoxError> {
@@ -73,6 +85,8 @@ fn parse_args() -> Result<Args, BoxError> {
     let mut transport = None;
     let mut prompt = None;
     let mut mode = None;
+    let mut session_kind = SessionKind::Review;
+    let mut related = Vec::new();
     let mut command = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -82,6 +96,8 @@ fn parse_args() -> Result<Args, BoxError> {
             "--transport" => transport = Some(parse_transport(args.next())?),
             "--prompt" => prompt = Some(args.next().ok_or_else(usage)?),
             "--mode" => mode = Some(parse_mode(args.next())?),
+            "--kind" => session_kind = parse_kind(args.next())?,
+            "--related" => related.push(args.next().ok_or_else(usage)?),
             "--command" => command = Some(args.by_ref().collect()),
             _ => positional.push(arg),
         }
@@ -105,6 +121,8 @@ fn parse_args() -> Result<Args, BoxError> {
         transport,
         prompt,
         mode,
+        session_kind,
+        related,
         command,
     })
 }
@@ -213,7 +231,7 @@ async fn drive(
                     break;
                 }
             }
-            AgentEvent::Findings { .. } => break,
+            AgentEvent::Findings { .. } | AgentEvent::Summary { .. } => break,
             AgentEvent::Error(_) if ended || handle.is_finished() => break,
             _ => {}
         }
@@ -226,13 +244,16 @@ fn summarize(paths: &Paths, id: &str, transactions: u64) -> Result<(), BoxError>
     let session = store.session(id)?.ok_or("session not persisted")?;
     let events: Vec<AgentEvent> = store.events(id)?;
     let findings = store.findings(id)?;
+    let summaries = store.summaries_for_session(id)?;
     println!(
-        "persisted: status={:?} model={} acp_session={:?} events={} findings={} turn_transactions={transactions}",
+        "persisted: status={:?} model={} acp_session={:?} events={} findings={} summaries={} related={} turn_transactions={transactions}",
         session.status,
         session.model,
         session.acp_session_id,
         events.len(),
-        findings.len()
+        findings.len(),
+        summaries.len(),
+        session.related_worktrees.len()
     );
     Ok(())
 }
@@ -293,6 +314,11 @@ async fn startup_probe(
         nonce: String::new(),
         allowed_files: Vec::new(),
         cwd,
+        read_roots: Vec::new(),
+        local_roots: Vec::new(),
+        repo: String::new(),
+        number: 0,
+        refresh_project: false,
         model: String::new(),
         permission_mode: PermissionMode::Supervised,
         kind: SessionKind::Review,
@@ -347,11 +373,6 @@ async fn run() -> Result<(), BoxError> {
     let detail = client
         .pr_detail(&node_id(&args.repo, args.number).await?)
         .await?;
-    let files = client.pr_files(&args.repo, args.number).await?;
-    let rendered = render(&detail, &files, &paths.data_dir.join("prompts"))?;
-    for warning in &rendered.warnings {
-        println!("prompt warning: {warning}");
-    }
 
     let model = match args.model.clone() {
         Some(model) => model,
@@ -363,43 +384,139 @@ async fn run() -> Result<(), BoxError> {
     let manager = WorktreeManager::new(&paths);
     let worktree: PathBuf = manager.prepare(HOST, &args.repo, args.number, &id).await?;
     println!("worktree: {}", worktree.display());
-    let writer = SessionWriter::open(&paths.db_file())?;
-    let ctx = SessionContext {
-        id: id.clone(),
-        pr: detail.pr.key(),
-        template_id: TEMPLATE_ID.to_owned(),
-        nonce: rendered.nonce.clone(),
-        allowed_files: files.iter().map(|file| file.path.clone()).collect(),
-        cwd: worktree.clone(),
-        model,
-        permission_mode: args.mode.unwrap_or_else(|| {
-            config
-                .agents
-                .get(&args.kind)
-                .map(|agent| agent.permission_mode())
-                .unwrap_or_default()
-        }),
-        kind: SessionKind::Review,
-        base_sha: None,
-    };
-    let prompt = args.prompt.clone().unwrap_or(rendered.text);
-
-    let outcome = match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {
-        Ok((session, handle)) => {
-            println!("session: {} (acp {})", session.id, session.agent_session_id);
-            let before = writer.transactions();
-            let driven = drive(&handle, prompt, args.cancel_after).await;
-            writer.flush().await;
-            let transactions = writer.transactions() - before;
-            handle.shutdown().await;
-            println!("shutdown: finished={}", handle.is_finished());
-            driven.and_then(|()| summarize(&paths, &id, transactions))
+    let mut created = vec![worktree.clone()];
+    let outcome = async {
+        let launch = match args.session_kind {
+            SessionKind::Summary => {
+                summary_launch(&manager, &detail, &worktree, &id, &args.related, &paths).await?
+            }
+            SessionKind::Review | SessionKind::Plan => {
+                let files = client.pr_files(&args.repo, args.number).await?;
+                Launch {
+                    rendered: render(&detail, &files, &paths.data_dir.join("prompts"))?,
+                    template_id: TEMPLATE_ID,
+                    allowed_files: files.iter().map(|file| file.path.clone()).collect(),
+                    read_roots: Vec::new(),
+                    base_sha: None,
+                }
+            }
+        };
+        created.extend(launch.read_roots.iter().cloned());
+        for warning in &launch.rendered.warnings {
+            println!("prompt warning: {warning}");
         }
-        Err(error) => Err(error.into()),
-    };
-    manager.remove(&worktree).await?;
-    println!("worktree removed: {}", !worktree.exists());
+        let writer = SessionWriter::open(&paths.db_file())?;
+        let ctx = SessionContext {
+            id: id.clone(),
+            pr: detail.pr.key(),
+            template_id: launch.template_id.to_owned(),
+            nonce: launch.rendered.nonce.clone(),
+            allowed_files: launch.allowed_files,
+            cwd: worktree.clone(),
+            read_roots: launch.read_roots,
+            local_roots: Vec::new(),
+            repo: args.repo.clone(),
+            number: args.number,
+            refresh_project: args.session_kind == SessionKind::Summary,
+            model,
+            permission_mode: args.mode.unwrap_or_else(|| {
+                config
+                    .agents
+                    .get(&args.kind)
+                    .map(|agent| agent.permission_mode())
+                    .unwrap_or_default()
+            }),
+            kind: args.session_kind,
+            base_sha: launch.base_sha,
+        };
+        let prompt = args.prompt.clone().unwrap_or(launch.rendered.text);
+        match start_session_with(&spec, ctx, writer.clone(), options(&args)).await {
+            Ok((session, handle)) => {
+                println!("session: {} (acp {})", session.id, session.agent_session_id);
+                let before = writer.transactions();
+                let driven = drive(&handle, prompt, args.cancel_after).await;
+                writer.flush().await;
+                let transactions = writer.transactions() - before;
+                handle.shutdown().await;
+                println!("shutdown: finished={}", handle.is_finished());
+                driven.and_then(|()| summarize(&paths, &id, transactions))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+    .await;
+    for path in &created {
+        if let Err(error) = manager.remove(path).await {
+            println!("failed to remove {}: {error}", path.display());
+        }
+    }
+    println!(
+        "worktrees removed: {}",
+        created.iter().all(|path| !path.exists())
+    );
     outcome
+}
+
+struct Launch {
+    rendered: argon_core::RenderedPrompt,
+    template_id: &'static str,
+    allowed_files: Vec<String>,
+    read_roots: Vec<PathBuf>,
+    base_sha: Option<String>,
+}
+
+async fn summary_launch(
+    manager: &WorktreeManager,
+    detail: &PrDetail,
+    worktree: &std::path::Path,
+    session: &str,
+    repos: &[String],
+    paths: &Paths,
+) -> Result<Launch, BoxError> {
+    let head = manager.head_oid(worktree).await?;
+    let mut related = Vec::new();
+    let mut read_roots = Vec::new();
+    for repo in repos {
+        match manager.prepare_related(HOST, repo, session).await {
+            Ok(prepared) => {
+                println!("related: {repo} -> {}", prepared.path.display());
+                related.push(RelatedRepo {
+                    repo: repo.clone(),
+                    path: Some(prepared.path.to_string_lossy().into_owned()),
+                    branch: prepared.branch,
+                    error: None,
+                    local: false,
+                });
+                read_roots.push(prepared.path);
+            }
+            Err(error) => {
+                println!("related {repo} unavailable: {error}");
+                related.push(RelatedRepo {
+                    repo: repo.clone(),
+                    path: None,
+                    branch: String::new(),
+                    error: Some(error.to_string()),
+                    local: false,
+                });
+            }
+        }
+    }
+    let rendered = match render_summary(detail, &head, related, &paths.data_dir.join("prompts")) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            for root in &read_roots {
+                let _ = manager.remove(root).await;
+            }
+            return Err(error);
+        }
+    };
+    Ok(Launch {
+        rendered,
+        template_id: SUMMARY_TEMPLATE_ID,
+        allowed_files: Vec::new(),
+        read_roots,
+        base_sha: Some(head),
+    })
 }
 #[tokio::main]
 async fn main() -> ExitCode {

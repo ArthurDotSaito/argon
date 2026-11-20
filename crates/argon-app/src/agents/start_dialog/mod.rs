@@ -13,7 +13,7 @@ use std::sync::Arc;
 use argon_agents::new_session_id;
 use argon_core::{
     AgentKind, Config, InvalidTemplate, Issue, PermissionMode, PrKey, PromptTemplate, PullRequest,
-    RenderedPrompt, SessionKind,
+    RenderedPrompt, RepoKey, SessionKind,
 };
 use argon_github::{IssueDetail, PrDetail};
 use gpui_kit::component::WindowExt as _;
@@ -23,12 +23,13 @@ use gpui_kit::{
     UniformListScrollHandle, Window, px,
 };
 
-use super::context::Gathered;
+use super::context::{Gathered, SummaryGathering};
 use super::detection::AgentOption;
 use super::launcher::LaunchStage;
 use super::sessions::AgentSessions;
 use crate::actions::OpenSettings;
 use crate::agents::choice::{Choice, permission_choices};
+use crate::project;
 use crate::services::{AppServices, Services};
 
 const DIALOG_WIDTH: f32 = 980.;
@@ -40,6 +41,11 @@ pub struct ReviewTarget {
     pub detail: Option<PrDetail>,
 }
 
+pub struct SummaryTarget {
+    pub pr: PullRequest,
+    pub detail: Option<PrDetail>,
+}
+
 pub struct PlanTarget {
     pub issue: Issue,
     pub detail: Option<IssueDetail>,
@@ -47,53 +53,55 @@ pub struct PlanTarget {
 
 pub enum Target {
     Review(ReviewTarget),
+    Summary(SummaryTarget),
     Plan(PlanTarget),
 }
 
 enum Subject {
-    Pr(PullRequest),
+    Pr(PullRequest, SessionKind),
     Issue(Issue),
 }
 
 impl Subject {
     fn of(target: &Target) -> Self {
         match target {
-            Target::Review(target) => Self::Pr(target.pr.clone()),
+            Target::Review(target) => Self::Pr(target.pr.clone(), SessionKind::Review),
+            Target::Summary(target) => Self::Pr(target.pr.clone(), SessionKind::Summary),
             Target::Plan(target) => Self::Issue(target.issue.clone()),
         }
     }
 
     fn kind(&self) -> SessionKind {
         match self {
-            Self::Pr(_) => SessionKind::Review,
+            Self::Pr(_, kind) => *kind,
             Self::Issue(_) => SessionKind::Plan,
         }
     }
 
     fn key(&self) -> PrKey {
         match self {
-            Self::Pr(pr) => pr.key(),
+            Self::Pr(pr, _) => pr.key(),
             Self::Issue(issue) => issue.key(),
         }
     }
 
     fn repo(&self) -> &str {
         match self {
-            Self::Pr(pr) => &pr.repo,
+            Self::Pr(pr, _) => &pr.repo,
             Self::Issue(issue) => &issue.repo,
         }
     }
 
     fn host(&self) -> &str {
         match self {
-            Self::Pr(pr) => &pr.host,
+            Self::Pr(pr, _) => &pr.host,
             Self::Issue(issue) => &issue.host,
         }
     }
 
     fn number(&self) -> u64 {
         match self {
-            Self::Pr(pr) => pr.number,
+            Self::Pr(pr, _) => pr.number,
             Self::Issue(issue) => issue.number,
         }
     }
@@ -102,6 +110,7 @@ impl Subject {
 #[derive(Clone)]
 enum Gathering {
     Review(Arc<Gathered>),
+    Summary(Arc<SummaryGathering>),
     Plan(Arc<IssueDetail>),
 }
 
@@ -151,6 +160,7 @@ pub struct StartDialog {
     template_select: ChoiceSelect,
     include_reviews: bool,
     include_ci: bool,
+    refresh_project: bool,
     context: Load<Gathering>,
     ci: Option<Load<String>>,
     preview: Option<Preview>,
@@ -193,6 +203,11 @@ fn open_settings(window: &mut Window, cx: &mut App) {
     window.defer(cx, |window, cx| {
         window.dispatch_action(Box::new(OpenSettings), cx)
     });
+}
+
+fn open_project(key: RepoKey, window: &mut Window, cx: &mut App) {
+    window.close_dialog(cx);
+    window.defer(cx, move |window, cx| project::open(key, window, cx));
 }
 
 fn fresh_session_id() -> Result<String, SharedString> {
@@ -249,6 +264,7 @@ impl StartDialog {
         let mut this = Self {
             include_reviews: review && config.review.include_previous_reviews,
             include_ci: review && config.review.include_ci_failures,
+            refresh_project: false,
             subject,
             config,
             agents: Load::Loading,

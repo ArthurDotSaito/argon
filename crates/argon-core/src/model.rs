@@ -21,6 +21,21 @@ impl PrKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RepoKey {
+    pub host: String,
+    pub repo: String,
+}
+
+impl RepoKey {
+    pub fn new(host: impl Into<String>, repo: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            repo: repo.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrState {
     Open,
@@ -86,6 +101,7 @@ pub enum SubjectKind {
 pub enum SessionKind {
     Review,
     Plan,
+    Summary,
 }
 
 impl SessionKind {
@@ -93,7 +109,12 @@ impl SessionKind {
         match self {
             Self::Review => "review",
             Self::Plan => "plan",
+            Self::Summary => "summary",
         }
+    }
+
+    pub fn is_read_only(self) -> bool {
+        matches!(self, Self::Plan | Self::Summary)
     }
 }
 
@@ -278,5 +299,13 @@ mod tests {
     fn session_kind_as_str_matches_persisted_values() {
         assert_eq!(SessionKind::Review.as_str(), "review");
         assert_eq!(SessionKind::Plan.as_str(), "plan");
+        assert_eq!(SessionKind::Summary.as_str(), "summary");
+    }
+
+    #[test]
+    fn only_plan_and_summary_sessions_are_read_only() {
+        assert!(!SessionKind::Review.is_read_only());
+        assert!(SessionKind::Plan.is_read_only());
+        assert!(SessionKind::Summary.is_read_only());
     }
 }

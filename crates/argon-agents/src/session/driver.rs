@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use argon_core::{FindingsParse, PermissionMode, PrKey, SessionKind};
+use argon_core::{FindingsParse, PermissionMode, PrKey, SessionKind, SummaryOutput};
 use argon_store::SessionStatus;
 use tokio::sync::{broadcast, watch};
 
@@ -11,12 +11,13 @@ use super::events::{AgentEvent, PendingPermission, SavedFinding};
 use super::record::Recorder;
 use super::stderr::StderrTail;
 use super::turn::{TurnBuffer, TurnOutcome, finish_turn};
-use super::writer::{Op, SessionWriter};
+use super::writer::{Op, SessionWriter, SummaryRecord};
 use crate::registry::ModelInfo;
 use crate::util::lock;
 
 pub(super) const ENDED_BEFORE_ACTIVATION: &str = "o agente encerrou antes de abrir a sessão";
 const MISSING_BASE_SHA: &str = "a sessão de plano não tem o commit base";
+const MISSING_SUMMARY_SHA: &str = "a sessão de resumo não tem o commit do worktree";
 
 #[path = "driver_permissions.rs"]
 mod permission_flow;
@@ -49,7 +50,7 @@ struct State {
     tool_kinds: HashMap<String, String>,
     next_permission: u64,
     permission_mode: PermissionMode,
-    plan_recorded: bool,
+    output_recorded: bool,
 }
 
 pub(super) struct SharedConfig {
@@ -59,6 +60,10 @@ pub(super) struct SharedConfig {
     pub base_sha: Option<String>,
     pub denial_ends_turn: bool,
     pub cwd: PathBuf,
+    pub read_roots: Vec<PathBuf>,
+    pub repo: String,
+    pub number: u64,
+    pub refresh_project: bool,
     pub nonce: String,
     pub allowed_files: Vec<String>,
     pub writer: SessionWriter,
@@ -97,7 +102,7 @@ impl Shared {
                 tool_kinds: HashMap::new(),
                 next_permission: 0,
                 permission_mode,
-                plan_recorded: false,
+                output_recorded: false,
             }),
         }
     }
@@ -117,6 +122,10 @@ impl Shared {
                 base_sha: None,
                 denial_ends_turn: false,
                 cwd,
+                read_roots: Vec::new(),
+                repo: String::new(),
+                number: 0,
+                refresh_project: false,
                 nonce: String::new(),
                 allowed_files: Vec::new(),
                 writer,
@@ -137,6 +146,11 @@ impl Shared {
 
     pub fn kind(&self) -> SessionKind {
         self.config.kind
+    }
+
+    #[cfg(test)]
+    pub(super) fn read_roots(&self) -> &[PathBuf] {
+        &self.config.read_roots
     }
 
     pub fn writer(&self) -> &SessionWriter {
@@ -313,12 +327,12 @@ impl Shared {
         self.status_locked(&mut state, SessionStatus::Running);
     }
 
-    pub(super) fn mark_plan_recorded(&self) {
-        self.lock().plan_recorded = true;
+    pub(super) fn mark_output_recorded(&self) {
+        self.lock().output_recorded = true;
     }
 
     pub async fn end_turn(&self, stop_reason: &str) {
-        let (outcome, plan_recorded) = {
+        let (outcome, output_recorded) = {
             let mut state = self.lock();
             self.cancel_pending_locked(&mut state);
             let text = state.buffer.take();
@@ -335,15 +349,15 @@ impl Shared {
                 &self.config.allowed_files,
                 self.config.kind,
             );
-            (outcome, state.plan_recorded)
+            (outcome, state.output_recorded)
         };
         match outcome {
             TurnOutcome::NotFinished => {}
-            TurnOutcome::Unreadable(_)
-                if self.config.kind == SessionKind::Plan && plan_recorded => {}
+            TurnOutcome::Unreadable(_) if self.config.kind.is_read_only() && output_recorded => {}
             TurnOutcome::Unreadable(message) => self.emit(AgentEvent::Error(message)),
             TurnOutcome::Findings(parsed) => self.save_findings(parsed).await,
             TurnOutcome::Plan(markdown) => self.record_plan(markdown).await,
+            TurnOutcome::Summary(output) => self.record_summary(output).await,
         }
         let mut state = self.lock();
         state.in_turn = false;
@@ -394,7 +408,7 @@ impl Shared {
         };
         match recorded {
             Ok(draft) => {
-                self.mark_plan_recorded();
+                self.mark_output_recorded();
                 self.emit(AgentEvent::PlanDraft {
                     draft_id: draft.id,
                     markdown,
@@ -404,6 +418,53 @@ impl Shared {
                 tracing::error!(session = %self.config.id, %error, "failed to save plan draft");
                 self.emit(AgentEvent::Error(format!(
                     "não consegui gravar o plano: {error}"
+                )));
+            }
+        }
+    }
+
+    async fn record_summary(&self, output: SummaryOutput) {
+        let SummaryOutput {
+            summary,
+            project,
+            arch,
+            touched,
+        } = output;
+        let project =
+            project.filter(|_| self.config.refresh_project && !self.config.repo.is_empty());
+        let project_updated = project.is_some();
+        let recorded = match self.config.base_sha.as_deref() {
+            Some(head_sha) => {
+                self.config
+                    .writer
+                    .record_summary(SummaryRecord {
+                        session: self.config.id.clone(),
+                        subject: self.config.subject.clone(),
+                        repo: self.config.repo.clone(),
+                        number: self.config.number,
+                        body: summary.clone(),
+                        head_sha: head_sha.to_owned(),
+                        touched,
+                        project,
+                        arch,
+                    })
+                    .await
+            }
+            None => Err(MISSING_SUMMARY_SHA.to_owned()),
+        };
+        match recorded {
+            Ok(stored) => {
+                self.mark_output_recorded();
+                self.emit(AgentEvent::Summary {
+                    id: stored.id,
+                    body: summary,
+                    project_updated,
+                });
+            }
+            Err(error) => {
+                tracing::error!(session = %self.config.id, %error, "failed to save pull request summary");
+                self.emit(AgentEvent::Error(format!(
+                    "não consegui gravar o resumo: {error}"
                 )));
             }
         }

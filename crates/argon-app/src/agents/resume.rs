@@ -42,6 +42,11 @@ fn session_context(row: &SessionRow, worktree: PathBuf) -> SessionContext {
         nonce: row.nonce.clone(),
         allowed_files: row.allowed_files.clone(),
         cwd: worktree,
+        read_roots: row.related_worktrees.clone(),
+        local_roots: row.local_roots.clone(),
+        repo: row.repo.clone().unwrap_or_default(),
+        number: row.pr_number.unwrap_or_default(),
+        refresh_project: row.refresh_project,
         model: row.model.clone(),
         permission_mode: PermissionMode::parse(&row.permission_mode).unwrap_or_default(),
         kind: row.kind,
@@ -143,6 +148,7 @@ impl AgentSessions {
         let session_id = row.id.clone();
         let pr = row.pr.clone();
         let kind = row.kind;
+        let related_worktrees = row.related_worktrees.clone();
         self.add(
             ActiveSession {
                 session_id: row.id,
@@ -153,6 +159,7 @@ impl AgentSessions {
                 model_label: row.model_label.unwrap_or_else(|| row.model.clone()),
                 model: row.model,
                 worktree,
+                related_worktrees,
                 handle,
                 head_oid: Some(head.clone()),
                 created_at: row.created_at,
@@ -210,6 +217,11 @@ mod tests {
             failure_reason: None,
             kind: SessionKind::Review,
             base_sha: None,
+            related_worktrees: Vec::new(),
+            repo: None,
+            pr_number: None,
+            refresh_project: false,
+            local_roots: Vec::new(),
         }
     }
 
@@ -255,5 +267,27 @@ mod tests {
         assert_eq!(ctx.kind, SessionKind::Plan);
         assert_eq!(ctx.base_sha.as_deref(), Some("abc123"));
         assert_eq!(ctx.pr, PrKey::new("github.com", "I_9"));
+    }
+
+    #[test]
+    fn resumed_summary_session_keeps_its_target_and_refresh_choice() {
+        let mut summary = row(SessionStatus::Completed);
+        summary.kind = SessionKind::Summary;
+        summary.base_sha = Some("def456".into());
+        summary.related_worktrees = vec![PathBuf::from(r"C:\wt\rel-a")];
+        summary.local_roots = vec![PathBuf::from(r"D:\src\pacientes-api")];
+        summary.repo = Some("acme/api".into());
+        summary.pr_number = Some(42);
+        summary.refresh_project = true;
+
+        let ctx = session_context(&summary, PathBuf::from("wt"));
+
+        assert_eq!(ctx.kind, SessionKind::Summary);
+        assert_eq!(ctx.repo, "acme/api");
+        assert_eq!(ctx.number, 42);
+        assert!(ctx.refresh_project);
+        assert_eq!(ctx.read_roots, [PathBuf::from(r"C:\wt\rel-a")]);
+        assert_eq!(ctx.local_roots, [PathBuf::from(r"D:\src\pacientes-api")]);
+        assert_eq!(ctx.base_sha.as_deref(), Some("def456"));
     }
 }

@@ -8,6 +8,12 @@ pub const MERGE: &str = "Merge";
 pub const REVIEW: &str = "Revisar";
 pub const REVIEW_TOOLTIP: &str = "Abrir a review deste PR";
 pub const AI_REVIEW: &str = "Agent Review";
+pub const SUMMARIZE_LOAD_FAILED: &str = "Não consegui carregar o PR para o Summarize";
+pub const SUMMARY_AVAILABLE: &str = "Resumo disponível";
+pub const SUMMARY_STALE: &str = "Resumo desatualizado";
+pub const SUMMARY_STALE_NOTE: &str = "· o PR recebeu commits depois do resumo";
+pub const OPEN_SUMMARY: &str = "Abrir resumo";
+pub const SUMMARY_REGENERATE: &str = "Gerar de novo";
 pub const RETRY: &str = "Tentar de novo";
 pub const COPY_BRANCH: &str = "Copiar branch";
 pub const MERGING: &str = "Fazendo merge…";
@@ -38,6 +44,8 @@ pub const PROPERTY_STATE: &str = "Estado";
 pub const PROPERTY_REASON: &str = "Motivo";
 pub const PROPERTY_AUTHOR: &str = "Autor";
 pub const PROPERTY_BRANCHES: &str = "Branches";
+pub const PROPERTY_PROJECT: &str = "Projeto";
+pub const OPEN_PROJECT: &str = "Abrir a página do projeto";
 pub const PROPERTY_CI: &str = "CI";
 pub const PROPERTY_REVIEWERS: &str = "Reviewers";
 pub const PROPERTY_CHANGES: &str = "Alterações";
@@ -59,6 +67,10 @@ pub fn short_sha(oid: &str) -> &str {
 
 pub fn load_failed(error: &str) -> String {
     format!("Falha ao carregar o PR: {error}")
+}
+
+pub fn summary_fresh_note(ago: &str) -> String {
+    format!("· gerado {ago}")
 }
 
 pub fn comment_failed(error: &str) -> String {
@@ -150,6 +162,11 @@ mod tests {
             repo: repo.into(),
             number,
         }
+    }
+
+    #[test]
+    fn fresh_summary_note_carries_the_age() {
+        assert_eq!(summary_fresh_note("há 2 h"), "· gerado há 2 h");
     }
 
     #[test]

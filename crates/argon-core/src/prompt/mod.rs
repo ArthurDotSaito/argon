@@ -2,6 +2,7 @@ mod defaults;
 mod plan;
 mod profile;
 mod render;
+mod summary;
 mod template;
 #[cfg(test)]
 mod test_support;
@@ -15,6 +16,7 @@ pub use profile::{
     resolve_template,
 };
 pub use render::{PromptContext, RenderedPrompt, render_prompt};
+pub use summary::{RelatedRepo, SummaryContext, render_summary_prompt};
 pub use template::{
     InvalidTemplate, PromptTemplate, TemplateKind, TemplateSet, load_templates, scan_templates,
 };

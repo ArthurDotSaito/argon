@@ -1,4 +1,4 @@
-use argon_core::{PrState, PullRequest, Reason, ReviewState};
+use argon_core::{PrState, PullRequest, Reason, RepoKey, ReviewState};
 use argon_github::{Label, PrDetail};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -19,6 +19,7 @@ use super::timeline_item::review_style;
 use crate::agents;
 use crate::inbox::{reason_line, reason_tone};
 use crate::issue::{self, destination};
+use crate::project;
 use crate::ui::{self, properties};
 
 const AVATAR_SIZE: f32 = 18.;
@@ -56,6 +57,15 @@ pub fn action_buttons(
 ) -> Vec<AnyElement> {
     let merging = matches!(props.merge_state, MergeState::Merging);
     let ai_review = ai_review_button(props.can_review_with_ai, full_width, cx);
+    let summarize = Button::new("pr-summarize")
+        .icon(Icon::new(IconName::TextAlignStart))
+        .label(agents::SUMMARIZE)
+        .small()
+        .outline()
+        .when(full_width, |button| button.w_full())
+        .tooltip(agents::SUMMARIZE_TOOLTIP)
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_summarize(window, cx)))
+        .into_any_element();
     let review = (show_review && props.pr.state == PrState::Open).then(|| {
         Button::new("pr-review")
             .icon(Icon::new(IconName::FileDiff))
@@ -89,6 +99,7 @@ pub fn action_buttons(
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_on_github(cx)))
         .into_any_element();
     std::iter::once(ai_review)
+        .chain(std::iter::once(summarize))
         .chain(review)
         .chain(merge)
         .chain(std::iter::once(open))
@@ -178,6 +189,29 @@ fn summary(props: &HeaderProps<'_>, reason: Option<&Reason>, cx: &App) -> Div {
         .children(reason_row)
         .child(properties::row(labels::PROPERTY_AUTHOR, author, cx))
         .child(properties::row(labels::PROPERTY_BRANCHES, branches, cx))
+        .child(properties::row(
+            labels::PROPERTY_PROJECT,
+            project_value(props, cx),
+            cx,
+        ))
+}
+
+fn project_value(props: &HeaderProps<'_>, cx: &App) -> Div {
+    let theme = cx.theme();
+    let pr = props.pr;
+    let key = RepoKey::new(pr.host.clone(), pr.repo.clone());
+    let link = Button::new("pr-open-project")
+        .label(project::labels::repo_name(&pr.repo).to_owned())
+        .xsmall()
+        .link()
+        .tooltip(labels::OPEN_PROJECT)
+        .on_click(move |_, window, cx| project::open(key.clone(), window, cx));
+    values().child(link).child(
+        div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(project::labels::overview_note(props.overview_at, props.now)),
+    )
 }
 
 fn review_group(props: &HeaderProps<'_>, cx: &App) -> Div {

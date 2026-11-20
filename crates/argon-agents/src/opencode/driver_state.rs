@@ -179,7 +179,7 @@ pub(super) fn grant_shortcut_applies(
     cwd: &Path,
     kind: SessionKind,
 ) -> bool {
-    kind != SessionKind::Plan && grants.contains(&ask.kind) && session_grant_applies(ask, cwd)
+    !kind.is_read_only() && grants.contains(&ask.kind) && session_grant_applies(ask, cwd)
 }
 
 pub(super) fn grants_session(answer: &PermissionAnswer) -> bool {

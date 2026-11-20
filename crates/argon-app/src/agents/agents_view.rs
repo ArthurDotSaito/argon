@@ -48,6 +48,7 @@ fn start_agent(key: PrKey, kind: SessionKind, window: &mut Window, cx: &mut App)
     if let Some(workspace) = Workspace::global(cx) {
         _ = workspace.update(cx, |workspace, cx| match kind {
             SessionKind::Review => workspace.review_pr_with_ai(key, window, cx),
+            SessionKind::Summary => workspace.summarize_pr(key, window, cx),
             SessionKind::Plan => workspace.plan_issue_with_agent(key, window, cx),
         });
     }
@@ -289,6 +290,11 @@ impl AgentsView {
         let (icon, open_label, start_label) = match kind {
             SessionKind::Review => (IconName::GitPullRequest, labels::OPEN_PR, labels::REVIEW_PR),
             SessionKind::Plan => (IconName::CircleDot, labels::OPEN_ISSUE, labels::PLAN_ISSUE),
+            SessionKind::Summary => (
+                IconName::GitPullRequest,
+                labels::OPEN_PR,
+                labels::SUMMARIZE_PR,
+            ),
         };
         let toggle = (!group.archived.is_empty())
             .then(|| self.archived_toggle(&group.pr, group.archived.len(), expanded, cx));

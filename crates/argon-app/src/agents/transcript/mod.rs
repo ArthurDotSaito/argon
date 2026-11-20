@@ -81,6 +81,10 @@ pub enum Item {
         unreadable: usize,
     },
     PlanDraft(i64),
+    Summary {
+        id: i64,
+        project_updated: bool,
+    },
     Interrupted(String),
     Error(String),
 }
@@ -224,6 +228,14 @@ impl Transcript {
             }
             AgentEvent::Error(message) => self.items.push(Item::Error(message.clone())),
             AgentEvent::PlanDraft { draft_id, .. } => self.push_plan_draft(*draft_id),
+            AgentEvent::Summary {
+                id,
+                project_updated,
+                ..
+            } => self.items.push(Item::Summary {
+                id: *id,
+                project_updated: *project_updated,
+            }),
             AgentEvent::ModelsAvailable(_) | AgentEvent::Resync { .. } => {}
         }
     }

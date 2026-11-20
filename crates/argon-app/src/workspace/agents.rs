@@ -1,10 +1,10 @@
-use argon_core::{PrKey, SessionKind, Side};
+use argon_core::{PrKey, RepoKey, SessionKind, Side};
 use gpui_kit::component::Placement;
 use gpui_kit::component::dock::{InsertTarget, PanelId};
 use gpui_kit::{App, Context, Entity, Focusable as _, Global, WeakEntity, Window, px};
 
 use super::Workspace;
-use crate::actions::{PlanWithAgent, ReviewWithAi};
+use crate::actions::{OpenProject, PlanWithAgent, ReviewWithAi, SummarizePr};
 use crate::agents::{AgentSessions, AgentsEvent, SessionCatalog, SessionFilter};
 use crate::center::CenterItem;
 use crate::dock_items;
@@ -22,7 +22,7 @@ pub enum SessionPlacement {
 
 pub fn subject_item(key: PrKey, kind: SessionKind) -> CenterItem {
     match kind {
-        SessionKind::Review => CenterItem::Pr(key),
+        SessionKind::Review | SessionKind::Summary => CenterItem::Pr(key),
         SessionKind::Plan => CenterItem::Issue(key),
     }
 }
@@ -92,6 +92,13 @@ impl Workspace {
         self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
         if let Some(view) = self.pr_view(&pr, cx) {
             view.update(cx, |view, cx| view.open_ai_review(window, cx));
+        }
+    }
+
+    pub fn summarize_pr(&mut self, pr: PrKey, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_item(CenterItem::Pr(pr.clone()), false, window, cx);
+        if let Some(view) = self.pr_view(&pr, cx) {
+            view.update(cx, |view, cx| view.open_summarize(window, cx));
         }
     }
 
@@ -253,6 +260,39 @@ impl Workspace {
         }
     }
 
+    pub(super) fn on_summarize_pr(
+        &mut self,
+        _: &SummarizePr,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.active_pr_view(window, cx) {
+            view.update(cx, |view, cx| view.open_summarize(window, cx));
+        } else if let Some(pr) = self.active_session_pr(window, cx) {
+            self.summarize_pr(pr, window, cx);
+        }
+    }
+
+    pub(super) fn on_open_project(
+        &mut self,
+        _: &OpenProject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self
+            .active_pr_view(window, cx)
+            .and_then(|view| view.read(cx).project_key())
+            .or_else(|| {
+                let pr = self.active_session_pr(window, cx)?;
+                let inbox = self.inbox.read(cx);
+                let pr = inbox.pr(&pr)?;
+                Some(RepoKey::new(pr.host.clone(), pr.repo.clone()))
+            });
+        if let Some(key) = key {
+            self.open_item(CenterItem::Project(key), false, window, cx);
+        }
+    }
+
     pub(super) fn on_plan_with_agent(
         &mut self,
         _: &PlanWithAgent,
@@ -276,7 +316,7 @@ impl Workspace {
 
     pub(super) fn active_session_pr(&self, window: &Window, cx: &App) -> Option<PrKey> {
         match self.active_session_subject(window, cx)? {
-            (pr, SessionKind::Review) => Some(pr),
+            (pr, SessionKind::Review | SessionKind::Summary) => Some(pr),
             (_, SessionKind::Plan) => None,
         }
     }

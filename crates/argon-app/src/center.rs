@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use argon_core::PrKey;
+use argon_core::{PrKey, RepoKey};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelEvent, PanelInfo, PanelState};
 use gpui_kit::{
     AnyView, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{SessionCatalog, session_tab_title};
 use crate::inbox::{self, InboxModel};
+use crate::project;
 
 pub const CENTER_PANEL: &str = "argon.center";
 
@@ -46,6 +47,7 @@ pub enum CenterItem {
     AgentSession(String),
     Settings,
     Issue(PrKey),
+    Project(RepoKey),
 }
 
 impl CenterItem {
@@ -57,6 +59,7 @@ impl CenterItem {
             Self::Agents => "Agentes".into(),
             Self::AgentSession(id) => session_tab_title(id, cx),
             Self::Settings => "Configurações".into(),
+            Self::Project(key) => project::labels::tab_title(&key.repo).into(),
         }
     }
 }
@@ -70,6 +73,13 @@ pub enum CenterPanelEvent {
 struct CenterPanelState {
     item: CenterItem,
     preview: bool,
+}
+
+fn restored_state(info: &PanelInfo) -> Option<CenterPanelState> {
+    match info {
+        PanelInfo::Panel(value) => serde_json::from_value::<CenterPanelState>(value.clone()).ok(),
+        _ => None,
+    }
 }
 
 pub struct CenterPanel {
@@ -159,13 +169,7 @@ impl CenterPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let state = match info {
-            PanelInfo::Panel(value) => {
-                serde_json::from_value::<CenterPanelState>(value.clone()).ok()
-            }
-            _ => None,
-        };
-        let (item, preview) = state
+        let (item, preview) = restored_state(info)
             .map(|state| (state.item, state.preview))
             .unwrap_or((CenterItem::Inbox, false));
         Self::create(
@@ -261,5 +265,39 @@ impl Panel for CenterPanel {
 impl Render for CenterPanel {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().size_full().child(self.content.view.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project_item() -> CenterItem {
+        CenterItem::Project(RepoKey::new("github.com", "acme/agenda-api"))
+    }
+
+    #[test]
+    fn project_item_survives_the_saved_layout_state() {
+        let state = CenterPanelState {
+            item: project_item(),
+            preview: false,
+        };
+        let info = PanelInfo::panel(serde_json::to_value(state).unwrap());
+        let restored = restored_state(&info).unwrap();
+        assert_eq!(restored.item, project_item());
+        assert!(!restored.preview);
+    }
+
+    #[test]
+    fn project_items_are_equal_only_for_the_same_host_and_repo() {
+        assert_eq!(project_item(), project_item());
+        assert_ne!(
+            project_item(),
+            CenterItem::Project(RepoKey::new("ghe.local", "acme/agenda-api"))
+        );
+        assert_ne!(
+            project_item(),
+            CenterItem::Project(RepoKey::new("github.com", "acme/portal"))
+        );
     }
 }

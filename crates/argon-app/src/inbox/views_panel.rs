@@ -1,11 +1,13 @@
+use argon_core::RepoKey;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
+    Styled as _, Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use super::items::{AccountEntry, OrgEntry};
@@ -14,6 +16,10 @@ use super::{InboxView, labels};
 use crate::actions::OpenSettings;
 use crate::agents::{SessionCatalog, SessionFilter, session_filter_label};
 use crate::center::CenterItem;
+use crate::config_watch::{self, ConfigChanged};
+use crate::project;
+use crate::review::{DraftsBus, DraftsChanged, ProjectsChanged};
+use crate::services::{AppServices, flatten};
 use crate::theme::density;
 use crate::ui::avatar;
 use crate::workspace::Workspace;
@@ -54,6 +60,8 @@ const GROUPS: [(&str, &[InboxView]); 4] = [
 
 pub struct ViewsPanel {
     model: Entity<InboxModel>,
+    saved_projects: Vec<RepoKey>,
+    projects_task: Option<Task<()>>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -64,11 +72,75 @@ impl ViewsPanel {
         if let Some(catalog) = SessionCatalog::global(cx) {
             subscriptions.push(cx.observe(&catalog, |_, _, cx| cx.notify()));
         }
-        Self {
+        subscriptions.push(
+            cx.subscribe(&config_watch::entity(cx), |_, _, _: &ConfigChanged, cx| {
+                cx.notify()
+            }),
+        );
+        let drafts = DraftsBus::global(cx);
+        subscriptions.push(cx.subscribe(&drafts, |this, _, _: &DraftsChanged, cx| {
+            this.load_projects(cx)
+        }));
+        subscriptions.push(cx.subscribe(&drafts, |this, _, _: &ProjectsChanged, cx| {
+            this.load_projects(cx)
+        }));
+        let mut this = Self {
             model,
+            saved_projects: Vec::new(),
+            projects_task: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
+        };
+        this.load_projects(cx);
+        this
+    }
+
+    fn load_projects(&mut self, cx: &mut Context<Self>) {
+        let Some(services) = cx
+            .try_global::<AppServices>()
+            .map(|global| global.0.clone())
+        else {
+            return;
+        };
+        self.projects_task = Some(cx.spawn(async move |this, cx| {
+            let loaded = flatten(
+                services
+                    .store()
+                    .call(|store| {
+                        store.project_keys().map(|keys| {
+                            keys.into_iter()
+                                .map(|(host, repo)| RepoKey::new(host, repo))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .await,
+            );
+            _ = this.update(cx, |this, cx| match loaded {
+                Ok(keys) => {
+                    this.saved_projects = keys;
+                    cx.notify();
+                }
+                Err(error) => tracing::warn!(%error, "failed to load project overviews"),
+            });
+        }));
+    }
+
+    fn projects_group(&self, cx: &App) -> Option<Div> {
+        let review = config_watch::current(cx).review;
+        let keys = project::project_list(&self.saved_projects, &review);
+        if keys.is_empty() {
+            return None;
         }
+        let items = keys.into_iter().enumerate().map(|(ix, key)| {
+            let name = project::labels::repo_name(&key.repo).to_owned();
+            let open_key = key.clone();
+            nav_item(("project", ix), false, cx)
+                .child(Icon::new(IconName::BookOpen).small())
+                .child(div().flex_1().truncate().child(name))
+                .on_click(move |_, window, cx| project::open(open_key.clone(), window, cx))
+                .context_menu(move |menu, _, _| project_menu(menu, &key))
+        });
+        Some(group(labels::GROUP_PROJECTS, cx).children(items))
     }
 
     fn view_item(&self, view: InboxView, cx: &App) -> Stateful<Div> {
@@ -166,6 +238,22 @@ impl ViewsPanel {
         }
         footer.children(accounts.iter().map(|account| account_item(account, cx)))
     }
+}
+
+fn project_menu(menu: PopupMenu, key: &RepoKey) -> PopupMenu {
+    let (open_key, remove_key) = (key.clone(), key.clone());
+    menu.item(
+        PopupMenuItem::new(project::labels::OPEN_PROJECT)
+            .icon(Icon::new(IconName::BookOpen))
+            .on_click(move |_, window, cx| project::open(open_key.clone(), window, cx)),
+    )
+    .item(
+        PopupMenuItem::new(project::labels::REMOVE_PROJECT)
+            .icon(Icon::new(IconName::Trash))
+            .on_click(move |_, window, cx| {
+                project::request_removal(remove_key.clone(), window, cx)
+            }),
+    )
 }
 
 fn agents_group(cx: &App) -> Option<Div> {
@@ -374,6 +462,7 @@ impl Render for ViewsPanel {
                     .gap_3()
                     .children(before)
                     .children(agents_group(cx))
+                    .children(self.projects_group(cx))
                     .children(after)
                     .child(self.orgs(cx)),
             )

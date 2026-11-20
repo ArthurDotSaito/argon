@@ -110,11 +110,12 @@ impl Turns {
 pub(super) fn auto_allowed(
     ask: &PermissionAsk,
     cwd: &Path,
+    read_roots: &[PathBuf],
     mode: PermissionMode,
     kind: SessionKind,
     grants: &HashSet<String>,
 ) -> bool {
-    match decide_permission(ask, cwd, mode, kind) {
+    match decide_permission(ask, cwd, read_roots, mode, kind) {
         PermissionDecision::Allow { .. } => true,
         PermissionDecision::Deny { .. } => false,
         PermissionDecision::Ask(_) => grants.contains(&ask.kind) && session_grant_applies(ask, cwd),
