@@ -29,6 +29,9 @@ pub const NO_LINKS: &str = "Nenhuma ligação";
 pub const READ: &str = "lido";
 pub const RELATED_PROJECT: &str = "projeto relacionado";
 pub const OPEN_PROJECT: &str = "Abrir projeto";
+pub const REMOVE_PROJECT: &str = "Remover projeto…";
+pub const REMOVE_PROJECT_CONFIRM: &str = "Remover";
+pub const REMOVE_PROJECT_NOTE: &str = "A visão salva, o diagrama e a lista de projetos relacionados deste repositório serão apagados. Os resumos de PR e as sessões continuam.";
 pub const CLOSE: &str = "Fechar";
 pub const EDIT_IN_PROJECT: &str = "Editar na página do projeto";
 pub const ERROR_EMPTY: &str = "Digite o repositório no formato owner/nome ou cole a URL do GitHub.";
@@ -64,6 +67,14 @@ pub fn empty_explanation(repo: &str) -> String {
     format!(
         "Rode o Summarize em um PR de {repo}. Na primeira vez o agente lê o projeto inteiro e a visão fica salva aqui."
     )
+}
+
+pub fn remove_project_title(repo: &str) -> String {
+    format!("Remover o projeto {repo}?")
+}
+
+pub fn remove_project_failed(error: &str) -> String {
+    format!("Falha ao remover o projeto: {error}")
 }
 
 pub fn related_counter(count: usize) -> String {
@@ -200,6 +211,14 @@ mod tests {
         assert_eq!(agent_label("Codex", Some("gpt")), "Codex · gpt");
         assert_eq!(agent_label("Codex", Some(" ")), "Codex");
         assert_eq!(agent_label("Codex", None), "Codex");
+    }
+
+    #[test]
+    fn remove_title_names_the_repo_with_owner() {
+        assert_eq!(
+            remove_project_title("acme/api"),
+            "Remover o projeto acme/api?"
+        );
     }
 
     #[test]

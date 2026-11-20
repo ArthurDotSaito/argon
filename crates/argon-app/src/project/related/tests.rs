@@ -298,3 +298,42 @@ fn storing_an_empty_list_drops_the_key() {
     store_related(&mut map, "github.com/acme/api".into(), Vec::new());
     assert!(map.is_empty());
 }
+
+#[test]
+fn forgetting_a_project_drops_only_its_entry() {
+    let mut map = BTreeMap::new();
+    store_related(&mut map, "github.com/acme/api".into(), list(&["acme/web"]));
+    store_related(&mut map, "github.com/acme/web".into(), list(&["acme/api"]));
+    store_related(&mut map, "ghe.local/acme/api".into(), list(&["acme/db"]));
+
+    assert!(forget_related(&mut map, "github.com", "acme/api"));
+
+    assert_eq!(map.len(), 2);
+    assert!(map.contains_key("github.com/acme/web"));
+    assert!(map.contains_key("ghe.local/acme/api"));
+    assert!(!forget_related(&mut map, "github.com", "acme/api"));
+}
+
+#[test]
+fn forgetting_the_last_entry_leaves_the_review_config_without_the_map() {
+    let mut review = argon_core::ReviewCfg::default();
+    store_related(
+        &mut review.repo_related,
+        "github.com/acme/api".into(),
+        list(&["acme/web"]),
+    );
+    assert!(
+        serde_json::to_string(&review)
+            .unwrap()
+            .contains("repo_related")
+    );
+
+    forget_related(&mut review.repo_related, "github.com", "acme/api");
+
+    assert!(review.repo_related.is_empty());
+    assert!(
+        !serde_json::to_string(&review)
+            .unwrap()
+            .contains("repo_related")
+    );
+}

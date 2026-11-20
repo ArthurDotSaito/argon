@@ -36,6 +36,21 @@ impl ProjectView {
             .child(buttons)
             .child(self.related_group(cx))
             .child(refresh_group(cx))
+            .child(self.remove_button(cx))
+    }
+
+    fn remove_button(&self, cx: &mut Context<Self>) -> Div {
+        let key = self.key.clone();
+        let button = Button::new("project-remove")
+            .icon(Icon::new(IconName::Trash))
+            .label(labels::REMOVE_PROJECT)
+            .small()
+            .outline()
+            .danger()
+            .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
+                crate::project::request_removal(key.clone(), window, cx)
+            }));
+        h_flex().w_full().justify_start().child(button)
     }
 
     fn related_group(&self, cx: &mut Context<Self>) -> Div {

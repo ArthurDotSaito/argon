@@ -2,6 +2,7 @@ use argon_core::RepoKey;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::{BasePanel, Panel, PanelControl, PanelEvent};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _,
@@ -17,7 +18,7 @@ use crate::agents::{SessionCatalog, SessionFilter, session_filter_label};
 use crate::center::CenterItem;
 use crate::config_watch::{self, ConfigChanged};
 use crate::project;
-use crate::review::{DraftsBus, DraftsChanged};
+use crate::review::{DraftsBus, DraftsChanged, ProjectsChanged};
 use crate::services::{AppServices, flatten};
 use crate::theme::density;
 use crate::ui::avatar;
@@ -80,6 +81,9 @@ impl ViewsPanel {
         subscriptions.push(cx.subscribe(&drafts, |this, _, _: &DraftsChanged, cx| {
             this.load_projects(cx)
         }));
+        subscriptions.push(cx.subscribe(&drafts, |this, _, _: &ProjectsChanged, cx| {
+            this.load_projects(cx)
+        }));
         let mut this = Self {
             model,
             saved_projects: Vec::new(),
@@ -129,10 +133,12 @@ impl ViewsPanel {
         }
         let items = keys.into_iter().enumerate().map(|(ix, key)| {
             let name = project::labels::repo_name(&key.repo).to_owned();
+            let open_key = key.clone();
             nav_item(("project", ix), false, cx)
                 .child(Icon::new(IconName::BookOpen).small())
                 .child(div().flex_1().truncate().child(name))
-                .on_click(move |_, window, cx| project::open(key.clone(), window, cx))
+                .on_click(move |_, window, cx| project::open(open_key.clone(), window, cx))
+                .context_menu(move |menu, _, _| project_menu(menu, &key))
         });
         Some(group(labels::GROUP_PROJECTS, cx).children(items))
     }
@@ -232,6 +238,22 @@ impl ViewsPanel {
         }
         footer.children(accounts.iter().map(|account| account_item(account, cx)))
     }
+}
+
+fn project_menu(menu: PopupMenu, key: &RepoKey) -> PopupMenu {
+    let (open_key, remove_key) = (key.clone(), key.clone());
+    menu.item(
+        PopupMenuItem::new(project::labels::OPEN_PROJECT)
+            .icon(Icon::new(IconName::BookOpen))
+            .on_click(move |_, window, cx| project::open(open_key.clone(), window, cx)),
+    )
+    .item(
+        PopupMenuItem::new(project::labels::REMOVE_PROJECT)
+            .icon(Icon::new(IconName::Trash))
+            .on_click(move |_, window, cx| {
+                project::request_removal(remove_key.clone(), window, cx)
+            }),
+    )
 }
 
 fn agents_group(cx: &App) -> Option<Div> {

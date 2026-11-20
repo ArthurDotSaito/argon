@@ -2,6 +2,7 @@ mod architecture;
 pub(crate) mod labels;
 mod project_view;
 mod related;
+mod remove;
 mod side_panel;
 
 use std::collections::BTreeSet;
@@ -13,6 +14,7 @@ use crate::center::CenterItem;
 use crate::workspace::Workspace;
 
 pub use project_view::ProjectView;
+pub use remove::request_removal;
 
 pub fn project_list(saved: &[RepoKey], review: &ReviewCfg) -> Vec<RepoKey> {
     let configured = review

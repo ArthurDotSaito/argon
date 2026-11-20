@@ -27,7 +27,9 @@ use super::labels;
 use super::properties;
 use crate::inbox::InboxModel;
 use crate::keymap::PR_VIEW_CONTEXT;
-use crate::review::{DraftsBus, DraftsChanged, ReviewScope, ReviewTab, ReviewTabEvent};
+use crate::review::{
+    DraftsBus, DraftsChanged, ProjectsChanged, ReviewScope, ReviewTab, ReviewTabEvent,
+};
 use crate::services::{AppServices, Services};
 
 pub use body::{
@@ -164,6 +166,9 @@ impl PrView {
                 if event.pr == this.key {
                     this.reload_summary(cx);
                 }
+            }),
+            cx.subscribe(&drafts, |this, _, _: &ProjectsChanged, cx| {
+                this.reload_summary(cx)
             }),
         ];
         let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);

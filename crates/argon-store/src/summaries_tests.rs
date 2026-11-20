@@ -258,3 +258,46 @@ fn project_keys_list_host_and_repo_ordered_without_reading_the_views() {
         ]
     );
 }
+
+fn save_project(store: &mut Store, host: &str, repo: &str) {
+    store
+        .record_summary(NewSummary {
+            host,
+            repo,
+            project: Some(NewProject {
+                body: "visão",
+                diagram: Some(&graph()),
+            }),
+            ..new("s1", "resumo", "sha1")
+        })
+        .unwrap();
+}
+
+#[test]
+fn deleting_a_project_overview_reports_whether_it_existed() {
+    let mut store = Store::open_in_memory().unwrap();
+    save_project(&mut store, HOST, REPO);
+
+    assert!(store.delete_project_overview(HOST, REPO).unwrap());
+    assert!(store.project_overview(HOST, REPO).unwrap().is_none());
+    assert!(!store.delete_project_overview(HOST, REPO).unwrap());
+}
+
+#[test]
+fn deleting_a_project_overview_keeps_other_repos_and_the_pr_summaries() {
+    let mut store = Store::open_in_memory().unwrap();
+    save_project(&mut store, HOST, REPO);
+    save_project(&mut store, HOST, "acme/web");
+    save_project(&mut store, "ghe.local", REPO);
+
+    assert!(store.delete_project_overview(HOST, REPO).unwrap());
+
+    assert_eq!(
+        store.project_keys().unwrap(),
+        [
+            ("ghe.local".to_owned(), "acme/api".to_owned()),
+            ("github.com".to_owned(), "acme/web".to_owned()),
+        ]
+    );
+    assert!(store.latest_summary_for_pr(HOST, PR).unwrap().is_some());
+}

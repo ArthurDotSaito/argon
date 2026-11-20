@@ -3,7 +3,7 @@ use std::path::Path;
 
 use argon_core::{
     LocalFolderError, MAX_RELATED_REPOS, RelatedEntry, checked_local_folder, is_repo_full_name,
-    same_local_folder,
+    repo_key, same_local_folder,
 };
 
 use super::labels;
@@ -174,6 +174,10 @@ pub fn store_related(map: &mut BTreeMap<String, Vec<String>>, key: String, relat
     } else {
         map.insert(key, related);
     }
+}
+
+pub fn forget_related(map: &mut BTreeMap<String, Vec<String>>, host: &str, repo: &str) -> bool {
+    map.remove(&repo_key(host, repo)).is_some()
 }
 
 #[cfg(test)]

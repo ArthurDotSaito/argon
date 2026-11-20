@@ -182,6 +182,14 @@ impl Store {
         Ok(row)
     }
 
+    pub fn delete_project_overview(&mut self, host: &str, repo: &str) -> Result<bool> {
+        let removed = self.conn.execute(
+            "DELETE FROM project_overviews WHERE host = ?1 AND repo = ?2",
+            params![host, repo],
+        )?;
+        Ok(removed > 0)
+    }
+
     pub fn project_keys(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self
             .conn

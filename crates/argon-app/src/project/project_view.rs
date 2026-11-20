@@ -22,7 +22,7 @@ use super::repo_url;
 use crate::agents::agent_markdown;
 use crate::config_watch::{self, ConfigChanged};
 use crate::pr;
-use crate::review::{DraftsBus, DraftsChanged};
+use crate::review::{DraftsBus, DraftsChanged, ProjectsChanged};
 use crate::services::{AppServices, flatten};
 use crate::ui::arch_diagram;
 
@@ -120,6 +120,7 @@ impl ProjectView {
                 cx.notify();
             }),
             cx.subscribe(&drafts, |this, _, _: &DraftsChanged, cx| this.reload(cx)),
+            cx.subscribe(&drafts, |this, _, _: &ProjectsChanged, cx| this.reload(cx)),
         ];
         let related = config_watch::current(cx)
             .review

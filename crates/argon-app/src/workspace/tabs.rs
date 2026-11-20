@@ -71,6 +71,21 @@ impl Workspace {
         }
     }
 
+    pub fn close_item(&mut self, item: &CenterItem, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self
+            .center_panels(cx)
+            .into_iter()
+            .find(|panel| panel.read(cx).item() == item)
+        else {
+            return;
+        };
+        if self.last_focused == Some(PanelId::from(panel.entity_id())) {
+            self.last_focused = None;
+        }
+        self.dock_area
+            .update(cx, |area, cx| area.remove_panel(panel, window, cx));
+    }
+
     pub fn close_active_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(panel) = self.active_center_panel(window, cx) else {
             return;
