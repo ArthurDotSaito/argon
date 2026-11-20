@@ -253,6 +253,8 @@ ALTER TABLE agent_sessions ADD COLUMN pr_number INTEGER NULL;
 ALTER TABLE agent_sessions ADD COLUMN refresh_project INTEGER NOT NULL DEFAULT 0;
 ";
 
+const SESSION_LOCAL_ROOTS: &str = "ALTER TABLE agent_sessions ADD COLUMN local_roots TEXT NULL;";
+
 const MIGRATIONS: &[M<'static>] = &[
     M::up(INITIAL),
     M::up(COMPOSITE_PR_KEY),
@@ -264,6 +266,7 @@ const MIGRATIONS: &[M<'static>] = &[
     M::up(ISSUE_TABLES),
     M::up(SESSION_KIND_AND_PLAN_DRAFTS),
     M::up(PR_SUMMARIES),
+    M::up(SESSION_LOCAL_ROOTS),
 ];
 
 fn migrations() -> Migrations<'static> {
@@ -629,5 +632,32 @@ mod tests {
         assert_eq!(session.pr_number, None);
         assert!(!session.refresh_project);
         assert_eq!(session.acp_session_id.as_deref(), Some("ses_1"));
+    }
+
+    #[test]
+    fn migration_eleven_adds_local_roots_and_keeps_related_worktrees() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrations().to_version(&mut conn, 10).unwrap();
+        conn.execute_batch(
+            "INSERT INTO agent_sessions
+                (id, host, pr_id, agent, model, template, status, acp_session_id, created_at,
+                 updated_at, kind, related_worktrees, repo, pr_number, refresh_project)
+             VALUES ('s1', 'github.com', 'PR_1', 'codex', 'm', 't', 'completed', 'ses_1', 1, 2,
+                     'summary', '[\"C:/wt/rel-a\"]', 'acme/api', 7, 1);",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        let store = Store { conn };
+        let session = store.session("s1").unwrap().unwrap();
+        assert!(session.local_roots.is_empty());
+        assert_eq!(
+            session.related_worktrees,
+            [std::path::PathBuf::from("C:/wt/rel-a")]
+        );
+        assert_eq!(session.repo.as_deref(), Some("acme/api"));
+        assert!(session.refresh_project);
     }
 }

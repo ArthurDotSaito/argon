@@ -15,6 +15,7 @@ pub struct SummaryState {
     overview: Option<ProjectOverview>,
     repo: Option<String>,
     related: Vec<PathBuf>,
+    local: Vec<PathBuf>,
 }
 
 pub(super) struct SummaryData {
@@ -22,6 +23,7 @@ pub(super) struct SummaryData {
     overview: Option<ProjectOverview>,
     repo: Option<String>,
     related: Vec<PathBuf>,
+    local: Vec<PathBuf>,
 }
 
 pub(super) fn load_summary_data(
@@ -31,8 +33,8 @@ pub(super) fn load_summary_data(
 ) -> Result<SummaryData, StoreError> {
     let session = store.session(session_id)?;
     let summaries = store.summaries_for_session(session_id)?;
-    let (repo, related) = session
-        .map(|row| (row.repo, row.related_worktrees))
+    let (repo, related, local) = session
+        .map(|row| (row.repo, row.related_worktrees, row.local_roots))
         .unwrap_or_default();
     let overview = match &repo {
         Some(repo) => store.project_overview(host, repo)?,
@@ -43,6 +45,7 @@ pub(super) fn load_summary_data(
         overview,
         repo,
         related,
+        local,
     })
 }
 
@@ -77,11 +80,17 @@ impl SummaryState {
             overview,
             repo,
             related,
+            local,
         } = data;
         self.items = summaries;
         self.overview = overview;
         self.repo = repo;
         self.related = related;
+        self.local = local;
+    }
+
+    fn read_roots(&self) -> Vec<PathBuf> {
+        self.related.iter().chain(&self.local).cloned().collect()
     }
 }
 
@@ -100,6 +109,14 @@ impl ThreadModel {
 
     pub fn related_roots(&self) -> &[PathBuf] {
         &self.summaries.related
+    }
+
+    pub fn local_roots(&self) -> &[PathBuf] {
+        &self.summaries.local
+    }
+
+    pub fn read_roots(&self) -> Vec<PathBuf> {
+        self.summaries.read_roots()
     }
 
     pub fn project_refreshed(&self) -> bool {

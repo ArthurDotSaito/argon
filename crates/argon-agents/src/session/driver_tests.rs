@@ -54,6 +54,7 @@ async fn shared_configured(
             repo: None,
             pr_number: None,
             refresh_project: false,
+            local_roots: Vec::new(),
         })
         .await
         .unwrap();

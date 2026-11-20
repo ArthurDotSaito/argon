@@ -66,7 +66,7 @@ Limitação: as regras `allow` do próprio usuário em `~/.codex/rules` e as reg
 No PR, o botão **Summarize** (também na paleta e no atalho `m`) abre uma sessão que explica o projeto e o que o PR faz. Funciona em PR aberto, fechado ou mergeado.
 
 - **Somente leitura**, com as mesmas regras do Agent Plan.
-- **Projetos relacionados**: cada repositório tem uma página de projeto (grupo "Projetos" na barra lateral, ou a linha "Projeto" nas propriedades do PR) onde se listam até 8 repositórios ligados a ele por fila, rede ou pacote. O Argon faz checkout da branch padrão de cada um numa pasta `rel-…` ao lado das worktrees do repositório, e o agente lê essas pastas junto com a worktree do PR. Um relacionado que falha no checkout é avisado ao agente e o resto segue.
+- **Projetos relacionados**: cada repositório tem uma página de projeto (grupo "Projetos" na barra lateral, ou a linha "Projeto" nas propriedades do PR) onde se listam até 8 repositórios ligados a ele por fila, rede ou pacote. O Argon faz checkout da branch padrão de cada um numa pasta `rel-…` ao lado das worktrees do repositório, e o agente lê essas pastas junto com a worktree do PR. Um relacionado que falha no checkout é avisado ao agente e o resto segue. O relacionado entra como `owner/nome` ou pela URL do GitHub, ou como uma pasta local escolhida no seletor de pastas; a pasta local é lida como está, inclusive mudanças não commitadas, sem checkout, e nunca é apagada pelo Argon.
 - **Visão do projeto**: na primeira vez num repositório o agente lê o projeto inteiro e devolve o texto (objetivo, finalidade, arquitetura, integrações) e o diagrama da arquitetura. A visão fica salva na página do projeto; nos PRs seguintes o agente parte dela, a menos que "Reler o projeto inteiro" esteja marcado no diálogo, o que substitui a visão salva.
 - **Resumo do PR**: fica só no Argon, num cartão da sessão e num aviso no PR, que fica amarelo quando o PR recebe commits depois do resumo. Nada é publicado no GitHub.
 - **Diagrama**: a aba Arquitetura da página do projeto desenha quem chama o projeto, os componentes dele e do que ele depende, com zoom e rolagem. No cartão do resumo aparece o recorte com o que o PR toca. O diagrama vem como dados do agente e é validado antes de ser guardado (até 40 nós e 80 ligações).
@@ -80,7 +80,7 @@ Leitura nas pastas relacionadas, por agente:
 | OpenCode (nativo) | Pede um card de diretório externo antes da leitura; a leitura em si passa. |
 | ACP | Sem card, pela regra do Argon. |
 
-As pastas relacionadas só liberam leitura e busca, só em sessão somente leitura, e só se forem pastas `rel-…` existentes depois de resolver o caminho. Editar, apagar ou mover nelas é negado. O Claude Code pode carregar instruções (`CLAUDE.md`, skills) das pastas adicionadas com `--add-dir`; são a branch padrão de repositórios que o próprio usuário listou.
+As pastas relacionadas só liberam leitura e busca, só em sessão somente leitura, e só se forem pastas `rel-…` existentes depois de resolver o caminho, ou pastas locais existentes que não sejam a raiz do disco nem a pasta do usuário. Editar, apagar ou mover nelas é negado. O Claude Code pode carregar instruções (`CLAUDE.md`, skills) das pastas adicionadas com `--add-dir`; são a branch padrão de repositórios que o próprio usuário listou.
 
 ### Uso do plano
 

@@ -315,6 +315,7 @@ async fn startup_probe(
         allowed_files: Vec::new(),
         cwd,
         read_roots: Vec::new(),
+        local_roots: Vec::new(),
         repo: String::new(),
         number: 0,
         refresh_project: false,
@@ -413,6 +414,7 @@ async fn run() -> Result<(), BoxError> {
             allowed_files: launch.allowed_files,
             cwd: worktree.clone(),
             read_roots: launch.read_roots,
+            local_roots: Vec::new(),
             repo: args.repo.clone(),
             number: args.number,
             refresh_project: args.session_kind == SessionKind::Summary,
@@ -483,6 +485,7 @@ async fn summary_launch(
                     path: Some(prepared.path.to_string_lossy().into_owned()),
                     branch: prepared.branch,
                     error: None,
+                    local: false,
                 });
                 read_roots.push(prepared.path);
             }
@@ -493,6 +496,7 @@ async fn summary_launch(
                     path: None,
                     branch: String::new(),
                     error: Some(error.to_string()),
+                    local: false,
                 });
             }
         }

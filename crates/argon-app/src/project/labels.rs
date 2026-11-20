@@ -11,10 +11,10 @@ pub const NO_OVERVIEW: &str = "Sem visão salva";
 pub const NO_SAVED_OVERVIEW: &str = "sem visão salva";
 pub const EMPTY_TITLE: &str = "Ainda não há visão deste projeto";
 pub const RELATED_TITLE: &str = "Projetos relacionados";
-pub const RELATED_PLACEHOLDER: &str = "owner/nome";
-pub const RELATED_NOTE: &str =
-    "O Summarize clona a branch padrão de cada um para o agente ler junto com este projeto.";
+pub const RELATED_PLACEHOLDER: &str = "owner/nome ou URL do GitHub";
+pub const RELATED_NOTE: &str = "O Summarize clona a branch padrão de cada repositório para o agente ler junto com este projeto. Uma pasta local é lida como está, inclusive mudanças não commitadas.";
 pub const ADD: &str = "Adicionar";
+pub const PICK_FOLDER: &str = "Escolher pasta…";
 pub const REMOVE: &str = "Remover";
 pub const REFRESH_TITLE: &str = "Atualizar a visão";
 pub const REFRESH_NOTE: &str = "Rode o Summarize em um PR deste repositório com “Reler o projeto” marcado. A visão nova substitui a atual.";
@@ -31,11 +31,19 @@ pub const RELATED_PROJECT: &str = "projeto relacionado";
 pub const OPEN_PROJECT: &str = "Abrir projeto";
 pub const CLOSE: &str = "Fechar";
 pub const EDIT_IN_PROJECT: &str = "Editar na página do projeto";
-pub const ERROR_EMPTY: &str = "Digite o repositório no formato owner/nome.";
-pub const ERROR_FORMAT: &str = "Formato inválido. Use owner/nome, por exemplo acme/api.";
+pub const ERROR_EMPTY: &str = "Digite o repositório no formato owner/nome ou cole a URL do GitHub.";
+pub const ERROR_FORMAT: &str =
+    "Formato inválido. Use owner/nome ou a URL do repositório, por exemplo acme/api.";
+pub const ERROR_OTHER_HOST: &str =
+    "Esta URL é de outro servidor. Use um repositório do mesmo host deste projeto.";
 pub const ERROR_DUPLICATE: &str = "Este projeto já está na lista.";
 pub const ERROR_OWN_REPO: &str = "Este é o próprio projeto, não precisa entrar na lista.";
-
+pub const ERROR_FOLDER_MISSING: &str = "A pasta não existe.";
+pub const ERROR_NOT_A_FOLDER: &str = "Escolha uma pasta, não um arquivo.";
+pub const ERROR_DRIVE_ROOT: &str =
+    "A raiz do disco não pode entrar na lista. Escolha a pasta do projeto.";
+pub const ERROR_USER_HOME: &str =
+    "A sua pasta de usuário não pode entrar na lista. Escolha a pasta do projeto.";
 pub fn error_limit() -> String {
     format!("A lista aceita no máximo {MAX_RELATED_REPOS} projetos.")
 }

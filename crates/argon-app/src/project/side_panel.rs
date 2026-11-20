@@ -1,3 +1,4 @@
+use argon_core::{RelatedEntry, local_folder_name};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -50,6 +51,12 @@ impl ProjectView {
             .small()
             .outline()
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.add_related(window, cx)));
+        let folder_button = Button::new("project-related-folder")
+            .icon(Icon::new(IconName::FolderOpen))
+            .label(labels::PICK_FOLDER)
+            .small()
+            .outline()
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.pick_folder(cx)));
         let theme = cx.theme();
         let title = h_flex()
             .gap_1p5()
@@ -86,6 +93,7 @@ impl ProjectView {
                     .child(Input::new(&self.input).small()),
             )
             .child(add_button);
+        let folder = h_flex().w_full().justify_end().child(folder_button);
         let error = self.input_error.map(|error| {
             div()
                 .text_xs()
@@ -96,13 +104,22 @@ impl ProjectView {
             .child(title)
             .children(list)
             .child(add)
+            .child(folder)
             .children(error)
             .child(note(labels::RELATED_NOTE, cx))
     }
 
-    fn related_row(&self, ix: usize, repo: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn related_row(&self, ix: usize, entry: &str, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
-        let target = repo.to_owned();
+        let target = entry.to_owned();
+        let (icon, name, path) = match RelatedEntry::parse(entry) {
+            Some(RelatedEntry::Local(path)) => (
+                IconName::Folder,
+                local_folder_name(&path),
+                Some(path.display().to_string()),
+            ),
+            Some(RelatedEntry::Repo(_)) | None => (IconName::Network, entry.to_owned(), None),
+        };
         h_flex()
             .id(("project-related", ix))
             .w_full()
@@ -111,19 +128,24 @@ impl ProjectView {
             .gap_2()
             .items_center()
             .when(ix > 0, |this| this.border_t_1().border_color(theme.border))
+            .child(Icon::new(icon).xsmall().text_color(theme.muted_foreground))
             .child(
-                Icon::new(IconName::Network)
-                    .xsmall()
-                    .text_color(theme.muted_foreground),
-            )
-            .child(
-                div()
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
+                    .gap_1p5()
+                    .items_baseline()
                     .font_family(theme.mono_font_family.clone())
                     .text_xs()
-                    .child(repo.to_owned()),
+                    .child(div().flex_none().max_w_full().truncate().child(name))
+                    .children(path.map(|path| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme.muted_foreground)
+                            .child(path)
+                    })),
             )
             .child(
                 Button::new(("project-related-remove", ix))

@@ -854,6 +854,101 @@ fn only_existing_related_directories_are_valid_read_roots() {
     assert_eq!(kept, [related]);
 }
 
+fn local_root() -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(r"D:\src\pacientes-api")
+    } else {
+        PathBuf::from("/src/pacientes-api")
+    }
+}
+
+fn in_local(name: &str) -> String {
+    local_root().join(name).to_string_lossy().into_owned()
+}
+
+#[test]
+fn a_local_folder_is_read_and_searched_but_never_written_in_read_only_sessions() {
+    let roots = [related_root(), local_root()];
+    let reads = [
+        request(Some("read"), &[in_local("src/lib.rs")], json!({})),
+        request(Some("search"), &[in_local("src")], json!({})),
+        request(
+            Some("search"),
+            &[],
+            json!({"glob": format!("{}/**/*.cs", local_root().display())}),
+        ),
+        request(
+            Some("read"),
+            &[in_related("a.rs"), in_local("b.cs"), inside("c.rs")],
+            json!({}),
+        ),
+    ];
+    for session in READ_ONLY_SESSIONS {
+        for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            for req in &reads {
+                let decision = decide_read_only(req, mode, session, &roots);
+                assert!(
+                    allowed(&decision),
+                    "{session:?} {mode:?} {req}: {decision:?}"
+                );
+            }
+            for kind in ["edit", "delete", "move"] {
+                let req = request(Some(kind), &[in_local("src/lib.rs")], json!({}));
+                let decision = decide_read_only(&req, mode, session, &roots);
+                assert!(
+                    denied_with(&decision, "reject-once"),
+                    "{session:?} {mode:?} {kind}: {decision:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_local_folder_releases_nothing_in_a_review() {
+    let roots = [local_root()];
+    for kind in ["read", "search", "edit", "delete", "move"] {
+        let req = request(Some(kind), &[in_local("src/lib.rs")], json!({}));
+        let decision = decide(
+            &acp_ask(&req, None),
+            &cwd(),
+            &roots,
+            PermissionMode::AcceptEdits,
+            SessionKind::Review,
+        );
+        assert!(asks(&decision), "{kind}: {decision:?}");
+    }
+}
+
+#[test]
+fn local_roots_keep_real_folders_without_the_related_prefix() {
+    let tree = TempTree::new("local");
+    let base = &tree.0;
+    let drive_root = base.ancestors().last().unwrap().to_path_buf();
+
+    let kept = valid_local_roots(
+        &[
+            base.join("other"),
+            base.join("other").join("..").join("other"),
+            base.join("rel-abc"),
+            base.join("missing"),
+            base.join("rel-file"),
+            PathBuf::from("other"),
+            drive_root,
+            base.clone(),
+        ],
+        Some(base),
+    );
+
+    assert_eq!(
+        kept,
+        [
+            dunce::canonicalize(base.join("other")).unwrap(),
+            dunce::canonicalize(base.join("rel-abc")).unwrap(),
+        ]
+    );
+}
+
 #[test]
 fn related_dir_names_need_the_rel_prefix_and_a_suffix() {
     assert!(is_related_dir_name("rel-abc"));

@@ -144,11 +144,11 @@ impl ThreadView {
     }
 
     pub(super) fn tool_lines(&self, items: &[Item], cx: &App) -> Vec<ToolLine> {
-        let roots = self.model.read(cx).related_roots();
+        let roots = self.model.read(cx).read_roots();
         items
             .iter()
             .filter_map(|item| match item {
-                Item::Tool(tool) => Some(self.tool_line_data(tool, roots)),
+                Item::Tool(tool) => Some(self.tool_line_data(tool, &roots)),
                 _ => None,
             })
             .collect()

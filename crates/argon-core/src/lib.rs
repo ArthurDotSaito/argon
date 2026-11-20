@@ -12,6 +12,7 @@ mod plan_output;
 mod prompt;
 mod reason;
 mod redact;
+mod related;
 mod review;
 mod summary_output;
 mod time;
@@ -46,6 +47,10 @@ pub use prompt::{
 };
 pub use reason::{Reason, issue_reason, reason};
 pub use redact::{redact_line, redact_text};
+pub use related::{
+    LocalFolderError, RelatedEntry, checked_local_folder, local_folder_name, related_entries,
+    same_local_folder, user_home,
+};
 pub use review::{
     DraftComment, DraftReview, DraftSource, DraftThreadInput, ReviewError, ReviewEvent,
     ReviewSubmission, build_submission, single_comment_submission,

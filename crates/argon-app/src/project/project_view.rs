@@ -1,7 +1,8 @@
+use std::path::Path;
 use std::rc::Rc;
 
 use argon_agents::defaults::agent_defaults;
-use argon_core::{RepoKey, repo_key};
+use argon_core::{RepoKey, repo_key, user_home};
 use argon_store::{ProjectOverview, Store};
 use chrono::Local;
 use gpui_kit::assets::IconName;
@@ -10,8 +11,9 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
+    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, Window, div, px,
 };
 
 use super::labels::{self, OriginLine};
@@ -219,11 +221,46 @@ impl ProjectView {
     pub(super) fn add_related(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input.read(cx).value().to_string();
         let current = self.current_related(cx);
-        match related::add_related(&current, &self.key.repo, &text) {
+        match related::add_related(&current, &self.key.repo, &self.key.host, &text) {
             Ok(next) => {
                 self.input_error = None;
                 self.input
                     .update(cx, |input, cx| input.set_value("", window, cx));
+                self.save_related(next, cx);
+            }
+            Err(error) => self.input_error = Some(error),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn pick_folder(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            let folder = match picked.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "failed to open the folder picker");
+                    None
+                }
+                Ok(Ok(None)) | Err(_) => None,
+            };
+            if let Some(folder) = folder {
+                _ = this.update(cx, |this, cx| this.add_local_related(&folder, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn add_local_related(&mut self, folder: &Path, cx: &mut Context<Self>) {
+        let current = self.current_related(cx);
+        match related::add_local_related(&current, folder, user_home().as_deref()) {
+            Ok(next) => {
+                self.input_error = None;
                 self.save_related(next, cx);
             }
             Err(error) => self.input_error = Some(error),

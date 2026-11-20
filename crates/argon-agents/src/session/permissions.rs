@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use argon_core::{PermissionMode, SessionKind};
+use argon_core::{PermissionMode, SessionKind, checked_local_folder};
 use serde_json::Value;
 
 use super::events::PermissionOption;
@@ -190,6 +190,24 @@ pub(crate) fn valid_read_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
         })
         .cloned()
         .collect()
+}
+
+pub(crate) fn valid_local_roots(roots: &[PathBuf], home: Option<&Path>) -> Vec<PathBuf> {
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        match checked_local_folder(root, home) {
+            Ok(resolved) => {
+                let resolved = dunce::simplified(&resolved).to_path_buf();
+                if !kept.contains(&resolved) {
+                    kept.push(resolved);
+                }
+            }
+            Err(reason) => {
+                tracing::warn!(path = %root.display(), ?reason, "ignoring an invalid local folder");
+            }
+        }
+    }
+    kept
 }
 
 pub fn is_inside(cwd: &Path, candidate: &str) -> bool {

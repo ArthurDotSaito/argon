@@ -175,14 +175,17 @@ mod tests {
             repo: Some("acme/api".into()),
             pr_number: Some(1),
             refresh_project: false,
+            local_roots: Vec::new(),
         }
     }
 
     fn finished_store(related: Vec<PathBuf>) -> Store {
+        finished_store_with(summary_session("s1", related))
+    }
+
+    fn finished_store_with(session: NewAgentSession) -> Store {
         let mut store = Store::open_in_memory().unwrap();
-        store
-            .create_session(&summary_session("s1", related))
-            .unwrap();
+        store.create_session(&session).unwrap();
         store
             .set_session_status("s1", SessionStatus::Completed)
             .unwrap();
@@ -206,6 +209,24 @@ mod tests {
                 archive: false,
             }]
         );
+    }
+
+    #[test]
+    fn cleaning_finished_sessions_never_touches_a_local_folder() {
+        let related = PathBuf::from(r"C:\wt\rel-a");
+        let local = PathBuf::from(r"D:\src\pacientes-api");
+        let store = finished_store_with(NewAgentSession {
+            local_roots: vec![local.clone()],
+            ..summary_session("s1", vec![related.clone()])
+        });
+
+        let stale = stale_sessions(&store, Utc::now() + TimeDelta::days(1)).unwrap();
+        let known = store.worktree_paths().unwrap();
+
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].paths, [PathBuf::from(r"C:\wt\pr-1"), related]);
+        assert!(!stale[0].paths.contains(&local));
+        assert!(!known.contains(&local));
     }
 
     #[test]

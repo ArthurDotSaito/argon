@@ -574,7 +574,7 @@ pub(crate) fn run(run: DriverRun) -> DriverFuture {
             shared: Arc::clone(&run.shared),
             spec: run.spec.clone(),
             cwd: run.ctx.cwd.clone(),
-            read_roots: run.ctx.read_roots.clone(),
+            read_roots: run.ctx.readable_roots(),
             agent_cwd: opened.agent_cwd,
             tail: Arc::clone(&run.stderr),
             untrusted: opened.untrusted,

@@ -712,7 +712,7 @@ fn open(
         shared: Arc::clone(&run.shared),
         spec: run.spec.clone(),
         cwd: run.ctx.cwd.clone(),
-        read_roots: run.ctx.read_roots.clone(),
+        read_roots: run.ctx.readable_roots(),
         tail: Arc::clone(&run.stderr),
         id,
         transcript: run.load.is_some(),

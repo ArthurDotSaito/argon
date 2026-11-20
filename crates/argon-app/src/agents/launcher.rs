@@ -7,12 +7,13 @@ use argon_agents::{
     WorktreeManager, start_session,
 };
 use argon_core::{
-    PermissionMode, PlanContext, PrKey, PromptTemplate, RelatedRepo, RenderedPrompt, SessionKind,
-    SummaryContext, render_plan_prompt, render_summary_prompt,
+    PermissionMode, PlanContext, PrKey, PromptTemplate, RelatedEntry, RelatedRepo, RenderedPrompt,
+    SessionKind, SummaryContext, render_plan_prompt, render_summary_prompt,
 };
 use futures::channel::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
+use super::context::{local_folders, merge_related, related_repos};
 use super::labels;
 use super::sink::SessionStore;
 
@@ -40,7 +41,7 @@ pub enum LaunchPrompt {
     Summary {
         template: Box<PromptTemplate>,
         context: Box<SummaryContext>,
-        related: Vec<String>,
+        related: Vec<RelatedEntry>,
     },
 }
 
@@ -83,7 +84,7 @@ impl LaunchRequest {
     fn planned_paths(&self) -> Result<Vec<PathBuf>, WorktreeError> {
         let mut paths = vec![self.planned_path()?];
         if let LaunchPrompt::Summary { related, .. } = &self.prompt {
-            paths.extend(plannable_paths(related, |repo| {
+            paths.extend(plannable_paths(&related_repos(related), |repo| {
                 self.worktrees
                     .planned_related_path(&self.pr.host, repo, &self.session_id)
             }));
@@ -109,6 +110,7 @@ pub struct Launched {
 struct Checkout {
     path: PathBuf,
     related: Vec<PathBuf>,
+    local: Vec<PathBuf>,
     base_sha: Option<String>,
     prompt: RenderedPrompt,
 }
@@ -158,6 +160,7 @@ fn related_entry(
                 path: Some(prepared.path.display().to_string()),
                 branch: prepared.branch,
                 error: None,
+                local: false,
             },
             Some(prepared.path),
         ),
@@ -167,6 +170,7 @@ fn related_entry(
                 path: None,
                 branch: labels::PLAN_BASE_PENDING.to_owned(),
                 error: Some(error),
+                local: false,
             },
             None,
         ),
@@ -248,6 +252,7 @@ async fn checkout(request: &LaunchRequest) -> Result<Checkout, String> {
             Ok(Checkout {
                 path,
                 related: Vec::new(),
+                local: Vec::new(),
                 base_sha: None,
                 prompt: prompt.clone(),
             })
@@ -268,11 +273,13 @@ async fn checkout(request: &LaunchRequest) -> Result<Checkout, String> {
                     return Err(error.to_string());
                 }
             };
-            let prepared = prepare_related(worktrees, host, session, related).await;
-            match summary_prompt(template, context, &head, prepared.repos) {
+            let prepared = prepare_related(worktrees, host, session, &related_repos(related)).await;
+            let listed = merge_related(related, prepared.repos);
+            match summary_prompt(template, context, &head, listed) {
                 Ok(prompt) => Ok(Checkout {
                     path,
                     related: prepared.paths,
+                    local: local_folders(related),
                     base_sha: Some(head),
                     prompt,
                 }),
@@ -292,6 +299,7 @@ async fn checkout(request: &LaunchRequest) -> Result<Checkout, String> {
                 Ok(prompt) => Ok(Checkout {
                     path: prepared.path,
                     related: Vec::new(),
+                    local: Vec::new(),
                     base_sha: Some(prepared.base_sha),
                     prompt,
                 }),
@@ -401,6 +409,7 @@ async fn start(request: &LaunchRequest, checkout: &Checkout) -> Result<AgentSess
         allowed_files,
         cwd: checkout.path.clone(),
         read_roots: checkout.related.clone(),
+        local_roots: checkout.local.clone(),
         repo: request.repo.clone(),
         number: request.number,
         refresh_project,
@@ -555,6 +564,35 @@ mod tests {
                 .text
                 .contains("`acme/pacientes`: indisponível (repo não encontrado)")
         );
+    }
+
+    #[test]
+    fn summary_prompt_lists_a_local_folder_in_its_configured_place() {
+        let folder = std::env::temp_dir();
+        let entries = vec![
+            RelatedEntry::Local(folder.clone()),
+            RelatedEntry::Repo("acme/fila".into()),
+        ];
+        let (prepared_fila, _) = related_entry("acme/fila", Ok(prepared("wt-fila")));
+
+        let prompt = summary_prompt(
+            &summary_template("{{related}}"),
+            &summary_context(),
+            "abc123",
+            merge_related(&entries, [prepared_fila]),
+        )
+        .unwrap();
+
+        let name = argon_core::local_folder_name(&folder);
+        assert_eq!(
+            prompt.text,
+            format!(
+                "- `{name}` (pasta local, pode ter mudanças não commitadas): `{}`\n- `acme/fila` (branch `develop`): `wt-fila`",
+                folder.display()
+            )
+        );
+        assert_eq!(related_repos(&entries), ["acme/fila"]);
+        assert_eq!(local_folders(&entries), [folder]);
     }
 
     #[test]

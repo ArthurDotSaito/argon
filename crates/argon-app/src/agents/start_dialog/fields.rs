@@ -1,4 +1,4 @@
-use argon_core::{PermissionMode, RepoKey, SessionKind};
+use argon_core::{PermissionMode, RelatedEntry, RepoKey, SessionKind, local_folder_name};
 use chrono::Local;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -44,10 +44,16 @@ fn block(title: &'static str, trailing: Option<String>, body: Div, cx: &App) -> 
         )
 }
 
-fn related_block(related: &[String], project: RepoKey, locked: bool, cx: &App) -> Div {
+fn related_block(related: &[RelatedEntry], project: RepoKey, locked: bool, cx: &App) -> Div {
     let theme = cx.theme();
-    let chips = related.iter().map(|repo| {
-        div()
+    let chips = related.iter().map(|entry| {
+        let (icon, name) = match entry {
+            RelatedEntry::Repo(repo) => (None, repo.clone()),
+            RelatedEntry::Local(path) => (Some(IconName::Folder), local_folder_name(path)),
+        };
+        h_flex()
+            .gap_1()
+            .items_center()
             .px_1p5()
             .rounded(theme.radius)
             .border_1()
@@ -55,7 +61,8 @@ fn related_block(related: &[String], project: RepoKey, locked: bool, cx: &App) -
             .bg(theme.muted)
             .text_xs()
             .font_family(theme.mono_font_family.clone())
-            .child(repo.clone())
+            .children(icon.map(|icon| Icon::new(icon).xsmall().text_color(theme.muted_foreground)))
+            .child(name)
     });
     let hint = if related.is_empty() {
         labels::NO_RELATED

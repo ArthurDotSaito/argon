@@ -192,6 +192,56 @@ fn only_existing_read_roots_become_add_dirs() {
     assert_eq!(kept, [present]);
 }
 
+#[tokio::test]
+async fn local_roots_become_add_dirs_after_the_read_roots() {
+    let dir = std::env::temp_dir().join(format!("argon-claude-local-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let related = dir.join("rel-abc");
+    let local = dir.join("pacientes-api");
+    for path in [&related, &local] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let writer = SessionWriter::from_store(Store::open(&dir.join("argon.db")).unwrap()).unwrap();
+    let tail = Arc::new(StderrTail::default());
+    let shared = Arc::new(Shared::for_tests(
+        SESSION,
+        dir.clone(),
+        writer,
+        Arc::clone(&tail),
+    ));
+    let mut run = fake_run(&dir, "ok", &shared, tail);
+    run.ctx.kind = SessionKind::Summary;
+    run.ctx.read_roots = vec![related.clone()];
+    run.ctx.local_roots = vec![local.clone()];
+    let (answers, _answered) = mpsc::unbounded_channel();
+    let (outputs, _received) = mpsc::unbounded_channel();
+
+    let session = open(&run, answers, outputs).unwrap();
+    let args = launch_args(
+        &[],
+        Start::New(ID),
+        "",
+        SessionKind::Summary,
+        &existing_dirs(&session.read_roots),
+    );
+
+    assert_eq!(session.read_roots, [related.clone(), local.clone()]);
+    let add_dirs: Vec<String> = args
+        .windows(2)
+        .filter(|pair| pair[0] == "--add-dir")
+        .map(|pair| pair[1].clone())
+        .collect();
+    assert_eq!(
+        add_dirs,
+        [
+            related.to_string_lossy().into_owned(),
+            local.to_string_lossy().into_owned()
+        ]
+    );
+    drop(session);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn only_automatic_read_only_denials_use_the_read_only_refusal_message() {
     let edit = native_ask("edit", &[inside("src/a.rs")]);
@@ -590,6 +640,7 @@ fn fake_run(dir: &Path, mode: &str, shared: &Arc<Shared>, tail: Arc<StderrTail>)
             allowed_files: Vec::new(),
             cwd: dir.to_path_buf(),
             read_roots: Vec::new(),
+            local_roots: Vec::new(),
             repo: "acme/api".to_owned(),
             number: 1,
             refresh_project: false,
@@ -645,6 +696,7 @@ async fn fake(mode: &str) -> Fake {
             repo: None,
             pr_number: None,
             refresh_project: false,
+            local_roots: Vec::new(),
         })
         .await
         .unwrap();

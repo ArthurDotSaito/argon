@@ -13,6 +13,7 @@ fn related_ok() -> RelatedRepo {
         path: Some(r"C:\wt\rel-1234".into()),
         branch: "main".into(),
         error: None,
+        local: false,
     }
 }
 
@@ -22,6 +23,17 @@ fn related_failed() -> RelatedRepo {
         path: None,
         branch: "main".into(),
         error: Some("repositório não encontrado\ntoken=supersecretvalue".into()),
+        local: false,
+    }
+}
+
+fn related_local() -> RelatedRepo {
+    RelatedRepo {
+        repo: "pacientes-api".into(),
+        path: Some(r"D:\src\pacientes-api".into()),
+        branch: String::new(),
+        error: None,
+        local: true,
     }
 }
 
@@ -100,6 +112,36 @@ fn related_is_one_line_per_repo_with_path_or_error() {
     assert_eq!(
         rendered.text,
         "- `acme/notificacoes-worker` (branch `main`): `C:\\wt\\rel-1234`\n- `acme/faturamento-api`: indisponível (repositório não encontrado token=[redigido])"
+    );
+}
+
+#[test]
+fn a_local_folder_is_named_as_such_and_warns_about_uncommitted_changes() {
+    let mut ctx = context();
+    ctx.related = vec![related_local()];
+
+    let rendered = render_fixed(&template("{{related}}"), &ctx);
+
+    assert_eq!(
+        rendered.text,
+        "- `pacientes-api` (pasta local, pode ter mudanças não commitadas): `D:\\src\\pacientes-api`"
+    );
+}
+
+#[test]
+fn a_missing_local_folder_is_unavailable_with_its_reason() {
+    let mut ctx = context();
+    ctx.related = vec![RelatedRepo {
+        path: Some(r"D:\src\pacientes-api".into()),
+        error: Some("a pasta não existe mais".into()),
+        ..related_local()
+    }];
+
+    let rendered = render_fixed(&template("{{related}}"), &ctx);
+
+    assert_eq!(
+        rendered.text,
+        "- `pacientes-api`: indisponível (a pasta não existe mais)"
     );
 }
 

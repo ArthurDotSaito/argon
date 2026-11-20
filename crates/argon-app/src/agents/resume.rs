@@ -43,6 +43,7 @@ fn session_context(row: &SessionRow, worktree: PathBuf) -> SessionContext {
         allowed_files: row.allowed_files.clone(),
         cwd: worktree,
         read_roots: row.related_worktrees.clone(),
+        local_roots: row.local_roots.clone(),
         repo: row.repo.clone().unwrap_or_default(),
         number: row.pr_number.unwrap_or_default(),
         refresh_project: row.refresh_project,
@@ -220,6 +221,7 @@ mod tests {
             repo: None,
             pr_number: None,
             refresh_project: false,
+            local_roots: Vec::new(),
         }
     }
 
@@ -273,6 +275,7 @@ mod tests {
         summary.kind = SessionKind::Summary;
         summary.base_sha = Some("def456".into());
         summary.related_worktrees = vec![PathBuf::from(r"C:\wt\rel-a")];
+        summary.local_roots = vec![PathBuf::from(r"D:\src\pacientes-api")];
         summary.repo = Some("acme/api".into());
         summary.pr_number = Some(42);
         summary.refresh_project = true;
@@ -284,6 +287,7 @@ mod tests {
         assert_eq!(ctx.number, 42);
         assert!(ctx.refresh_project);
         assert_eq!(ctx.read_roots, [PathBuf::from(r"C:\wt\rel-a")]);
+        assert_eq!(ctx.local_roots, [PathBuf::from(r"D:\src\pacientes-api")]);
         assert_eq!(ctx.base_sha.as_deref(), Some("def456"));
     }
 }

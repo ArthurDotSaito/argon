@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use argon_core::{MAX_RELATED_REPOS, RelatedRepo, SummaryContext, is_repo_full_name};
+use argon_core::{
+    MAX_RELATED_REPOS, RelatedEntry, RelatedRepo, SummaryContext, local_folder_name,
+    same_local_folder,
+};
 use argon_github::PrDetail;
 use argon_store::ProjectOverview;
 use gpui_kit::Task;
@@ -11,24 +14,75 @@ use crate::services::{ServiceError, StoreHandle, flatten};
 #[derive(Debug, Clone)]
 pub struct SummaryGathering {
     pub detail: PrDetail,
-    pub related: Vec<String>,
+    pub related: Vec<RelatedEntry>,
     pub overview: Option<ProjectOverview>,
 }
 
-pub fn related_list(configured: &[String], own_repo: &str) -> Vec<String> {
-    let mut related: Vec<String> = Vec::new();
-    for repo in configured {
-        let repo = repo.trim();
+fn is_same_entry(left: &RelatedEntry, right: &RelatedEntry) -> bool {
+    match (left, right) {
+        (RelatedEntry::Repo(left), RelatedEntry::Repo(right)) => left.eq_ignore_ascii_case(right),
+        (RelatedEntry::Local(left), RelatedEntry::Local(right)) => same_local_folder(left, right),
+        _ => false,
+    }
+}
+
+pub fn related_list(configured: &[RelatedEntry], own_repo: &str) -> Vec<RelatedEntry> {
+    let mut related: Vec<RelatedEntry> = Vec::new();
+    for entry in configured {
+        let own = matches!(entry, RelatedEntry::Repo(repo) if repo.eq_ignore_ascii_case(own_repo));
         let duplicate = related
             .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(repo));
-        if !is_repo_full_name(repo) || repo.eq_ignore_ascii_case(own_repo) || duplicate {
-            continue;
+            .any(|existing| is_same_entry(existing, entry));
+        if !own && !duplicate {
+            related.push(entry.clone());
         }
-        related.push(repo.to_owned());
     }
     related.truncate(MAX_RELATED_REPOS);
     related
+}
+
+pub fn local_related(path: &Path) -> RelatedRepo {
+    RelatedRepo {
+        repo: local_folder_name(path),
+        path: Some(path.display().to_string()),
+        branch: String::new(),
+        error: (!path.is_dir()).then(|| labels::LOCAL_FOLDER_GONE.to_owned()),
+        local: true,
+    }
+}
+
+pub fn related_repos(entries: &[RelatedEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            RelatedEntry::Repo(repo) => Some(repo.clone()),
+            RelatedEntry::Local(_) => None,
+        })
+        .collect()
+}
+
+pub fn local_folders(entries: &[RelatedEntry]) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            RelatedEntry::Local(path) => Some(path.clone()),
+            RelatedEntry::Repo(_) => None,
+        })
+        .collect()
+}
+
+pub fn merge_related(
+    entries: &[RelatedEntry],
+    prepared: impl IntoIterator<Item = RelatedRepo>,
+) -> Vec<RelatedRepo> {
+    let mut prepared = prepared.into_iter();
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            RelatedEntry::Repo(_) => prepared.next(),
+            RelatedEntry::Local(path) => Some(local_related(path)),
+        })
+        .collect()
 }
 
 pub fn summary_context(
@@ -65,26 +119,28 @@ pub fn summary_context(
 }
 
 pub fn planned_related(
-    repos: &[String],
+    entries: &[RelatedEntry],
     planned: impl Fn(&str) -> Result<PathBuf, String>,
 ) -> Vec<RelatedRepo> {
-    repos
-        .iter()
-        .map(|repo| match planned(repo) {
+    let repos = related_repos(entries)
+        .into_iter()
+        .map(|repo| match planned(&repo) {
             Ok(path) => RelatedRepo {
-                repo: repo.clone(),
                 path: Some(path.display().to_string()),
                 branch: labels::PLAN_BASE_PENDING.to_owned(),
                 error: None,
+                local: false,
+                repo,
             },
             Err(error) => RelatedRepo {
-                repo: repo.clone(),
                 path: None,
                 branch: labels::PLAN_BASE_PENDING.to_owned(),
                 error: Some(error),
+                local: false,
+                repo,
             },
-        })
-        .collect()
+        });
+    merge_related(entries, repos)
 }
 
 pub fn preview_context(
@@ -107,7 +163,7 @@ pub async fn gather_summary(
     detail: Option<PrDetail>,
     fetch: Option<Task<Result<PrDetail, ServiceError>>>,
     store: StoreHandle,
-    configured: Vec<String>,
+    configured: Vec<RelatedEntry>,
 ) -> Result<SummaryGathering, String> {
     let detail = match (detail, fetch) {
         (Some(detail), _) => detail,
@@ -177,10 +233,6 @@ mod tests {
         }
     }
 
-    fn strings(items: &[&str]) -> Vec<String> {
-        items.iter().map(|item| (*item).to_owned()).collect()
-    }
-
     #[test]
     fn pr_fields_fill_the_context() {
         let context = summary_context(&detail(), None, true);
@@ -242,34 +294,91 @@ mod tests {
         assert!(context.refresh_project);
     }
 
+    fn repos(items: &[&str]) -> Vec<RelatedEntry> {
+        items
+            .iter()
+            .map(|item| RelatedEntry::Repo((*item).to_owned()))
+            .collect()
+    }
+
+    fn names(entries: &[RelatedEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                RelatedEntry::Repo(repo) => repo.clone(),
+                RelatedEntry::Local(path) => path.display().to_string(),
+            })
+            .collect()
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let path = std::env::temp_dir()
+                .join(format!("argon-summary-ctx-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            TempDir(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
-    fn related_list_drops_duplicates_blanks_and_the_own_repo() {
-        let configured = strings(&[
+    fn related_list_drops_duplicates_and_the_own_repo() {
+        let configured = repos(&[
             "acme/pacientes-api",
             "Acme/Widgets",
             "acme/pacientes-api",
-            "  ",
             "ACME/Pacientes-API",
             "acme/fila",
         ]);
         assert_eq!(
-            related_list(&configured, "acme/widgets"),
+            names(&related_list(&configured, "acme/widgets")),
             ["acme/pacientes-api", "acme/fila"]
         );
-        let configured = strings(&["acme/a", "ACME/A", "acme/b"]);
-        assert_eq!(related_list(&configured, "acme/x"), ["acme/a", "acme/b"]);
+        let configured = repos(&["acme/a", "ACME/A", "acme/b"]);
+        assert_eq!(
+            names(&related_list(&configured, "acme/x")),
+            ["acme/a", "acme/b"]
+        );
     }
 
     #[test]
-    fn related_list_drops_names_that_are_not_owner_slash_repo() {
-        let configured = strings(&["acme", "acme/", "/repo", "../x/y", "acme/fila", "a b/c"]);
-        assert_eq!(related_list(&configured, "acme/widgets"), ["acme/fila"]);
+    fn related_list_keeps_local_folders_once_in_their_place() {
+        let dir = TempDir::new("list");
+        let fila = dir.0.join("fila");
+        std::fs::create_dir_all(&fila).unwrap();
+        let configured = vec![
+            RelatedEntry::Local(fila.clone()),
+            RelatedEntry::Repo("acme/web".into()),
+            RelatedEntry::Local(fila.join("..").join("fila")),
+            RelatedEntry::Local(dir.0.join("widgets")),
+        ];
+
+        let related = related_list(&configured, "acme/widgets");
+
+        assert_eq!(
+            related,
+            [
+                RelatedEntry::Local(fila),
+                RelatedEntry::Repo("acme/web".into()),
+                RelatedEntry::Local(dir.0.join("widgets")),
+            ]
+        );
     }
 
     #[test]
     fn related_list_stops_at_the_limit() {
-        let configured: Vec<String> = (0..12).map(|n| format!("acme/repo-{n}")).collect();
-        let related = related_list(&configured, "acme/widgets");
+        let names_in: Vec<String> = (0..12).map(|n| format!("acme/repo-{n}")).collect();
+        let configured: Vec<RelatedEntry> =
+            names_in.iter().cloned().map(RelatedEntry::Repo).collect();
+        let related = names(&related_list(&configured, "acme/widgets"));
         assert_eq!(related.len(), MAX_RELATED_REPOS);
         assert_eq!(related[0], "acme/repo-0");
         assert_eq!(related[MAX_RELATED_REPOS - 1], "acme/repo-7");
@@ -277,8 +386,7 @@ mod tests {
 
     #[test]
     fn planned_related_lists_paths_and_failures() {
-        let repos = strings(&["acme/a", "acme/b"]);
-        let related = planned_related(&repos, |repo| {
+        let related = planned_related(&repos(&["acme/a", "acme/b"]), |repo| {
             if repo == "acme/a" {
                 Ok(PathBuf::from("wt-a"))
             } else {
@@ -288,8 +396,47 @@ mod tests {
         assert_eq!(related[0].path.as_deref(), Some("wt-a"));
         assert_eq!(related[0].branch, labels::PLAN_BASE_PENDING);
         assert_eq!(related[0].error, None);
+        assert!(!related[0].local);
         assert_eq!(related[1].path, None);
         assert_eq!(related[1].error.as_deref(), Some("repo inválido"));
+    }
+
+    #[test]
+    fn a_local_folder_is_never_planned_and_keeps_its_place() {
+        let dir = TempDir::new("planned");
+        let gone = dir.0.join("gone");
+        let entries = vec![
+            RelatedEntry::Local(dir.0.clone()),
+            RelatedEntry::Repo("acme/a".into()),
+            RelatedEntry::Local(gone.clone()),
+        ];
+
+        let related = planned_related(&entries, |repo| {
+            assert_eq!(repo, "acme/a");
+            Ok(PathBuf::from("wt-a"))
+        });
+
+        assert_eq!(related.len(), 3);
+        assert_eq!(related[0].repo, local_folder_name(&dir.0));
+        assert_eq!(related[0].path, Some(dir.0.display().to_string()));
+        assert!(related[0].local);
+        assert_eq!(related[0].error, None);
+        assert_eq!(related[1].repo, "acme/a");
+        assert_eq!(related[2].repo, "gone");
+        assert_eq!(related[2].error.as_deref(), Some(labels::LOCAL_FOLDER_GONE));
+        assert!(related[2].local);
+    }
+
+    #[test]
+    fn repos_and_local_folders_split_for_the_checkout() {
+        let local = std::env::temp_dir().join("pacientes-api");
+        let entries = vec![
+            RelatedEntry::Repo("acme/a".into()),
+            RelatedEntry::Local(local.clone()),
+            RelatedEntry::Repo("acme/b".into()),
+        ];
+        assert_eq!(related_repos(&entries), ["acme/a", "acme/b"]);
+        assert_eq!(local_folders(&entries), [local]);
     }
 
     #[test]

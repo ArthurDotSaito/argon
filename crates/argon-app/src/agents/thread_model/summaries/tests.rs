@@ -100,10 +100,40 @@ fn loading_from_the_store_replaces_what_the_events_added() {
         overview: None,
         repo: Some("acme/agenda-api".into()),
         related: vec![PathBuf::from("rel-a")],
+        local: vec![PathBuf::from("pacientes-api")],
     });
     assert_eq!(state.items, [stored]);
     assert_eq!(state.repo.as_deref(), Some("acme/agenda-api"));
     assert_eq!(state.related, [PathBuf::from("rel-a")]);
+    assert_eq!(
+        state.read_roots(),
+        [PathBuf::from("rel-a"), PathBuf::from("pacientes-api")]
+    );
+}
+
+#[test]
+fn a_read_inside_a_local_folder_is_marked_related() {
+    let mut state = SummaryState::default();
+    state.load(SummaryData {
+        summaries: Vec::new(),
+        overview: None,
+        repo: None,
+        related: roots(),
+        local: vec![PathBuf::from("D:\\src\\pacientes-api")],
+    });
+    let roots = state.read_roots();
+
+    assert!(is_in_related(
+        "D:\\src\\pacientes-api\\src\\Program.cs",
+        &roots,
+        true
+    ));
+    assert!(is_in_related(
+        "C:\\wt\\github.com\\acme\\pacientes-api\\rel-ab\\x.cs",
+        &roots,
+        true
+    ));
+    assert!(!is_in_related("D:\\src\\fila\\x.cs", &roots, true));
 }
 
 #[test]
@@ -131,6 +161,7 @@ fn the_store_provides_summaries_overview_repo_and_related_folders() {
             repo: Some("acme/agenda-api".into()),
             pr_number: Some(214),
             refresh_project: true,
+            local_roots: vec![PathBuf::from("D:/src/fila")],
         })
         .unwrap();
     store
@@ -158,4 +189,5 @@ fn the_store_provides_summaries_overview_repo_and_related_folders() {
     assert_eq!(state.overview.unwrap().body, "## O projeto");
     assert_eq!(state.repo.as_deref(), Some("acme/agenda-api"));
     assert_eq!(state.related, [PathBuf::from("C:/wt/rel-a")]);
+    assert_eq!(state.local, [PathBuf::from("D:/src/fila")]);
 }

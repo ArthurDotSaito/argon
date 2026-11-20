@@ -26,7 +26,8 @@ pub const REFRESH_SAVED_HINT: &str =
 pub const REFRESH_FIRST_HINT: &str =
     "A primeira leitura demora mais e gasta mais tokens. A visão fica salva para os próximos PRs.";
 pub const RELATED_PROJECTS: &str = "Projetos relacionados";
-pub const RELATED_HINT: &str = "O Argon clona a branch padrão de cada um, só para leitura.";
+pub const RELATED_HINT: &str = "O Argon clona a branch padrão de cada repositório e lê cada pasta local como está, só para leitura.";
+pub const LOCAL_FOLDER_GONE: &str = "a pasta não existe mais";
 pub const NO_RELATED: &str = "Nenhum projeto relacionado.";
 pub const EDIT_IN_SETTINGS: &str = "Editar em Configurações";
 pub const DETECTING: &str = "detectando…";

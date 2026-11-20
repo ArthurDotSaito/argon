@@ -1,13 +1,14 @@
+use std::path::Path;
 use std::sync::Arc;
 
-use argon_core::{PermissionMode, SessionKind};
+use argon_core::{PermissionMode, SessionKind, user_home};
 use argon_store::{NewAgentSession, SessionStatus};
 use futures::future::BoxFuture;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::driver::{ENDED_BEFORE_ACTIVATION, Shared, SharedConfig};
 use super::failure::{STDERR_LINES, classify, transport_error, with_stderr};
-use super::permissions::valid_read_roots;
+use super::permissions::{valid_local_roots, valid_read_roots};
 use super::stderr::StderrTail;
 use super::writer::{Op, SessionWriter};
 use super::{
@@ -135,9 +136,10 @@ fn pinned_mode(ctx: SessionContext) -> SessionContext {
     }
 }
 
-fn checked_read_roots(ctx: SessionContext) -> SessionContext {
+fn checked_read_roots(ctx: SessionContext, home: Option<&Path>) -> SessionContext {
     SessionContext {
         read_roots: valid_read_roots(&ctx.read_roots),
+        local_roots: valid_local_roots(&ctx.local_roots, home),
         ..ctx
     }
 }
@@ -150,7 +152,7 @@ pub(super) async fn launch(
     options: SessionOptions,
     run: fn(DriverRun) -> DriverFuture,
 ) -> Result<(SessionHandle, AgentSessionHandle)> {
-    let ctx = checked_read_roots(pinned_mode(ctx));
+    let ctx = checked_read_roots(pinned_mode(ctx), user_home().as_deref());
     let tail = Arc::new(StderrTail::default());
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let shared = Arc::new(Shared::new(
@@ -161,7 +163,7 @@ pub(super) async fn launch(
             base_sha: ctx.base_sha.clone(),
             denial_ends_turn: spec.transport == Transport::OpencodeServe,
             cwd: ctx.cwd.clone(),
-            read_roots: ctx.read_roots.clone(),
+            read_roots: ctx.readable_roots(),
             repo: ctx.repo.clone(),
             number: ctx.number,
             refresh_project: ctx.refresh_project,
@@ -228,6 +230,7 @@ pub(super) async fn launch(
                 repo: (!ctx.repo.is_empty()).then(|| ctx.repo.clone()),
                 pr_number: (ctx.number > 0).then_some(ctx.number),
                 refresh_project: ctx.refresh_project,
+                local_roots: ctx.local_roots.clone(),
             })
             .await
             .map(|()| 0),
@@ -375,6 +378,7 @@ mod tests {
             allowed_files: Vec::new(),
             cwd,
             read_roots: Vec::new(),
+            local_roots: Vec::new(),
             repo: "acme/api".to_owned(),
             number: 1,
             refresh_project: false,
@@ -537,6 +541,52 @@ mod tests {
         assert_eq!(agent.shared.read_roots(), expected.as_slice());
         drop((writer, agent));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn summary_with_local_roots(id: &str, cwd: PathBuf) -> SessionContext {
+        let local = cwd.join("pacientes-api");
+        std::fs::create_dir_all(&local).unwrap();
+        let drive_root = cwd.ancestors().last().unwrap().to_path_buf();
+        let mut local_roots = vec![local, drive_root, cwd.join("gone")];
+        local_roots.extend(user_home());
+        SessionContext {
+            local_roots,
+            ..summary_context(id, cwd)
+        }
+    }
+
+    #[tokio::test]
+    async fn local_roots_keep_only_real_folders_and_are_persisted_apart() {
+        let (dir, writer, agent) =
+            launch_dying("summary-local-roots", summary_with_local_roots).await;
+        let local = dunce::canonicalize(dir.join("pacientes-api")).unwrap();
+        let related = summary_context("s1", dir.clone()).read_roots;
+
+        let row = Store::open(&dir.join("argon.db"))
+            .unwrap()
+            .session("s1")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(row.local_roots, std::slice::from_ref(&local));
+        assert_eq!(row.related_worktrees, related);
+        let mut readable = related;
+        readable.push(local);
+        assert_eq!(agent.shared.read_roots(), readable.as_slice());
+        drop((writer, agent));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_user_home_is_never_a_local_root() {
+        let home = std::env::temp_dir().join(format!("argon-home-{}", std::process::id()));
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let kept = valid_local_roots(&[home.clone(), project.clone()], Some(&home));
+
+        assert_eq!(kept, [dunce::canonicalize(&project).unwrap()]);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]

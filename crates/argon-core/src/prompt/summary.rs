@@ -34,6 +34,7 @@ pub struct RelatedRepo {
     pub path: Option<String>,
     pub branch: String,
     pub error: Option<String>,
+    pub local: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +61,9 @@ fn single_line(text: &str) -> String {
 fn related_line(related: &RelatedRepo) -> String {
     let repo = &related.repo;
     match (&related.path, &related.error) {
+        (Some(path), None) if related.local => {
+            format!("- `{repo}` (pasta local, pode ter mudanças não commitadas): `{path}`")
+        }
         (Some(path), None) => format!("- `{repo}` (branch `{}`): `{path}`", related.branch),
         (_, Some(error)) => format!(
             "- `{repo}`: indisponível ({})",

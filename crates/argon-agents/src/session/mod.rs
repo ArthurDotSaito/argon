@@ -110,6 +110,7 @@ pub struct SessionContext {
     pub allowed_files: Vec<String>,
     pub cwd: PathBuf,
     pub read_roots: Vec<PathBuf>,
+    pub local_roots: Vec<PathBuf>,
     pub repo: String,
     pub number: u64,
     pub refresh_project: bool,
@@ -117,6 +118,16 @@ pub struct SessionContext {
     pub permission_mode: PermissionMode,
     pub kind: SessionKind,
     pub base_sha: Option<String>,
+}
+
+impl SessionContext {
+    pub fn readable_roots(&self) -> Vec<PathBuf> {
+        self.read_roots
+            .iter()
+            .chain(&self.local_roots)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

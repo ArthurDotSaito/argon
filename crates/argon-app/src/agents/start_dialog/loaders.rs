@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use argon_agents::detect_all;
-use argon_core::{SessionKind, ensure_default_templates, scan_templates};
+use argon_core::{SessionKind, ensure_default_templates, related_entries, scan_templates};
 use argon_github::IssueDetail;
 use gpui_kit::{Context, Window};
 
@@ -176,11 +176,7 @@ impl StartDialog {
                 client.pr_detail(&id).await
             })
         });
-        let configured = self
-            .config
-            .review
-            .related_repos(&pr.host, &pr.repo)
-            .to_vec();
+        let configured = related_entries(&self.config.review, &pr.host, &pr.repo);
         let gathering = gather_summary(target.detail, fetch, services.store(), configured);
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = gathering.await;

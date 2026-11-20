@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use argon_agents::{AgentSessionHandle, WorktreeManager};
-use argon_store::{SessionStatus, Store};
+use argon_store::{SessionRow, SessionStatus, Store};
 use gpui_kit::{App, Context};
 
 use super::sessions::{AgentSessions, AgentsEvent, Closing, ResumeState};
@@ -47,10 +47,14 @@ fn archive_paths(
     paths
 }
 
+fn removable_related(row: Option<SessionRow>) -> Vec<PathBuf> {
+    row.map(|row| row.related_worktrees).unwrap_or_default()
+}
+
 async fn stored_related(store: &StoreHandle, id: &str) -> Result<Vec<PathBuf>, String> {
     let id = id.to_owned();
     let row = flatten(store.call(move |store| store.session(&id)).await)?;
-    Ok(row.map(|row| row.related_worktrees).unwrap_or_default())
+    Ok(removable_related(row))
 }
 
 async fn remove_all(worktrees: &WorktreeManager, paths: &[PathBuf]) -> Result<(), String> {
@@ -247,6 +251,10 @@ mod tests {
     use super::*;
 
     fn store_with(id: &str) -> Store {
+        store_with_roots(id, Vec::new(), Vec::new())
+    }
+
+    fn store_with_roots(id: &str, related: Vec<PathBuf>, local: Vec<PathBuf>) -> Store {
         let mut store = Store::open_in_memory().unwrap();
         store
             .create_session(&NewAgentSession {
@@ -263,13 +271,28 @@ mod tests {
                 allowed_files: Vec::new(),
                 kind: argon_core::SessionKind::Review,
                 base_sha: None,
-                related_worktrees: Vec::new(),
+                related_worktrees: related,
                 repo: None,
                 pr_number: None,
                 refresh_project: false,
+                local_roots: local,
             })
             .unwrap();
         store
+    }
+
+    #[test]
+    fn archiving_never_removes_a_local_folder() {
+        let related = PathBuf::from(r"C:\wt\rel-fila");
+        let local = PathBuf::from(r"D:\src\pacientes-api");
+        let store = store_with_roots("s1", vec![related.clone()], vec![local.clone()]);
+
+        let stored = removable_related(store.session("s1").unwrap());
+        let paths = archive_paths(Some(PathBuf::from(r"C:\wt\pr-1")), Vec::new(), &stored);
+
+        assert_eq!(paths, [PathBuf::from(r"C:\wt\pr-1"), related]);
+        assert!(!paths.contains(&local));
+        assert!(removable_related(None).is_empty());
     }
 
     #[test]

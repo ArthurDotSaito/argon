@@ -1,4 +1,4 @@
-use argon_core::SessionKind;
+use argon_core::{SessionKind, local_folder_name};
 use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -110,6 +110,12 @@ impl ThreadView {
                 .related_roots()
                 .iter()
                 .map(|path| text(related_label(path)))
+                .chain(
+                    model
+                        .local_roots()
+                        .iter()
+                        .map(|path| text(local_folder_name(path))),
+                )
                 .collect();
             let related = (!related.is_empty()).then(|| {
                 properties::row(
