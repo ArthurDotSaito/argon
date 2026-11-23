@@ -28,7 +28,7 @@ use super::detection::AgentOption;
 use super::launcher::LaunchStage;
 use super::sessions::AgentSessions;
 use crate::actions::OpenSettings;
-use crate::agents::choice::{Choice, permission_choices};
+use crate::agents::choice::{Choice, permission_choices_for};
 use crate::project;
 use crate::services::{AppServices, Services};
 
@@ -151,6 +151,7 @@ pub struct StartDialog {
     agent: Option<AgentKind>,
     model: Option<String>,
     permission_mode: PermissionMode,
+    permission_chosen: bool,
     templates: Load<Vec<PromptTemplate>>,
     all_templates: Vec<PromptTemplate>,
     invalid_templates: Vec<InvalidTemplate>,
@@ -221,8 +222,9 @@ impl StartDialog {
             .unwrap_or_default();
         let model_select = choice_select(window, cx);
         let template_select = choice_select(window, cx);
+        let kind = Subject::of(&target).kind();
         let permission_select =
-            cx.new(|cx| SelectState::new(permission_choices(), None, window, cx));
+            cx.new(|cx| SelectState::new(permission_choices_for(kind), None, window, cx));
         let mut subscriptions = vec![
             cx.subscribe_in(
                 &model_select,
@@ -271,6 +273,7 @@ impl StartDialog {
             agent: None,
             model: None,
             permission_mode: PermissionMode::default(),
+            permission_chosen: false,
             templates: Load::Loading,
             all_templates: Vec::new(),
             invalid_templates: Vec::new(),

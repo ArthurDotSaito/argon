@@ -59,6 +59,7 @@ pub const TEMPLATES_HINT: &str =
 pub const NEW: &str = "Novo";
 pub const DUPLICATE: &str = "Duplicar";
 pub const DELETE: &str = "Excluir";
+pub const NO_TEMPLATES_OF_KIND: &str = "Nenhum template deste tipo.";
 pub const RESTORE: &str = "Restaurar padrão";
 pub const BUILT_IN: &str = "embutido";
 pub const NAME: &str = "Nome";
@@ -86,6 +87,13 @@ pub const RESTORE_TITLE: &str = "Restaurar template padrão";
 pub const NEW_TEMPLATE_NAME: &str = "Novo template";
 pub const NEW_TEMPLATE_BODY: &str =
     "Revise o PR {{ pr.title }} (#{{ pr.number }}) em {{ repo }}.\n";
+pub const NEW_PLAN_BODY: &str =
+    "Planeje a solução da issue #{{ issue.number }} ({{ issue.title }}) em {{ issue.repo }}.\n";
+pub const NEW_SUMMARY_BODY: &str =
+    "Resuma o PR {{ pr.title }} (#{{ pr.number }}) em {{ pr.repo }}.\n";
+pub const KIND_REVIEW: &str = "Review";
+pub const KIND_PLAN: &str = "Agent Plan";
+pub const KIND_SUMMARY: &str = "Summarize";
 pub const NEW_PROFILE: &str = "Novo perfil";
 pub const NEW_PROFILE_NAME: &str = "Novo perfil";
 pub const NEW_PROFILE_BODY: &str = "Neste repositório, preste atenção também em:\n- \n";

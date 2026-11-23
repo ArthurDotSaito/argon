@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use serde_json::{Map, Value, json};
 
 use crate::registry::ModelInfo;
@@ -349,15 +349,21 @@ struct Policy {
     web_search: Option<&'static str>,
 }
 
-fn policy(mode: PermissionMode) -> Policy {
-    match mode {
-        PermissionMode::Supervised | PermissionMode::AcceptEdits => Policy {
+fn policy(mode: PermissionMode, kind: SessionKind) -> Policy {
+    match (kind.pinned_mode(mode), kind) {
+        (PermissionMode::Supervised | PermissionMode::AcceptEdits, _) => Policy {
             approval: "untrusted",
             sandbox: "read-only",
             sandbox_type: "readOnly",
             web_search: Some(WEB_SEARCH_DISABLED),
         },
-        PermissionMode::FullAccess => Policy {
+        (PermissionMode::FullAccess, SessionKind::Summary) => Policy {
+            approval: "never",
+            sandbox: "read-only",
+            sandbox_type: "readOnly",
+            web_search: None,
+        },
+        (PermissionMode::FullAccess, _) => Policy {
             approval: "never",
             sandbox: "workspace-write",
             sandbox_type: "workspaceWrite",
@@ -366,8 +372,13 @@ fn policy(mode: PermissionMode) -> Policy {
     }
 }
 
-pub(crate) fn thread_params(cwd: &Path, model: Option<&str>, mode: PermissionMode) -> Value {
-    let policy = policy(mode);
+pub(crate) fn thread_params(
+    cwd: &Path,
+    model: Option<&str>,
+    mode: PermissionMode,
+    kind: SessionKind,
+) -> Value {
+    let policy = policy(mode, kind);
     let mut params = json!({
         "cwd": cwd.to_string_lossy(),
         "approvalPolicy": policy.approval,
@@ -381,8 +392,8 @@ pub(crate) fn thread_params(cwd: &Path, model: Option<&str>, mode: PermissionMod
     params
 }
 
-pub(crate) fn with_mode(mut params: Value, mode: PermissionMode) -> Value {
-    let policy = policy(mode);
+pub(crate) fn with_mode(mut params: Value, mode: PermissionMode, kind: SessionKind) -> Value {
+    let policy = policy(mode, kind);
     params["approvalPolicy"] = json!(policy.approval);
     params["approvalsReviewer"] = json!(APPROVALS_REVIEWER);
     params["sandboxPolicy"] = json!({"type": policy.sandbox_type});
@@ -421,8 +432,9 @@ pub(crate) fn resume_params(
     cwd: &Path,
     model: Option<&str>,
     mode: PermissionMode,
+    kind: SessionKind,
 ) -> Value {
-    let mut params = thread_params(cwd, model, mode);
+    let mut params = thread_params(cwd, model, mode, kind);
     params["threadId"] = json!(thread_id);
     params["excludeTurns"] = json!(true);
     params

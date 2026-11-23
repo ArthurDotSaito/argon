@@ -7,7 +7,7 @@ mod summary;
 
 use std::rc::Rc;
 
-use argon_core::{PrKey, PullRequest, Reason, RepoKey, Side};
+use argon_core::{PanelState, PrKey, PullRequest, Reason, RepoKey, Side};
 use argon_github::{MergeMethod, PrDetail};
 use argon_store::PrSummary;
 use chrono::{DateTime, Utc};
@@ -25,6 +25,7 @@ use super::conversation::{Conversation, ConversationEvent};
 use super::header::{HeaderProps, header};
 use super::labels;
 use super::properties;
+use crate::config_watch::{self, ConfigChanged};
 use crate::inbox::InboxModel;
 use crate::keymap::PR_VIEW_CONTEXT;
 use crate::review::{
@@ -95,6 +96,7 @@ pub struct PrView {
     key: PrKey,
     inbox: Entity<InboxModel>,
     tab: PrTab,
+    panel: PanelState,
     detail: Option<Rc<PrDetail>>,
     store_pr: Option<Rc<PullRequest>>,
     viewer_login: Option<String>,
@@ -170,7 +172,17 @@ impl PrView {
             cx.subscribe(&drafts, |this, _, _: &ProjectsChanged, cx| {
                 this.reload_summary(cx)
             }),
+            cx.subscribe(
+                &config_watch::entity(cx),
+                |this, _, event: &ConfigChanged, cx| {
+                    if this.panel != event.0.appearance.pr_panel {
+                        this.panel = event.0.appearance.pr_panel;
+                        cx.notify();
+                    }
+                },
+            ),
         ];
+        let panel = config_watch::current(cx).appearance.pr_panel;
         let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);
         let seen_updated_at = store_pr.as_ref().map(|pr| pr.updated_at);
         let viewer_login = viewer_login(&key.host, cx);
@@ -180,6 +192,7 @@ impl PrView {
             key,
             inbox,
             tab: PrTab::default(),
+            panel,
             detail: None,
             store_pr,
             viewer_login,
@@ -242,6 +255,11 @@ impl PrView {
             .update(cx, |review, cx| review.open_finish(window, cx));
     }
 
+    pub(super) fn toggle_panel(&mut self, cx: &mut Context<Self>) {
+        let next = self.panel.toggled();
+        config_watch::update(cx, |config| config.appearance.pr_panel = next);
+    }
+
     pub fn open_on_github(&mut self, _: &mut Context<Self>) {
         let Some(url) = self.pr().map(|pr| pr.url.clone()) else {
             return;
@@ -262,6 +280,10 @@ impl PrView {
             .item(&self.key)
             .map(|item| item.reason.clone())
     }
+}
+
+fn shows_panel(detail_loaded: bool, tab: PrTab, panel: PanelState) -> bool {
+    detail_loaded && tab != PrTab::Review && panel == PanelState::Open
 }
 
 fn app_services(cx: &App) -> Option<Services> {
@@ -300,7 +322,8 @@ impl Render for PrView {
             .as_ref()
             .map(|detail| &detail.pr)
             .or(store_pr.as_deref());
-        let show_panel = detail.is_some() && self.tab != PrTab::Review;
+        let panel_available = detail.is_some() && self.tab != PrTab::Review;
+        let show_panel = shows_panel(detail.is_some(), self.tab, self.panel);
         let reason = show_panel.then(|| self.inbox_reason(cx)).flatten();
         let (head, panel) = match pr {
             Some(pr) => {
@@ -314,6 +337,7 @@ impl Render for PrView {
                     refreshing: self.refreshing,
                     now,
                     overview_at: self.overview_at,
+                    panel_toggle: panel_available.then_some(self.panel),
                 };
                 let (actions, panel) = if show_panel {
                     (
@@ -360,5 +384,23 @@ impl Render for PrView {
             .bg(theme.background)
             .child(main)
             .children(panel)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_shows_only_when_loaded_open_and_outside_review() {
+        assert!(shows_panel(true, PrTab::Conversation, PanelState::Open));
+        assert!(shows_panel(true, PrTab::Actions, PanelState::Open));
+        assert!(!shows_panel(
+            true,
+            PrTab::Conversation,
+            PanelState::Collapsed
+        ));
+        assert!(!shows_panel(true, PrTab::Review, PanelState::Open));
+        assert!(!shows_panel(false, PrTab::Conversation, PanelState::Open));
     }
 }

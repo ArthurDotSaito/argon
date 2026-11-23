@@ -126,13 +126,9 @@ async fn restore_output_state(writer: &SessionWriter, shared: &Shared, ctx: &Ses
 }
 
 fn pinned_mode(ctx: SessionContext) -> SessionContext {
-    if ctx.kind.is_read_only() {
-        SessionContext {
-            permission_mode: PermissionMode::Supervised,
-            ..ctx
-        }
-    } else {
-        ctx
+    SessionContext {
+        permission_mode: ctx.kind.pinned_mode(ctx.permission_mode),
+        ..ctx
     }
 }
 
@@ -670,34 +666,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn summary_sessions_run_supervised_and_refuse_to_leave_it() {
-        let (dir, writer) = temp_store("summary-mode");
-        let configured = SessionContext {
-            permission_mode: PermissionMode::FullAccess,
-            ..summary_context("s1", dir.clone())
-        };
-        let (_, agent) = launch(
-            &stream_spec(),
-            configured,
-            writer.clone(),
-            None,
-            SessionOptions::default(),
-            replies_with_the_prompt,
-        )
-        .await
-        .unwrap();
-        let started_mode = agent.shared.subscribe().0.permission_mode;
-        let refused = agent.set_permission_mode(PermissionMode::AcceptEdits).await;
-        agent.shutdown().await;
+    async fn summary_sessions_keep_full_access_but_never_accept_edits() {
+        for (configured_mode, expected) in [
+            (PermissionMode::Supervised, PermissionMode::Supervised),
+            (PermissionMode::AcceptEdits, PermissionMode::Supervised),
+            (PermissionMode::FullAccess, PermissionMode::FullAccess),
+        ] {
+            let (dir, writer) = temp_store(&format!("summary-mode-{}", configured_mode.as_str()));
+            let configured = SessionContext {
+                permission_mode: configured_mode,
+                ..summary_context("s1", dir.clone())
+            };
+            let (_, started) = launch(
+                &stream_spec(),
+                configured.clone(),
+                writer.clone(),
+                None,
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            writer.flush().await;
+            let row = Store::open(&dir.join("argon.db"))
+                .unwrap()
+                .session("s1")
+                .unwrap()
+                .unwrap();
+            let started_mode = started.shared.subscribe().0.permission_mode;
+            started.shutdown().await;
 
-        assert_eq!(started_mode, PermissionMode::Supervised);
-        assert!(
-            matches!(&refused, Err(SessionError::SetPermissionMode { reason, .. })
-                if reason == "a sessão de resumo roda só em Supervisionado"),
-            "{refused:?}"
-        );
-        drop(writer);
-        let _ = std::fs::remove_dir_all(&dir);
+            let (_, resumed) = launch(
+                &stream_spec(),
+                configured,
+                writer.clone(),
+                Some("agent".into()),
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            let resumed_mode = resumed.shared.subscribe().0.permission_mode;
+            resumed.shutdown().await;
+
+            assert_eq!(started_mode, expected, "{configured_mode:?}");
+            assert_eq!(
+                row.permission_mode,
+                expected.as_str(),
+                "{configured_mode:?}"
+            );
+            assert_eq!(resumed_mode, expected, "{configured_mode:?}");
+            drop(writer);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn summary_sessions_refuse_to_change_mode_and_accept_their_own() {
+        for started_in in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            let (dir, writer) = temp_store(&format!("summary-lock-{}", started_in.as_str()));
+            let configured = SessionContext {
+                permission_mode: started_in,
+                ..summary_context("s1", dir.clone())
+            };
+            let (_, agent) = launch(
+                &stream_spec(),
+                configured,
+                writer.clone(),
+                None,
+                SessionOptions::default(),
+                replies_with_the_prompt,
+            )
+            .await
+            .unwrap();
+            let own = agent.set_permission_mode(started_in).await;
+            let mut refused = Vec::new();
+            for other in [
+                PermissionMode::Supervised,
+                PermissionMode::AcceptEdits,
+                PermissionMode::FullAccess,
+            ] {
+                if other != started_in {
+                    refused.push(agent.set_permission_mode(other).await);
+                }
+            }
+            let kept = agent.shared.subscribe().0.permission_mode;
+            agent.shutdown().await;
+
+            assert!(
+                !matches!(own, Err(SessionError::SetPermissionMode { .. })),
+                "{started_in:?}: {own:?}"
+            );
+            assert!(
+                refused.iter().all(|result| matches!(result,
+                    Err(SessionError::SetPermissionMode { reason, .. })
+                        if reason == "o modo da sessão de resumo não muda depois que ela começa")),
+                "{started_in:?}: {refused:?}"
+            );
+            assert_eq!(kept, started_in);
+            drop(writer);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[tokio::test]

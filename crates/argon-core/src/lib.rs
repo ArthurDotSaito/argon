@@ -24,7 +24,8 @@ pub use arch::{
 };
 pub use config::{
     AgentCfg, AgentKind, AppearanceCfg, Config, ConfigError, Density, MAX_RELATED_REPOS,
-    NotificationsCfg, OrgsCfg, PermissionMode, ReviewCfg, SyncCfg, ThemeChoice, repo_key,
+    NotificationsCfg, OrgsCfg, PanelState, PermissionMode, ReviewCfg, SyncCfg, ThemeChoice,
+    repo_key,
 };
 pub use diff::{DiffError, DiffLine, Hunk, LineKind, SplitRow, anchor, parse_patch, split_rows};
 pub use findings::{

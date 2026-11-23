@@ -141,14 +141,22 @@ impl StartDialog {
             .placeholder(model_placeholder)
             .disabled(!has_models || self.is_launching());
         let review = self.kind() == SessionKind::Review;
-        let permissions = Select::new(&self.permission_select)
-            .small()
-            .disabled(!review || self.selected_option().is_none() || self.is_launching());
+        let permissions_locked = self.kind() == SessionKind::Plan;
+        let permissions = Select::new(&self.permission_select).small().disabled(
+            permissions_locked || self.selected_option().is_none() || self.is_launching(),
+        );
+        let full_access = self.permission_mode == PermissionMode::FullAccess;
         let risk_note = match self.kind() {
             SessionKind::Plan => Some(note(labels::PLAN_MODE_LOCKED, theme.muted_foreground)),
-            SessionKind::Summary => Some(note(labels::SUMMARY_MODE_LOCKED, theme.muted_foreground)),
-            SessionKind::Review => (self.permission_mode == PermissionMode::FullAccess)
-                .then(|| note(labels::FULL_ACCESS_RISK, theme.warning)),
+            SessionKind::Summary if full_access => {
+                Some(note(labels::SUMMARY_FULL_ACCESS_RISK, theme.warning))
+            }
+            SessionKind::Summary => {
+                Some(note(labels::SUMMARY_READ_ONLY_HINT, theme.muted_foreground))
+            }
+            SessionKind::Review => {
+                full_access.then(|| note(labels::FULL_ACCESS_RISK, theme.warning))
+            }
         }
         .map(|note| note.w_full().min_w_0());
         let template_placeholder = match &self.templates {

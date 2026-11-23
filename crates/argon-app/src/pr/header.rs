@@ -1,9 +1,11 @@
-use argon_core::{IssueRef, PullRequest};
+use argon_core::{IssueRef, PanelState, PullRequest};
 use argon_github::PrDetail;
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, Selectable as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Div, Hsla, ParentElement as _, Rgba, Styled as _, div,
     hsla, px, rgb,
@@ -33,6 +35,7 @@ pub struct HeaderProps<'a> {
     pub refreshing: bool,
     pub now: DateTime<Utc>,
     pub overview_at: Option<DateTime<Utc>>,
+    pub panel_toggle: Option<PanelState>,
 }
 
 pub fn header(props: &HeaderProps<'_>, actions: Vec<AnyElement>, cx: &mut Context<PrView>) -> Div {
@@ -44,6 +47,20 @@ pub fn header(props: &HeaderProps<'_>, actions: Vec<AnyElement>, cx: &mut Contex
         .loading(props.refreshing)
         .tooltip(labels::REFRESH)
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.reload(cx)));
+    let panel_toggle = props.panel_toggle.map(|state| {
+        let open = state == PanelState::Open;
+        Button::new("pr-toggle-panel")
+            .icon(Icon::new(IconName::PanelRight))
+            .xsmall()
+            .ghost()
+            .selected(open)
+            .tooltip(if open {
+                labels::COLLAPSE_PANEL
+            } else {
+                labels::SHOW_PANEL
+            })
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_panel(cx)))
+    });
     let theme = cx.theme();
     let title = h_flex()
         .gap_2()
@@ -96,7 +113,8 @@ pub fn header(props: &HeaderProps<'_>, actions: Vec<AnyElement>, cx: &mut Contex
                         .items_center()
                         .children(actions)
                 }))
-                .child(refresh),
+                .child(refresh)
+                .children(panel_toggle),
         )
         .child(title)
         .children(status)

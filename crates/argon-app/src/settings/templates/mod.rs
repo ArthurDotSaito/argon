@@ -9,7 +9,7 @@ mod view;
 
 use std::path::PathBuf;
 
-use argon_core::{Config, InvalidTemplate, PromptTemplate};
+use argon_core::{Config, InvalidTemplate, PromptTemplate, TemplateKind};
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{AppContext as _, Context, Entity, SharedString, Subscription, Task, Window};
@@ -24,6 +24,16 @@ use crate::review::{Confirm, confirm};
 
 const EDITOR_ROWS: usize = 22;
 
+pub fn templates_of(kind: TemplateKind, templates: &[PromptTemplate]) -> Vec<&PromptTemplate> {
+    templates
+        .iter()
+        .filter(|template| match template.base {
+            Some(_) => kind == TemplateKind::Review,
+            None => template.kind == kind,
+        })
+        .collect()
+}
+
 enum Load<T> {
     Loading,
     Ready(T),
@@ -34,6 +44,7 @@ pub struct TemplatesSection {
     dir: Option<PathBuf>,
     templates: Load<Vec<PromptTemplate>>,
     invalid: Vec<InvalidTemplate>,
+    kind: TemplateKind,
     selected: Option<String>,
     name: Entity<InputState>,
     body: Entity<TextareaState>,
@@ -97,6 +108,7 @@ impl TemplatesSection {
             dir,
             templates: Load::Loading,
             invalid: Vec::new(),
+            kind: TemplateKind::Review,
             selected: None,
             name,
             body,
@@ -186,9 +198,9 @@ impl TemplatesSection {
                     Ok(set) => {
                         this.invalid = set.invalid;
                         this.templates = Load::Ready(set.templates);
-                        let wanted = select
-                            .or_else(|| this.selected.clone())
-                            .or_else(|| Some(this.config.review.default_template.clone()));
+                        let wanted = select.or_else(|| this.selected.clone()).or_else(|| {
+                            Some(review_opts::default_of(&this.config.review, this.kind).to_owned())
+                        });
                         this.select(wanted, window, cx);
                         this.sync_review_options(window, cx);
                     }
@@ -203,10 +215,10 @@ impl TemplatesSection {
     }
 
     fn select(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let templates = self.saved_templates();
+        let visible = templates_of(self.kind, self.saved_templates());
         let chosen = id
-            .filter(|id| templates.iter().any(|template| &template.id == id))
-            .or_else(|| templates.first().map(|template| template.id.clone()));
+            .filter(|id| visible.iter().any(|template| &template.id == id))
+            .or_else(|| visible.first().map(|template| template.id.clone()));
         self.selected = chosen;
         self.error = None;
         let (name, body) = self
@@ -244,5 +256,39 @@ impl TemplatesSection {
                 _ = this.update(cx, |this, cx| this.select(Some(id.clone()), window, cx));
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn template(id: &str, kind: TemplateKind, base: Option<&str>) -> PromptTemplate {
+        PromptTemplate {
+            id: id.into(),
+            kind,
+            base: base.map(str::to_owned),
+            ..PromptTemplate::default()
+        }
+    }
+
+    #[test]
+    fn templates_of_splits_the_kinds_and_keeps_profiles_in_review() {
+        let all = [
+            template("review-padrao", TemplateKind::Review, None),
+            template("plan-padrao", TemplateKind::Plan, None),
+            template("resumo-padrao", TemplateKind::Summary, None),
+            template("perfil", TemplateKind::Review, Some("review-padrao")),
+            template("meu-plano", TemplateKind::Plan, None),
+        ];
+        let ids = |kind| -> Vec<&str> {
+            templates_of(kind, &all)
+                .into_iter()
+                .map(|template| template.id.as_str())
+                .collect()
+        };
+        assert_eq!(ids(TemplateKind::Review), ["review-padrao", "perfil"]);
+        assert_eq!(ids(TemplateKind::Plan), ["plan-padrao", "meu-plano"]);
+        assert_eq!(ids(TemplateKind::Summary), ["resumo-padrao"]);
     }
 }

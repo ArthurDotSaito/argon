@@ -40,9 +40,19 @@ pub(super) fn session_permission_mode(
     kind: SessionKind,
     requested: PermissionMode,
 ) -> PermissionMode {
+    kind.pinned_mode(requested)
+}
+
+pub(super) fn initial_permission_mode(
+    kind: SessionKind,
+    configured: PermissionMode,
+    chosen: Option<PermissionMode>,
+) -> PermissionMode {
     match kind {
-        SessionKind::Review => requested,
-        SessionKind::Plan | SessionKind::Summary => PermissionMode::Supervised,
+        SessionKind::Summary => chosen.map_or(PermissionMode::FullAccess, |mode| {
+            session_permission_mode(kind, mode)
+        }),
+        SessionKind::Review | SessionKind::Plan => session_permission_mode(kind, configured),
     }
 }
 
@@ -117,7 +127,8 @@ impl StartDialog {
             .get(&kind)
             .map(AgentCfg::permission_mode)
             .unwrap_or_default();
-        let permission_mode = session_permission_mode(self.kind(), configured);
+        let chosen = self.permission_chosen.then_some(self.permission_mode);
+        let permission_mode = initial_permission_mode(self.kind(), configured, chosen);
         self.agent = Some(kind);
         self.set_model_choices(None, window, cx);
         self.permission_mode = permission_mode;
@@ -176,6 +187,7 @@ impl StartDialog {
     pub(super) fn set_permission_mode(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
         let mode = session_permission_mode(self.kind(), mode);
         if self.permission_mode != mode {
+            self.permission_chosen = true;
             self.permission_mode = mode;
             cx.notify();
         }
@@ -441,6 +453,73 @@ mod tests {
                 PermissionMode::Supervised
             );
             assert_eq!(session_permission_mode(SessionKind::Review, mode), mode);
+        }
+    }
+
+    #[test]
+    fn summary_sessions_accept_full_access_but_never_accept_edits() {
+        assert_eq!(
+            session_permission_mode(SessionKind::Summary, PermissionMode::Supervised),
+            PermissionMode::Supervised
+        );
+        assert_eq!(
+            session_permission_mode(SessionKind::Summary, PermissionMode::AcceptEdits),
+            PermissionMode::Supervised
+        );
+        assert_eq!(
+            session_permission_mode(SessionKind::Summary, PermissionMode::FullAccess),
+            PermissionMode::FullAccess
+        );
+    }
+
+    #[test]
+    fn summary_dialog_keeps_the_chosen_mode_when_the_agent_changes() {
+        let configured = PermissionMode::FullAccess;
+        assert_eq!(
+            initial_permission_mode(
+                SessionKind::Summary,
+                configured,
+                Some(PermissionMode::Supervised)
+            ),
+            PermissionMode::Supervised
+        );
+        assert_eq!(
+            initial_permission_mode(
+                SessionKind::Summary,
+                configured,
+                Some(PermissionMode::AcceptEdits)
+            ),
+            PermissionMode::Supervised
+        );
+        assert_eq!(
+            initial_permission_mode(
+                SessionKind::Plan,
+                configured,
+                Some(PermissionMode::FullAccess)
+            ),
+            PermissionMode::Supervised
+        );
+    }
+
+    #[test]
+    fn summary_dialog_starts_in_full_access_whatever_the_agent_is_configured_with() {
+        for configured in [
+            PermissionMode::Supervised,
+            PermissionMode::AcceptEdits,
+            PermissionMode::FullAccess,
+        ] {
+            assert_eq!(
+                initial_permission_mode(SessionKind::Summary, configured, None),
+                PermissionMode::FullAccess
+            );
+            assert_eq!(
+                initial_permission_mode(SessionKind::Plan, configured, None),
+                PermissionMode::Supervised
+            );
+            assert_eq!(
+                initial_permission_mode(SessionKind::Review, configured, None),
+                configured
+            );
         }
     }
 }

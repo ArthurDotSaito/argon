@@ -1,8 +1,10 @@
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::{Input, Textarea, TextareaState};
 use gpui_kit::component::select::Select;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, ClickEvent, Context, Div, ElementId, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
@@ -13,7 +15,7 @@ use argon_core::{PROFILE_SLOT, PromptTemplate, TemplateKind};
 
 use super::naming::{is_built_in, variable_token, variables};
 use super::profile::{join_names, profiles_of};
-use super::{Load, TemplatesSection};
+use super::{Load, TemplatesSection, templates_of};
 use crate::settings::labels;
 use crate::settings::ui::{badge, card, field, note, section};
 
@@ -54,15 +56,54 @@ impl TemplatesSection {
         }
     }
 
+    fn kind_selector(&self, cx: &Context<Self>) -> ButtonGroup {
+        const KINDS: [(TemplateKind, &str); 3] = [
+            (TemplateKind::Review, labels::KIND_REVIEW),
+            (TemplateKind::Plan, labels::KIND_PLAN),
+            (TemplateKind::Summary, labels::KIND_SUMMARY),
+        ];
+        ButtonGroup::new("settings-template-kind")
+            .xsmall()
+            .outline()
+            .children(KINDS.map(|(kind, label)| {
+                Button::new(("settings-template-kind", kind as usize))
+                    .label(label)
+                    .selected(self.kind == kind)
+            }))
+            .on_click(cx.listener(|this, selected: &Vec<usize>, window, cx| {
+                let kind = selected.first().and_then(|ix| KINDS.get(*ix));
+                if let Some((kind, _)) = kind {
+                    this.request_kind(*kind, window, cx);
+                }
+            }))
+    }
+
     fn template_list(&self, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
-        let rows: Vec<_> = self
-            .saved_templates()
-            .iter()
+        let rows: Vec<_> = templates_of(self.kind, self.saved_templates())
+            .into_iter()
             .enumerate()
             .map(|(ix, template)| {
                 let selected = self.selected.as_ref() == Some(&template.id);
                 let id = template.id.clone();
+                let trash = (!is_built_in(&template.id)).then(|| {
+                    let id = template.id.clone();
+                    Button::new(ElementId::NamedInteger(
+                        "settings-template-row-delete".into(),
+                        ix as u64,
+                    ))
+                    .icon(Icon::new(IconName::Trash))
+                    .xsmall()
+                    .ghost()
+                    .tooltip(labels::DELETE)
+                    .disabled(self.busy)
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.request_delete_of(id.clone(), window, cx)
+                        },
+                    ))
+                });
                 let tag = if template.base.is_some() {
                     Some(badge(labels::PROFILE_BADGE, theme.primary))
                 } else {
@@ -97,6 +138,7 @@ impl TemplatesSection {
                             ),
                     )
                     .children(tag)
+                    .children(trash)
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.request_select(id.clone(), window, cx)
                     }))
@@ -121,11 +163,23 @@ impl TemplatesSection {
             .ghost()
             .disabled(self.busy)
             .on_click(cx.listener(|this, _, window, cx| this.create_profile(window, cx)));
+        let new_profile = (self.kind == TemplateKind::Review).then_some(new_profile);
+        let empty = rows
+            .is_empty()
+            .then(|| note(labels::NO_TEMPLATES_OF_KIND, theme.muted_foreground));
         v_flex()
             .flex_none()
             .w(px(LIST_WIDTH))
             .gap_1()
-            .child(h_flex().flex_wrap().gap_1().child(new).child(new_profile))
+            .child(self.kind_selector(cx))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(new)
+                    .children(new_profile),
+            )
+            .children(empty)
             .children(rows)
             .children(invalid)
     }
