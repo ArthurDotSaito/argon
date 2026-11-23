@@ -1369,22 +1369,80 @@ fn thread_params_follow_permission_mode() {
     let cwd = Path::new("repo");
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         assert_eq!(
-            thread_params(cwd, None, mode),
+            thread_params(cwd, None, mode, SessionKind::Review),
             json!({"cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only", "config": {"web_search": "disabled"}})
         );
     }
     assert_eq!(
-        thread_params(cwd, Some("gpt-5"), PermissionMode::FullAccess),
+        thread_params(
+            cwd,
+            Some("gpt-5"),
+            PermissionMode::FullAccess,
+            SessionKind::Review
+        ),
         json!({"cwd": "repo", "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "workspace-write", "model": "gpt-5"})
     );
+}
+
+#[test]
+fn summary_full_access_never_asks_and_stays_read_only() {
+    let cwd = Path::new("repo");
+    let mode = PermissionMode::FullAccess;
+    let kind = SessionKind::Summary;
+    let thread = thread_params(cwd, None, mode, kind);
+    assert_eq!(
+        thread,
+        json!({"cwd": "repo", "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "read-only"})
+    );
+    let resumed = resume_params("th_1", cwd, None, mode, kind);
+    assert_eq!(resumed["approvalPolicy"], json!("never"));
+    assert_eq!(resumed["sandbox"], json!("read-only"));
+    assert!(resumed.get("config").is_none());
+    let turn = with_mode(turn_params("th_1", "resuma", None, None), mode, kind);
+    assert_eq!(turn["approvalPolicy"], json!("never"));
+    assert_eq!(turn["sandboxPolicy"], json!({"type": "readOnly"}));
+}
+
+#[test]
+fn summary_supervised_matches_the_restricted_policy() {
+    for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
+        assert_eq!(
+            thread_params(Path::new("repo"), None, mode, SessionKind::Summary),
+            thread_params(Path::new("repo"), None, mode, SessionKind::Review),
+        );
+    }
+}
+
+#[test]
+fn plan_full_access_stays_on_the_restricted_policy() {
+    let params = thread_params(
+        Path::new("repo"),
+        None,
+        PermissionMode::FullAccess,
+        SessionKind::Plan,
+    );
+    assert_eq!(params["approvalPolicy"], json!("untrusted"));
+    assert_eq!(params["sandbox"], json!("read-only"));
+}
+
+#[test]
+fn review_full_access_keeps_the_workspace_write_policy() {
+    let params = thread_params(
+        Path::new("repo"),
+        None,
+        PermissionMode::FullAccess,
+        SessionKind::Review,
+    );
+    assert_eq!(params["approvalPolicy"], json!("never"));
+    assert_eq!(params["sandbox"], json!("workspace-write"));
 }
 
 #[test]
 fn restricted_modes_disable_web_search_on_start_and_resume() {
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
         for params in [
-            thread_params(Path::new("repo"), None, mode),
-            resume_params("th_1", Path::new("repo"), None, mode),
+            thread_params(Path::new("repo"), None, mode, SessionKind::Review),
+            resume_params("th_1", Path::new("repo"), None, mode, SessionKind::Review),
         ] {
             assert_eq!(
                 params["config"]["web_search"],
@@ -1394,8 +1452,19 @@ fn restricted_modes_disable_web_search_on_start_and_resume() {
         }
     }
     for params in [
-        thread_params(Path::new("repo"), None, PermissionMode::FullAccess),
-        resume_params("th_1", Path::new("repo"), None, PermissionMode::FullAccess),
+        thread_params(
+            Path::new("repo"),
+            None,
+            PermissionMode::FullAccess,
+            SessionKind::Review,
+        ),
+        resume_params(
+            "th_1",
+            Path::new("repo"),
+            None,
+            PermissionMode::FullAccess,
+            SessionKind::Review,
+        ),
     ] {
         assert!(params.get("config").is_none());
     }
@@ -1403,7 +1472,12 @@ fn restricted_modes_disable_web_search_on_start_and_resume() {
 
 #[test]
 fn thread_params_skip_empty_model() {
-    let params = thread_params(Path::new("repo"), Some(""), PermissionMode::Supervised);
+    let params = thread_params(
+        Path::new("repo"),
+        Some(""),
+        PermissionMode::Supervised,
+        SessionKind::Review,
+    );
     assert!(params.get("model").is_none());
 }
 
@@ -1414,7 +1488,8 @@ fn resume_params_add_thread_id_and_skip_turn_history() {
             "th_1",
             Path::new("repo"),
             Some("gpt-5"),
-            PermissionMode::Supervised
+            PermissionMode::Supervised,
+            SessionKind::Review
         ),
         json!({"threadId": "th_1", "excludeTurns": true, "cwd": "repo", "approvalPolicy": "untrusted", "approvalsReviewer": "user", "sandbox": "read-only", "model": "gpt-5", "config": {"web_search": "disabled"}})
     );
@@ -1436,13 +1511,13 @@ fn turn_params_include_optional_model_and_effort() {
 fn turn_mode_overrides_follow_permission_mode() {
     let base = || turn_params("th_1", "revise", None, None);
     for mode in [PermissionMode::Supervised, PermissionMode::AcceptEdits] {
-        let params = with_mode(base(), mode);
+        let params = with_mode(base(), mode, SessionKind::Review);
         assert_eq!(params["approvalPolicy"], json!("untrusted"));
         assert_eq!(params["approvalsReviewer"], json!("user"));
         assert_eq!(params["sandboxPolicy"], json!({"type": "readOnly"}));
         assert_eq!(params["threadId"], json!("th_1"));
     }
-    let full = with_mode(base(), PermissionMode::FullAccess);
+    let full = with_mode(base(), PermissionMode::FullAccess, SessionKind::Review);
     assert_eq!(full["approvalPolicy"], json!("never"));
     assert_eq!(full["approvalsReviewer"], json!("user"));
     assert_eq!(full["sandboxPolicy"], json!({"type": "workspaceWrite"}));
@@ -1451,7 +1526,12 @@ fn turn_mode_overrides_follow_permission_mode() {
 #[test]
 fn untrusted_projects_go_into_the_thread_config() {
     let params = with_untrusted_projects(
-        thread_params(Path::new("repo"), None, PermissionMode::Supervised),
+        thread_params(
+            Path::new("repo"),
+            None,
+            PermissionMode::Supervised,
+            SessionKind::Review,
+        ),
         &["C:\\Work\\Repo".to_owned(), "c:\\work\\repo".to_owned()],
     );
     assert_eq!(
@@ -1462,7 +1542,12 @@ fn untrusted_projects_go_into_the_thread_config() {
         }})
     );
     let full = with_untrusted_projects(
-        thread_params(Path::new("repo"), None, PermissionMode::FullAccess),
+        thread_params(
+            Path::new("repo"),
+            None,
+            PermissionMode::FullAccess,
+            SessionKind::Review,
+        ),
         &["repo".to_owned()],
     );
     assert_eq!(

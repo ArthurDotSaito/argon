@@ -16,8 +16,10 @@ pub const OPTIONS: &str = "Opções";
 pub const PERMISSIONS: &str = "Permissões";
 pub const FULL_ACCESS_RISK: &str = "Acesso total aprova automaticamente todo pedido de permissão do agente — comandos, edições e rede — sem mostrar o card. O agente lê código de PRs de terceiros: escolha este modo só se aceitar esse risco.";
 pub const PLAN_MODE_LOCKED: &str = "Agent Plan roda só em Supervisionado";
-pub const SUMMARY_MODE_LOCKED: &str =
+pub const SUMMARY_READ_ONLY_HINT: &str =
     "Somente leitura: o agente não edita arquivos nem publica no GitHub.";
+pub const SUMMARY_FULL_ACCESS_HINT: &str = "Acesso total: comandos rodam sem card e podem escrever arquivos e usar suas credenciais (git, gh); as ferramentas de edição seguem bloqueadas.";
+pub const SUMMARY_FULL_ACCESS_RISK: &str = "Acesso total aprova automaticamente comandos, buscas e rede do agente, sem mostrar o card. As ferramentas de edição ficam bloqueadas, mas os comandos podem escrever arquivos e usar as suas credenciais (git, gh). O agente lê código de PRs de terceiros: escolha este modo só se aceitar esse risco.";
 pub const PROJECT: &str = "Projeto";
 pub const NO_OVERVIEW: &str = "Este repositório ainda não tem visão salva.";
 pub const REFRESH_PROJECT: &str = "Reler o projeto inteiro";

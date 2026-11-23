@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::config::PermissionMode;
+
 pub const DEFAULT_HOST: &str = "github.com";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -115,6 +117,15 @@ impl SessionKind {
 
     pub fn is_read_only(self) -> bool {
         matches!(self, Self::Plan | Self::Summary)
+    }
+
+    pub fn pinned_mode(self, requested: PermissionMode) -> PermissionMode {
+        match self {
+            Self::Review => requested,
+            Self::Plan => PermissionMode::Supervised,
+            Self::Summary if requested == PermissionMode::FullAccess => PermissionMode::FullAccess,
+            Self::Summary => PermissionMode::Supervised,
+        }
     }
 }
 
@@ -307,5 +318,17 @@ mod tests {
         assert!(!SessionKind::Review.is_read_only());
         assert!(SessionKind::Plan.is_read_only());
         assert!(SessionKind::Summary.is_read_only());
+    }
+
+    #[test]
+    fn pinned_mode_keeps_full_access_only_for_review_and_summary() {
+        use PermissionMode::{AcceptEdits, FullAccess, Supervised};
+        for mode in [Supervised, AcceptEdits, FullAccess] {
+            assert_eq!(SessionKind::Review.pinned_mode(mode), mode);
+            assert_eq!(SessionKind::Plan.pinned_mode(mode), Supervised);
+        }
+        assert_eq!(SessionKind::Summary.pinned_mode(Supervised), Supervised);
+        assert_eq!(SessionKind::Summary.pinned_mode(AcceptEdits), Supervised);
+        assert_eq!(SessionKind::Summary.pinned_mode(FullAccess), FullAccess);
     }
 }

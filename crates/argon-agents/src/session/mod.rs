@@ -46,7 +46,7 @@ pub use writer::SessionWriter;
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
 const SESSION_ID_BYTES: usize = 16;
 const PLAN_MODE_LOCKED: &str = "a sessão de plano roda só em Supervisionado";
-const SUMMARY_MODE_LOCKED: &str = "a sessão de resumo roda só em Supervisionado";
+const SUMMARY_MODE_LOCKED: &str = "o modo da sessão de resumo não muda depois que ela começa";
 
 fn mode_lock(kind: SessionKind) -> Option<&'static str> {
     match kind {
@@ -241,7 +241,7 @@ impl AgentSessionHandle {
 
     pub async fn set_permission_mode(&self, mode: PermissionMode) -> Result<()> {
         if let Some(reason) = mode_lock(self.shared.kind())
-            && mode != PermissionMode::Supervised
+            && mode != self.shared.permission_mode()
         {
             return Err(SessionError::SetPermissionMode {
                 mode: mode.as_str().to_owned(),

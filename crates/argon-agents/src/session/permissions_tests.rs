@@ -634,9 +634,12 @@ fn read_only_sessions_ask_for_write_kinds_that_offer_no_reject_option() {
 
 #[test]
 fn read_only_sessions_keep_other_kinds_as_cards() {
-    for session in READ_ONLY_SESSIONS {
+    for (session, modes) in [
+        (SessionKind::Plan, &PLAN_MODES[..]),
+        (SessionKind::Summary, &[PermissionMode::Supervised][..]),
+    ] {
         for kind in ["execute", "fetch", "other", "think"] {
-            for mode in [PermissionMode::Supervised, PermissionMode::FullAccess] {
+            for &mode in modes {
                 let req = request(Some(kind), &[], json!({"command": "ls"}));
                 assert!(
                     asks(&decide_read_only(&req, mode, session, &[])),
@@ -645,6 +648,81 @@ fn read_only_sessions_keep_other_kinds_as_cards() {
             }
         }
     }
+}
+
+const PLAN_MODES: [PermissionMode; 3] = [
+    PermissionMode::Supervised,
+    PermissionMode::AcceptEdits,
+    PermissionMode::FullAccess,
+];
+
+#[test]
+fn summary_full_access_allows_commands_searches_and_network_without_a_card() {
+    for kind in ["execute", "fetch", "think", "search"] {
+        let req = request(Some(kind), &[], json!({"command": "git log"}));
+        let decision =
+            decide_read_only(&req, PermissionMode::FullAccess, SessionKind::Summary, &[]);
+        assert!(allowed(&decision), "{kind}: {decision:?}");
+    }
+    let outside_read = request(Some("read"), &[outside().to_string()], json!({}));
+    assert!(allowed(&decide_read_only(
+        &outside_read,
+        PermissionMode::FullAccess,
+        SessionKind::Summary,
+        &[]
+    )));
+}
+
+#[test]
+fn summary_full_access_asks_for_other_and_missing_kinds() {
+    for kind in [Some("other"), None, Some("brand_new_kind")] {
+        let req = request(kind, &[], json!({"command": "rm -rf x"}));
+        let decision =
+            decide_read_only(&req, PermissionMode::FullAccess, SessionKind::Summary, &[]);
+        assert!(asks(&decision), "{kind:?}: {decision:?}");
+    }
+}
+
+#[test]
+fn summary_full_access_still_denies_edits_ahead_of_the_blanket_approval() {
+    for kind in READ_ONLY_DENIED_KINDS {
+        let req = request(Some(kind), &[inside("src/a.rs")], json!({}));
+        let decision =
+            decide_read_only(&req, PermissionMode::FullAccess, SessionKind::Summary, &[]);
+        assert!(
+            denied_with(&decision, "reject-once"),
+            "{kind}: {decision:?}"
+        );
+    }
+}
+
+#[test]
+fn summary_accept_edits_behaves_as_supervised() {
+    let execute = request(Some("execute"), &[], json!({"command": "ls"}));
+    assert!(asks(&decide_read_only(
+        &execute,
+        PermissionMode::AcceptEdits,
+        SessionKind::Summary,
+        &[]
+    )));
+    let read = request(Some("read"), &[inside("src/a.rs")], json!({}));
+    assert!(allowed(&decide_read_only(
+        &read,
+        PermissionMode::AcceptEdits,
+        SessionKind::Summary,
+        &[]
+    )));
+}
+
+#[test]
+fn plan_full_access_is_decided_as_supervised() {
+    let execute = request(Some("execute"), &[], json!({"command": "ls"}));
+    assert!(asks(&decide_plan(&execute, PermissionMode::FullAccess)));
+    let outside_read = request(Some("read"), &[outside().to_string()], json!({}));
+    assert!(asks(&decide_plan(
+        &outside_read,
+        PermissionMode::FullAccess
+    )));
 }
 
 #[test]

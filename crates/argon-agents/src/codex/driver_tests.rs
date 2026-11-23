@@ -760,6 +760,16 @@ fn full_access_is_unavailable_without_the_sandbox() {
 }
 
 #[test]
+fn without_a_ready_sandbox_summary_full_access_opens_supervised() {
+    let missing: Sandbox = Err("notConfigured".to_owned());
+    let mode = effective_mode(PermissionMode::FullAccess, &missing);
+    assert_eq!(mode, PermissionMode::Supervised);
+    let thread = thread_params(&cwd(), None, mode, SessionKind::Summary);
+    assert_eq!(thread["approvalPolicy"], json!("untrusted"));
+    assert_eq!(thread["sandbox"], json!("read-only"));
+}
+
+#[test]
 fn without_a_ready_sandbox_every_mode_asks_before_running_commands() {
     let missing: Sandbox = Err("notConfigured".to_owned());
     for requested in [
@@ -768,9 +778,13 @@ fn without_a_ready_sandbox_every_mode_asks_before_running_commands() {
         PermissionMode::FullAccess,
     ] {
         let mode = effective_mode(requested, &missing);
-        let thread = thread_params(&cwd(), None, mode);
-        let resumed = resume_params("th_1", &cwd(), None, mode);
-        let turn = with_mode(turn_params("th_1", "revise", None, None), mode);
+        let thread = thread_params(&cwd(), None, mode, SessionKind::Review);
+        let resumed = resume_params("th_1", &cwd(), None, mode, SessionKind::Review);
+        let turn = with_mode(
+            turn_params("th_1", "revise", None, None),
+            mode,
+            SessionKind::Review,
+        );
         for params in [&thread, &resumed, &turn] {
             assert_eq!(
                 params["approvalPolicy"],

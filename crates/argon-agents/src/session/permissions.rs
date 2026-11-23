@@ -8,6 +8,7 @@ use crate::util::json_text;
 use crate::worktree::is_related_dir_name;
 
 const READ_ONLY_KINDS: &[&str] = &["read", "search"];
+const FULL_ACCESS_READ_ONLY_KINDS: &[&str] = &["read", "search", "execute", "fetch", "think"];
 const LOCAL_EDIT_KINDS: &[&str] = &["read", "search", "edit"];
 pub(crate) const PERMISSIONS_KIND: &str = "permissions";
 const DENIED_WHEN_READ_ONLY_KINDS: &[&str] =
@@ -409,8 +410,12 @@ fn option_of_kind(ask: &PermissionAsk, kind: &str) -> Option<String> {
         .map(|option| option.id.clone())
 }
 
+fn is_write_kind(ask: &PermissionAsk) -> bool {
+    DENIED_WHEN_READ_ONLY_KINDS.contains(&ask.kind.as_str())
+}
+
 fn denied_when_read_only(ask: &PermissionAsk) -> Option<String> {
-    if DENIED_WHEN_READ_ONLY_KINDS.contains(&ask.kind.as_str()) {
+    if is_write_kind(ask) {
         option_of_kind(ask, REJECT_ONCE)
     } else {
         None
@@ -424,10 +429,12 @@ pub fn decide(
     mode: PermissionMode,
     kind: SessionKind,
 ) -> PermissionDecision {
-    let (mode, read_roots) = if kind.is_read_only() {
-        (PermissionMode::Supervised, read_roots)
-    } else {
+    let (mode, read_roots) = if !kind.is_read_only() {
         (mode, &[][..])
+    } else if FULL_ACCESS_READ_ONLY_KINDS.contains(&ask.kind.as_str()) {
+        (kind.pinned_mode(mode), read_roots)
+    } else {
+        (PermissionMode::Supervised, read_roots)
     };
     if kind.is_read_only()
         && let Some(option_id) = denied_when_read_only(ask)

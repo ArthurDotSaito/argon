@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use argon_core::PermissionMode;
+use argon_core::{PermissionMode, SessionKind};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -40,6 +40,7 @@ pub(super) struct ThreadSetup<'a> {
     pub cwd: &'a Path,
     pub model: Option<&'a str>,
     pub mode: PermissionMode,
+    pub kind: SessionKind,
     pub untrusted: &'a [String],
 }
 
@@ -176,7 +177,7 @@ pub(super) async fn open_thread(
     let mode = effective_mode(setup.mode, &sandbox);
     let (thread, result) = match open {
         Open::Start => {
-            let params = thread_params(setup.cwd, setup.model, mode);
+            let params = thread_params(setup.cwd, setup.model, mode, setup.kind);
             let result = rpc
                 .call(
                     "thread/start",
@@ -187,7 +188,7 @@ pub(super) async fn open_thread(
             (thread, result)
         }
         Open::Resume(id) => {
-            let params = resume_params(id, setup.cwd, setup.model, mode);
+            let params = resume_params(id, setup.cwd, setup.model, mode, setup.kind);
             let result = resume(rpc, id, with_untrusted_projects(params, setup.untrusted)).await?;
             (id.to_owned(), result)
         }

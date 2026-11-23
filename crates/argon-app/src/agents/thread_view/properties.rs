@@ -1,4 +1,4 @@
-use argon_core::{SessionKind, local_folder_name};
+use argon_core::{PermissionMode, SessionKind, local_folder_name};
 use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -10,7 +10,8 @@ use gpui_kit::{
 use super::ThreadView;
 use crate::agents::badges::{severity_pills, status_chip};
 use crate::agents::labels::{
-    PLAN_MODE_LOCKED, SUMMARIZE, SUMMARY_MODE_LOCKED, permission_mode, permission_mode_hint,
+    PLAN_MODE_LOCKED, SUMMARIZE, SUMMARY_FULL_ACCESS_HINT, SUMMARY_READ_ONLY_HINT, permission_mode,
+    permission_mode_hint,
 };
 use crate::agents::panel_labels as labels;
 use crate::agents::session_actions::controls;
@@ -44,7 +45,10 @@ impl ThreadView {
         };
         let hint = match info.kind {
             SessionKind::Plan => Some(PLAN_MODE_LOCKED),
-            SessionKind::Summary => Some(SUMMARY_MODE_LOCKED),
+            SessionKind::Summary if mode == Some(PermissionMode::FullAccess) => {
+                Some(SUMMARY_FULL_ACCESS_HINT)
+            }
+            SessionKind::Summary => Some(SUMMARY_READ_ONLY_HINT),
             SessionKind::Review => mode.map(permission_mode_hint),
         }
         .map(|hint| properties::row("", note(hint, theme.muted_foreground), cx));

@@ -260,6 +260,10 @@ impl Shared {
         }
     }
 
+    pub(super) fn permission_mode(&self) -> PermissionMode {
+        self.lock().permission_mode
+    }
+
     pub(super) fn start_in_mode(&self, mode: PermissionMode) {
         self.lock().permission_mode = mode;
     }

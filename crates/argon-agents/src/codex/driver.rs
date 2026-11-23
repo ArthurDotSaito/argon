@@ -255,6 +255,7 @@ impl Session {
             cwd: &self.agent_cwd,
             model: self.chosen_model.as_deref(),
             mode: self.mode,
+            kind: self.shared.kind(),
             untrusted: &self.untrusted,
         };
         match open_thread(&codex.rpc, Open::Resume(&self.thread), &setup).await {
@@ -294,6 +295,7 @@ impl Session {
         let params = with_mode(
             turn_params(&self.thread, &text, self.chosen_model.as_deref(), None),
             self.mode,
+            self.shared.kind(),
         );
         let started = match self.rpc() {
             Some(rpc) => rpc.call("turn/start", params).await,
@@ -498,6 +500,7 @@ async fn connect(
         cwd: &workspace.cwd,
         model: chosen,
         mode: run.ctx.permission_mode,
+        kind: run.ctx.kind,
         untrusted: &workspace.untrusted,
     };
     let open = match &run.load {
