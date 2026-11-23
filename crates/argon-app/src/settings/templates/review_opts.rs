@@ -1,11 +1,11 @@
-use argon_core::TemplateKind;
+use argon_core::{ReviewCfg, TemplateKind};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Context, Div, ParentElement as _, Styled as _, Window, div};
 
-use super::TemplatesSection;
+use super::{TemplatesSection, templates_of};
 use crate::agents::Choice;
 use crate::config_watch;
 use crate::settings::labels;
@@ -21,15 +21,29 @@ pub fn parse_limit(text: &str) -> Option<usize> {
     digits.parse::<usize>().ok().filter(|limit| *limit > 0)
 }
 
+pub fn default_of(review: &ReviewCfg, kind: TemplateKind) -> &str {
+    match kind {
+        TemplateKind::Review => &review.default_template,
+        TemplateKind::Plan => &review.default_plan_template,
+        TemplateKind::Summary => &review.default_summary_template,
+    }
+}
+
+fn set_default_of(review: &mut ReviewCfg, kind: TemplateKind, id: String) {
+    match kind {
+        TemplateKind::Review => review.default_template = id,
+        TemplateKind::Plan => review.default_plan_template = id,
+        TemplateKind::Summary => review.default_summary_template = id,
+    }
+}
+
 impl TemplatesSection {
     pub(super) fn sync_review_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let choices: Vec<Choice> = self
-            .saved_templates()
-            .iter()
-            .filter(|template| template.kind == TemplateKind::Review)
+        let choices: Vec<Choice> = templates_of(self.kind, self.saved_templates())
+            .into_iter()
             .map(|template| Choice::new(template.id.clone(), template.name.clone()))
             .collect();
-        let selected = self.config.review.default_template.clone();
+        let selected = default_of(&self.config.review, self.kind).to_owned();
         self.default_select.update(cx, |select, cx| {
             select.set_items(choices, window, cx);
             select.set_selected_value(&selected, window, cx);
@@ -48,8 +62,10 @@ impl TemplatesSection {
     }
 
     pub(super) fn set_default_template(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.config.review.default_template != id {
-            self.config = config_watch::update(cx, |config| config.review.default_template = id);
+        let kind = self.kind;
+        if default_of(&self.config.review, kind) != id {
+            self.config =
+                config_watch::update(cx, |config| set_default_of(&mut config.review, kind, id));
             cx.notify();
         }
     }
@@ -100,6 +116,18 @@ impl TemplatesSection {
                 )
                 .child(div().w_32().child(Input::new(&self.diff_limit).small()))
         });
+        let diff = (self.kind == TemplateKind::Review).then(|| {
+            v_flex()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .gap_4()
+                        .items_center()
+                        .child(switch)
+                        .children(limit),
+                )
+                .child(note(labels::INCLUDE_DIFF_HINT, theme.muted_foreground))
+        });
         card(cx)
             .child(field(
                 labels::DEFAULT_TEMPLATE,
@@ -108,24 +136,29 @@ impl TemplatesSection {
                     .child(Select::new(&self.default_select).small()),
                 cx,
             ))
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .items_center()
-                            .child(switch)
-                            .children(limit),
-                    )
-                    .child(note(labels::INCLUDE_DIFF_HINT, theme.muted_foreground)),
-            )
+            .children(diff)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_of_reads_and_writes_the_default_of_each_kind() {
+        let mut review = ReviewCfg::default();
+        for (kind, id) in [
+            (TemplateKind::Review, "a"),
+            (TemplateKind::Plan, "b"),
+            (TemplateKind::Summary, "c"),
+        ] {
+            set_default_of(&mut review, kind, id.into());
+            assert_eq!(default_of(&review, kind), id);
+        }
+        assert_eq!(review.default_template, "a");
+        assert_eq!(review.default_plan_template, "b");
+        assert_eq!(review.default_summary_template, "c");
+    }
 
     #[test]
     fn parse_limit_accepts_grouped_digits() {

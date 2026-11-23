@@ -7,6 +7,8 @@ use argon_core::{
     scan_templates,
 };
 
+use crate::settings::labels;
+
 const HEADER_FENCE: &str = "+++";
 
 pub fn template_path(dir: &Path, id: &str) -> PathBuf {
@@ -31,6 +33,20 @@ fn toml_string(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+pub fn new_template(kind: TemplateKind) -> PromptTemplate {
+    let body = match kind {
+        TemplateKind::Review => labels::NEW_TEMPLATE_BODY,
+        TemplateKind::Plan => labels::NEW_PLAN_BODY,
+        TemplateKind::Summary => labels::NEW_SUMMARY_BODY,
+    };
+    PromptTemplate {
+        name: labels::NEW_TEMPLATE_NAME.into(),
+        kind,
+        body: body.into(),
+        ..PromptTemplate::default()
+    }
 }
 
 pub fn compose(template: &PromptTemplate) -> String {
@@ -219,6 +235,27 @@ mod tests {
                 ..plan
             }]
         );
+    }
+
+    #[test]
+    fn new_template_of_each_kind_is_read_back_with_the_same_kind() {
+        let dir = TempDir::new("new-kinds");
+        for (id, kind) in [
+            ("novo-review", TemplateKind::Review),
+            ("novo-plan", TemplateKind::Plan),
+            ("novo-resumo", TemplateKind::Summary),
+        ] {
+            let template = new_template(kind);
+            assert_eq!(template.kind, kind);
+            assert_eq!(template.base, None);
+            write_atomic(&template_path(&dir.0, id), &compose(&template)).unwrap();
+        }
+        let set = scan_templates(&dir.0).unwrap();
+        assert!(set.invalid.is_empty(), "{:?}", set.invalid);
+        let kind_of = |id: &str| set.templates.iter().find(|t| t.id == id).unwrap().kind;
+        assert_eq!(kind_of("novo-review"), TemplateKind::Review);
+        assert_eq!(kind_of("novo-plan"), TemplateKind::Plan);
+        assert_eq!(kind_of("novo-resumo"), TemplateKind::Summary);
     }
 
     #[test]
