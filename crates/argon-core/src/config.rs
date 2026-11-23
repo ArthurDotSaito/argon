@@ -85,6 +85,23 @@ pub enum Density {
     Comfortable,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelState {
+    #[default]
+    Open,
+    Collapsed,
+}
+
+impl PanelState {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Open => Self::Collapsed,
+            Self::Collapsed => Self::Open,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncCfg {
@@ -231,6 +248,8 @@ pub struct AppearanceCfg {
     pub theme: ThemeChoice,
     #[serde(deserialize_with = "lenient_enum")]
     pub density: Density,
+    #[serde(deserialize_with = "lenient_enum")]
+    pub pr_panel: PanelState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -401,6 +420,7 @@ mod tests {
             appearance: AppearanceCfg {
                 theme: ThemeChoice::System,
                 density: Density::Compact,
+                pr_panel: PanelState::Collapsed,
             },
             notifications: NotificationsCfg {
                 needs_you: false,
@@ -425,6 +445,7 @@ mod tests {
         assert!(!config.review.include_ci_failures);
         assert_eq!(config.appearance.theme, ThemeChoice::OneDark);
         assert_eq!(config.appearance.density, Density::Compact);
+        assert_eq!(config.appearance.pr_panel, PanelState::Open);
         assert!(config.notifications.needs_you);
         assert!(config.notifications.agent_events);
     }
@@ -697,6 +718,28 @@ mod tests {
         let parsed: Config = toml::from_str(text).unwrap();
         assert_eq!(parsed.appearance.theme, ThemeChoice::OneLight);
         assert_eq!(parsed.appearance.density, Density::Compact);
+    }
+
+    #[test]
+    fn config_without_pr_panel_loads_open() {
+        let parsed: Config = toml::from_str("[appearance]\ntheme = \"one-light\"\n").unwrap();
+        assert_eq!(parsed.appearance.pr_panel, PanelState::Open);
+    }
+
+    #[test]
+    fn collapsed_pr_panel_round_trips_through_toml() {
+        let mut config = Config::default();
+        config.appearance.pr_panel = PanelState::Collapsed;
+        let text = toml::to_string_pretty(&config).unwrap();
+        assert!(text.contains("pr_panel = \"collapsed\""));
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.appearance.pr_panel, PanelState::Collapsed);
+    }
+
+    #[test]
+    fn panel_state_toggles_both_ways() {
+        assert_eq!(PanelState::Open.toggled(), PanelState::Collapsed);
+        assert_eq!(PanelState::Collapsed.toggled(), PanelState::Open);
     }
 
     #[test]

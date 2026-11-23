@@ -4,6 +4,8 @@ use argon_github::MergeMethod;
 pub const OPEN_ON_GITHUB: &str = "Abrir no GitHub";
 pub const OPEN_ISSUE: &str = "Abrir a issue";
 pub const REFRESH: &str = "Atualizar";
+pub const COLLAPSE_PANEL: &str = "Recolher painel";
+pub const SHOW_PANEL: &str = "Mostrar painel";
 pub const MERGE: &str = "Merge";
 pub const REVIEW: &str = "Revisar";
 pub const REVIEW_TOOLTIP: &str = "Abrir a review deste PR";
