@@ -43,6 +43,7 @@ impl SentComment {
                 body,
                 created_at,
                 url,
+                ..
             } if author.eq_ignore_ascii_case(&self.author)
                 && body.trim() == self.body
                 && *created_at >= self.sent_at - window
@@ -73,6 +74,7 @@ mod tests {
         TimelineItem::Comment {
             id: id.into(),
             author: author.into(),
+            author_is_bot: false,
             body: body.into(),
             created_at,
             url: Some(format!("https://github.com/acme/api/issues/7#{id}")),

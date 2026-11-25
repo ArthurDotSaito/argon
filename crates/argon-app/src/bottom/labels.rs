@@ -1,5 +1,5 @@
 pub const PANEL_TITLE: &str = "Log";
-pub const EMPTY_HINT: &str = "Selecione um job na aba Actions de um PR para ver o log.";
+pub const EMPTY_HINT: &str = "Selecione um job na aba Checks de um PR para ver o log.";
 pub const LOADING: &str = "Carregando log…";
 pub const EMPTY_LOG: &str = "Log vazio.";
 pub const TRUNCATED: &str = "Log truncado — mostrando os últimos 5 MB";

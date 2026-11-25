@@ -55,10 +55,10 @@ impl PrTab {
 
     fn title(self) -> &'static str {
         match self {
-            Self::Conversation => labels::TAB_CONVERSATION,
+            Self::Conversation => labels::TAB_OVERVIEW,
             Self::Commits => labels::TAB_COMMITS,
-            Self::Actions => labels::TAB_ACTIONS,
-            Self::Review => labels::TAB_REVIEW,
+            Self::Actions => labels::TAB_CHECKS,
+            Self::Review => labels::TAB_FILES,
         }
     }
 
@@ -115,6 +115,7 @@ pub struct PrView {
     summary: Option<PrSummary>,
     summary_task: Option<Task<()>>,
     overview_at: Option<DateTime<Utc>>,
+    checks_running: bool,
     load_task: Option<Task<()>>,
     merge_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -127,21 +128,42 @@ impl PrView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let conversation = cx.new(|cx| Conversation::new(key.clone(), window, cx));
+        let viewer_login = viewer_login(&key.host, cx);
+        let conversation =
+            cx.new(|cx| Conversation::new(key.clone(), viewer_login.clone(), window, cx));
         let commits = cx.new(|cx| CommitsTab::new(window, cx));
         let actions = cx.new(|cx| ActionsTab::new(window, cx));
         let review = cx.new(|cx| ReviewTab::new(window, cx));
         let drafts = DraftsBus::global(cx);
         let subscriptions = vec![
-            cx.subscribe(&conversation, |this, _, event, cx| match event {
-                ConversationEvent::Commented => {
-                    this.reload(cx);
-                    request_sync(cx);
-                }
-                ConversationEvent::CommentConfirmed => request_sync(cx),
-                ConversationEvent::Recheck => this.reload(cx),
-                ConversationEvent::OpenOnGithub => this.open_on_github(cx),
-            }),
+            cx.subscribe_in(
+                &conversation,
+                window,
+                |this, _, event, window, cx| match event {
+                    ConversationEvent::Commented => {
+                        this.reload(cx);
+                        request_sync(cx);
+                    }
+                    ConversationEvent::CommentConfirmed => request_sync(cx),
+                    ConversationEvent::Recheck => this.reload(cx),
+                    ConversationEvent::OpenOnGithub => this.open_on_github(cx),
+                    ConversationEvent::OpenCommits => this.set_tab(PrTab::Commits, cx),
+                    ConversationEvent::OpenChecks => {
+                        this.set_tab(PrTab::Actions, cx);
+                        this.actions
+                            .update(cx, |actions, cx| actions.reopen_failed_log(cx));
+                    }
+                    ConversationEvent::RerunFailed => {
+                        this.set_tab(PrTab::Actions, cx);
+                        this.actions
+                            .update(cx, |actions, cx| actions.confirm_rerun(window, cx));
+                    }
+                    ConversationEvent::StartReview => this.start_review(window, cx),
+                    ConversationEvent::Reveal { path, line, side } => {
+                        this.reveal(path, *line, *side, cx)
+                    }
+                },
+            ),
             cx.observe(&commits, |_, _, cx| cx.notify()),
             cx.subscribe(&commits, |this, _, event, cx| match event {
                 CommitsEvent::OpenCommit { oid, headline } => this.set_review_scope(
@@ -152,7 +174,10 @@ impl PrView {
                     cx,
                 ),
             }),
-            cx.observe(&actions, |_, _, cx| cx.notify()),
+            cx.observe(&actions, |this, _, cx| {
+                this.sync_checks(cx);
+                cx.notify();
+            }),
             cx.observe(&review, |_, _, cx| cx.notify()),
             cx.subscribe(&review, |this, _, event, cx| match event {
                 ReviewTabEvent::ShowAll => this.set_review_scope(ReviewScope::All, cx),
@@ -173,7 +198,6 @@ impl PrView {
         ];
         let store_pr = inbox.read(cx).pr(&key).cloned().map(Rc::new);
         let seen_updated_at = store_pr.as_ref().map(|pr| pr.updated_at);
-        let viewer_login = viewer_login(&key.host, cx);
         let review_login = viewer_login.clone();
         review.update(cx, |tab, cx| tab.set_viewer_login(review_login, cx));
         let mut this = Self {
@@ -200,6 +224,7 @@ impl PrView {
             summary: None,
             summary_task: None,
             overview_at: None,
+            checks_running: false,
             load_task: None,
             merge_task: None,
             _subscriptions: subscriptions,
@@ -218,6 +243,21 @@ impl PrView {
             self.review
                 .update(cx, |review, cx| review.set_active(tab == PrTab::Review, cx));
             cx.notify();
+        }
+    }
+
+    fn sync_checks(&mut self, cx: &mut Context<Self>) {
+        let (runs, error_line, running) = {
+            let actions = self.actions.read(cx);
+            (actions.runs(), actions.error_line(), actions.has_running())
+        };
+        self.conversation.update(cx, |conversation, cx| {
+            conversation.set_checks(runs, error_line, cx)
+        });
+        let finished = self.checks_running && !running;
+        self.checks_running = running;
+        if finished {
+            self.reload(cx);
         }
     }
 
@@ -293,6 +333,10 @@ impl Render for PrView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.settle_pending_ai_review(window, cx);
         self.settle_pending_summarize(window, cx);
+        if self.tab == PrTab::Conversation {
+            self.actions
+                .update(cx, |actions, _| actions.mark_overview_visible());
+        }
         let now = Utc::now();
         let detail = self.detail.clone();
         let store_pr = self.store_pr.clone();
@@ -302,6 +346,7 @@ impl Render for PrView {
             .or(store_pr.as_deref());
         let show_panel = detail.is_some() && self.tab != PrTab::Review;
         let reason = show_panel.then(|| self.inbox_reason(cx)).flatten();
+        let viewer = self.viewer_login.clone();
         let (head, panel) = match pr {
             Some(pr) => {
                 let props = HeaderProps {
@@ -314,19 +359,11 @@ impl Render for PrView {
                     refreshing: self.refreshing,
                     now,
                     overview_at: self.overview_at,
+                    viewer: viewer.as_deref(),
                 };
-                let (actions, panel) = if show_panel {
-                    (
-                        Vec::new(),
-                        Some(properties::panel(&props, reason.as_ref(), cx)),
-                    )
-                } else {
-                    let show_review = self.tab != PrTab::Review;
-                    (
-                        properties::action_buttons(&props, show_review, false, cx),
-                        None,
-                    )
-                };
+                let show_review = self.tab != PrTab::Review;
+                let actions = properties::action_buttons(&props, show_review, cx);
+                let panel = show_panel.then(|| properties::panel(&props, reason.as_ref(), cx));
                 (header(&props, actions, cx), panel)
             }
             None => (body::pr_fallback_header(cx), None),

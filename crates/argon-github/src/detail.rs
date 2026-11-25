@@ -66,6 +66,7 @@ pub enum TimelineItem {
     Comment {
         id: String,
         author: String,
+        author_is_bot: bool,
         body: String,
         created_at: DateTime<Utc>,
         url: Option<String>,
@@ -73,6 +74,7 @@ pub enum TimelineItem {
     Review {
         id: String,
         author: String,
+        author_is_bot: bool,
         state: ReviewState,
         body: String,
         submitted_at: DateTime<Utc>,

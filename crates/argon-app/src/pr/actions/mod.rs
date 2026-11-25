@@ -7,10 +7,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use argon_core::{ChecksState, PrState};
 use argon_github::{GithubError, PrDetail, RunStatus, WorkflowRun};
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::{App, Context, ScrollHandle, SharedString, Subscription, Task, Window};
+use gpui_kit::{
+    App, AppContext as _, Context, ScrollHandle, SharedString, Subscription, Task, Window,
+};
 
+use super::readiness::error_line;
 use crate::bottom::{JobLogModel, LogTarget, is_running};
 use crate::services::{AppServices, Services};
 
@@ -48,6 +52,10 @@ pub struct ActionsTab {
     load_task: Option<Task<()>>,
     rerun_task: Option<Task<()>>,
     ticker: Option<Task<()>>,
+    error_job: Option<u64>,
+    error_line: Option<SharedString>,
+    error_task: Option<Task<()>>,
+    overview: bool,
     _log_subscription: Option<Subscription>,
 }
 
@@ -73,6 +81,10 @@ impl ActionsTab {
             load_task: None,
             rerun_task: None,
             ticker: None,
+            error_job: None,
+            error_line: None,
+            error_task: None,
+            overview: false,
             _log_subscription: log_subscription,
         }
     }
@@ -84,8 +96,13 @@ impl ActionsTab {
             self.error = None;
             self.expanded.clear();
             self.rerun = Rerun::Idle;
+            self.error_job = None;
+            self.error_line = None;
+            self.error_task = None;
             self.sync_ticker(cx);
         }
+        self.overview = wants_overview(&detail);
+        self.opened |= self.overview;
         self.detail = Some(detail);
         if self.opened {
             self.reload(cx);
@@ -111,6 +128,81 @@ impl ActionsTab {
 
     pub fn count(&self) -> Option<usize> {
         self.runs.as_ref().map(|runs| runs.len())
+    }
+
+    pub fn runs(&self) -> Option<Rc<Vec<WorkflowRun>>> {
+        self.runs.clone()
+    }
+
+    pub fn failed_count(&self) -> usize {
+        self.failed_runs().len()
+    }
+
+    pub fn error_line(&self) -> Option<SharedString> {
+        self.error_line.clone()
+    }
+
+    pub fn mark_overview_visible(&mut self) {
+        if self.overview {
+            self.painted_at = Some(Instant::now());
+        }
+    }
+
+    pub fn reopen_failed_log(&mut self, cx: &mut Context<Self>) {
+        self.auto_opened = None;
+        self.auto_open_failed_job(cx);
+    }
+
+    fn watching(&self) -> bool {
+        (self.active || self.overview) && self.has_running()
+    }
+
+    fn load_error_line(&mut self, cx: &mut Context<Self>) {
+        let failed_job = self.runs.as_ref().and_then(|runs| {
+            runs.iter()
+                .filter(|run| run.status == RunStatus::Failure)
+                .flat_map(|run| &run.jobs)
+                .find(|job| job.status == RunStatus::Failure)
+                .map(|job| job.id)
+        });
+        if self.error_job == failed_job {
+            return;
+        }
+        self.error_job = failed_job;
+        self.error_line = None;
+        self.error_task = None;
+        let (Some(job_id), Some(detail), Some(services)) =
+            (failed_job, self.detail.clone(), app_services(cx))
+        else {
+            return;
+        };
+        let repo = detail.pr.repo.clone();
+        let task = services.spawn_github(cx, detail.pr.host.clone(), move |client| async move {
+            client.job_log(&repo, job_id).await
+        });
+        self.error_task = Some(cx.spawn(async move |this, cx| {
+            let log = match task.await {
+                Ok(log) => log,
+                Err(error) => {
+                    tracing::warn!(%error, job_id, "failed to load the failed job log");
+                    _ = this.update(cx, |this, _| {
+                        if this.error_job == Some(job_id) {
+                            this.error_job = None;
+                        }
+                    });
+                    return;
+                }
+            };
+            let line = cx
+                .background_spawn(async move { error_line(&log.text) })
+                .await;
+            _ = this.update(cx, |this, cx| {
+                if this.error_job == Some(job_id) {
+                    this.error_line = line.map(Into::into);
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -161,12 +253,13 @@ impl ActionsTab {
             });
         }
         self.runs = Some(Rc::new(runs));
+        self.load_error_line(cx);
         self.auto_open_failed_job(cx);
         self.sync_ticker(cx);
     }
 
     fn sync_ticker(&mut self, cx: &mut Context<Self>) {
-        if !(self.active && self.has_running()) {
+        if !self.watching() {
             self.ticker = None;
             return;
         }
@@ -185,7 +278,7 @@ impl ActionsTab {
     }
 
     fn tick(&mut self, cx: &mut Context<Self>) -> bool {
-        if !(self.active && self.has_running()) {
+        if !self.watching() {
             return false;
         }
         let visible = self
@@ -201,7 +294,7 @@ impl ActionsTab {
         true
     }
 
-    fn has_running(&self) -> bool {
+    pub fn has_running(&self) -> bool {
         self.runs
             .as_ref()
             .is_some_and(|runs| runs.iter().any(|run| is_running(run.status)))
@@ -286,7 +379,7 @@ impl ActionsTab {
         !matches!(self.rerun, Rerun::Running) && !window.has_active_dialog(cx)
     }
 
-    fn confirm_rerun(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn confirm_rerun(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_rerun(window, cx) {
             return;
         }
@@ -389,6 +482,14 @@ impl ActionsTab {
             tracing::warn!(%error, url, "failed to open checks in browser");
         }
     }
+}
+
+fn wants_overview(detail: &PrDetail) -> bool {
+    detail.pr.state == PrState::Open
+        && matches!(
+            detail.pr.checks,
+            Some(ChecksState::Failure | ChecksState::Error | ChecksState::Pending)
+        )
 }
 
 fn app_services(cx: &App) -> Option<Services> {

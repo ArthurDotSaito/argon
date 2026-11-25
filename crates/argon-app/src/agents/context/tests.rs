@@ -24,6 +24,7 @@ fn review(
     TimelineItem::Review {
         id: format!("r-{author}"),
         author: author.into(),
+        author_is_bot: false,
         state,
         body: body.into(),
         submitted_at: fixtures::now(),
@@ -109,6 +110,7 @@ fn previous_reviews_include_state_body_and_code_comments() {
         TimelineItem::Comment {
             id: "c".into(),
             author: "ana".into(),
+            author_is_bot: false,
             body: "comentário solto".into(),
             created_at: fixtures::now(),
             url: None,

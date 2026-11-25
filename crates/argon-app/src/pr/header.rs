@@ -11,6 +11,7 @@ use gpui_kit::{
 
 use super::labels;
 use super::pr_view::{MergeState, PrView};
+use super::properties;
 use crate::issue::IssueStatus;
 use crate::issue::destination::Destination;
 
@@ -33,6 +34,7 @@ pub struct HeaderProps<'a> {
     pub refreshing: bool,
     pub now: DateTime<Utc>,
     pub overview_at: Option<DateTime<Utc>>,
+    pub viewer: Option<&'a str>,
 }
 
 pub fn header(props: &HeaderProps<'_>, actions: Vec<AnyElement>, cx: &mut Context<PrView>) -> Div {
@@ -89,16 +91,17 @@ pub fn header(props: &HeaderProps<'_>, actions: Vec<AnyElement>, cx: &mut Contex
                 .items_center()
                 .child(breadcrumb(&pr.repo, pr.number, cx))
                 .child(div().flex_1())
-                .children((!actions.is_empty()).then(|| {
+                .child(
                     h_flex()
                         .flex_none()
                         .gap(px(ACTION_GAP))
                         .items_center()
-                        .children(actions)
-                }))
+                        .children(actions),
+                )
                 .child(refresh),
         )
         .child(title)
+        .child(properties::state_line(props, cx))
         .children(status)
 }
 

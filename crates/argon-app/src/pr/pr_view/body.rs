@@ -10,7 +10,7 @@ use gpui_kit::{
 
 use super::{Load, PrTab, PrView};
 use crate::inbox::PR_FALLBACK_TITLE;
-use crate::pr::conversation::{self, CONTENT_MAX_WIDTH};
+use crate::pr::conversation::CONTENT_MAX_WIDTH;
 use crate::pr::labels;
 
 const TAB_HEIGHT: f32 = 34.;
@@ -19,7 +19,7 @@ const ERROR_MAX_WIDTH: f32 = 560.;
 impl PrView {
     fn tab_count(&self, tab: PrTab, cx: &App) -> Option<usize> {
         match tab {
-            PrTab::Conversation => self.detail.as_deref().map(conversation::count),
+            PrTab::Conversation => None,
             PrTab::Commits => self.commits.read(cx).count(),
             PrTab::Actions => self.actions.read(cx).count(),
             PrTab::Review => self.review.read(cx).count(),
@@ -37,10 +37,26 @@ impl PrView {
 
     fn tab_item(&self, ix: usize, tab: PrTab, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.tab == tab;
-        let count = self
-            .tab_count(tab, cx)
+        let failed = match tab {
+            PrTab::Actions => self.actions.read(cx).failed_count(),
+            _ => 0,
+        };
+        let count = (failed == 0)
+            .then(|| self.tab_count(tab, cx))
+            .flatten()
             .map(|count| count.to_string().into());
+        let theme = cx.theme();
+        let failed = (failed > 0).then(|| {
+            div()
+                .px_1p5()
+                .rounded_full()
+                .bg(theme.danger.opacity(0.16))
+                .text_xs()
+                .text_color(theme.danger)
+                .child(labels::failed_checks(failed))
+        });
         tab_button(("pr-tab", ix), tab.icon(), tab.title(), count, selected, cx)
+            .children(failed)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_tab(tab, cx)))
     }
 
