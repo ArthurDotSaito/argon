@@ -51,6 +51,10 @@ impl Paths {
         self.data_dir.join("layout.json")
     }
 
+    pub fn inbox_columns_file(&self) -> PathBuf {
+        self.data_dir.join("inbox_columns.json")
+    }
+
     pub fn log_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
     }
@@ -81,6 +85,10 @@ mod tests {
         assert_eq!(paths.repos_dir(), paths.data_dir.join("repos"));
         assert_eq!(paths.worktrees_dir(), paths.data_dir.join("worktrees"));
         assert_eq!(paths.layout_file(), paths.data_dir.join("layout.json"));
+        assert_eq!(
+            paths.inbox_columns_file(),
+            paths.data_dir.join("inbox_columns.json")
+        );
         assert_eq!(paths.log_dir(), paths.data_dir.join("logs"));
     }
 

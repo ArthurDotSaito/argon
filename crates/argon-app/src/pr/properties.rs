@@ -4,8 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, StyledExt as _, h_flex};
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Div, InteractiveElement as _, IntoElement as _,
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, div,
@@ -24,27 +23,49 @@ use crate::ui::{self, properties};
 
 const AVATAR_SIZE: f32 = 18.;
 const AI_BUTTON_HEIGHT: f32 = 24.;
-const BUTTON_GAP: f32 = 6.;
 const VALUE_GAP: f32 = 6.;
 const CHIP_HEIGHT: f32 = 22.;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimaryAction {
+    Merge,
+    Review,
+    AgentReview,
+}
+
+pub fn primary_action(pr: &PullRequest, can_merge: bool, viewer: Option<&str>) -> PrimaryAction {
+    if pr.state != PrState::Open {
+        return PrimaryAction::AgentReview;
+    }
+    if can_merge {
+        return PrimaryAction::Merge;
+    }
+    let requested = viewer.is_some_and(|viewer| {
+        pr.requested_reviewers
+            .iter()
+            .any(|login| login.eq_ignore_ascii_case(viewer))
+    });
+    if requested {
+        PrimaryAction::Review
+    } else {
+        PrimaryAction::AgentReview
+    }
+}
 
 pub fn panel(
     props: &HeaderProps<'_>,
     reason: Option<&Reason>,
     cx: &mut Context<PrView>,
 ) -> Stateful<Div> {
-    let buttons = v_flex()
-        .w_full()
-        .flex_none()
-        .gap(px(BUTTON_GAP))
-        .children(action_buttons(props, true, true, cx));
     let closing = closing_row(props, cx);
-    let summary = summary(props, reason, cx).children(closing);
+    let summary = summary(props, reason, cx)
+        .border_t_0()
+        .pt_0()
+        .children(closing);
     let review = review_group(props, cx);
     properties::panel(cx)
         .id("pr-properties")
         .overflow_y_scroll()
-        .child(buttons)
         .child(summary)
         .child(review)
 }
@@ -52,27 +73,34 @@ pub fn panel(
 pub fn action_buttons(
     props: &HeaderProps<'_>,
     show_review: bool,
-    full_width: bool,
     cx: &mut Context<PrView>,
 ) -> Vec<AnyElement> {
+    let primary = primary_action(props.pr, props.can_merge, props.viewer);
     let merging = matches!(props.merge_state, MergeState::Merging);
-    let ai_review = ai_review_button(props.can_review_with_ai, full_width, cx);
+    let ai_review = ai_review_button(
+        props.can_review_with_ai,
+        primary == PrimaryAction::AgentReview,
+        cx,
+    );
     let summarize = Button::new("pr-summarize")
         .icon(Icon::new(IconName::TextAlignStart))
         .label(agents::SUMMARIZE)
         .small()
         .outline()
-        .when(full_width, |button| button.w_full())
         .tooltip(agents::SUMMARIZE_TOOLTIP)
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_summarize(window, cx)))
         .into_any_element();
     let review = (show_review && props.pr.state == PrState::Open).then(|| {
-        Button::new("pr-review")
+        let button = Button::new("pr-review")
             .icon(Icon::new(IconName::FileDiff))
             .label(labels::REVIEW)
-            .small()
-            .outline()
-            .when(full_width, |button| button.w_full())
+            .small();
+        let button = if primary == PrimaryAction::Review {
+            button.primary()
+        } else {
+            button.outline()
+        };
+        button
             .tooltip(labels::REVIEW_TOOLTIP)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.start_review(window, cx)))
             .into_any_element()
@@ -83,7 +111,6 @@ pub fn action_buttons(
             .label(labels::MERGE)
             .small()
             .success()
-            .when(full_width, |button| button.w_full())
             .loading(merging)
             .on_click(
                 cx.listener(|this, _: &ClickEvent, window, cx| this.open_merge_dialog(window, cx)),
@@ -92,28 +119,76 @@ pub fn action_buttons(
     });
     let open = Button::new("pr-open-github")
         .icon(Icon::new(IconName::ExternalLink))
-        .label(labels::OPEN_ON_GITHUB)
         .small()
         .ghost()
-        .when(full_width, |button| button.w_full())
+        .tooltip(labels::OPEN_ON_GITHUB)
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_on_github(cx)))
         .into_any_element();
-    std::iter::once(ai_review)
-        .chain(std::iter::once(summarize))
-        .chain(review)
-        .chain(merge)
+    let ordered: [Option<AnyElement>; 4] = match primary {
+        PrimaryAction::Merge => [merge, Some(ai_review), Some(summarize), review],
+        PrimaryAction::Review => [review, Some(ai_review), Some(summarize), merge],
+        PrimaryAction::AgentReview => [Some(ai_review), Some(summarize), review, merge],
+    };
+    ordered
+        .into_iter()
+        .flatten()
         .chain(std::iter::once(open))
         .collect()
 }
 
-fn ai_review_button(enabled: bool, full_width: bool, cx: &mut Context<PrView>) -> AnyElement {
+pub fn state_line(props: &HeaderProps<'_>, cx: &App) -> Div {
+    let theme = cx.theme();
+    let pr = props.pr;
+    let state = if merged(props) {
+        PrState::Merged
+    } else {
+        pr.state
+    };
+    let style = if state == PrState::Merged {
+        ui::state_style_for(PrState::Merged, false, cx)
+    } else {
+        ui::state_style(pr, cx)
+    };
+    let commits = props.detail.map(|detail| detail.commits.len());
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .items_center()
+        .gap(px(VALUE_GAP))
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child(state_pill(style.icon, style.color, style.label).flex_none())
+        .child(ui::avatar(&pr.author, AVATAR_SIZE))
+        .child(
+            div()
+                .font_medium()
+                .text_color(theme.foreground)
+                .child(pr.author.clone()),
+        )
+        .child(labels::merge_intent(state, commits))
+        .child(branch("pr-copy-head", &pr.head, cx))
+        .child(labels::BRANCH_JOINER)
+        .child(branch("pr-copy-base", &pr.base, cx))
+        .child(format!(
+            "{} {}",
+            labels::SEPARATOR,
+            ui::ago(props.now, pr.created_at)
+        ))
+}
+
+fn ai_review_button(enabled: bool, primary: bool, cx: &mut Context<PrView>) -> AnyElement {
     if enabled {
-        return Button::new("pr-ai-review")
+        let button = Button::new("pr-ai-review")
             .icon(Icon::new(IconName::Sparkles))
             .label(labels::AI_REVIEW)
-            .small()
-            .primary()
-            .when(full_width, |button| button.w_full())
+            .small();
+        let button = if primary {
+            button.primary()
+        } else {
+            button.outline()
+        };
+        return button
             .tooltip(agents::BUTTON_TOOLTIP)
             .on_click(
                 cx.listener(|this, _: &ClickEvent, window, cx| this.open_ai_review(window, cx)),
@@ -123,7 +198,6 @@ fn ai_review_button(enabled: bool, full_width: bool, cx: &mut Context<PrView>) -
     let theme = cx.theme();
     h_flex()
         .id("pr-ai-review")
-        .when(full_width, |this| this.w_full())
         .flex_none()
         .h(px(AI_BUTTON_HEIGHT))
         .px_2p5()
@@ -147,20 +221,7 @@ fn merged(props: &HeaderProps<'_>) -> bool {
 }
 
 fn summary(props: &HeaderProps<'_>, reason: Option<&Reason>, cx: &App) -> Div {
-    let theme = cx.theme();
     let pr = props.pr;
-    let style = if merged(props) {
-        ui::state_style_for(PrState::Merged, false, cx)
-    } else {
-        ui::state_style(pr, cx)
-    };
-    let pill = state_pill(style.icon, style.color, style.label).flex_none();
-    let state = values().child(pill).child(
-        div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(ui::ago(props.now, pr.created_at)),
-    );
     let reason_row = reason.map(|reason| {
         properties::row(
             labels::PROPERTY_REASON,
@@ -175,20 +236,9 @@ fn summary(props: &HeaderProps<'_>, reason: Option<&Reason>, cx: &App) -> Div {
     let author = values()
         .child(ui::avatar(&pr.author, AVATAR_SIZE))
         .child(div().min_w_0().truncate().child(pr.author.clone()));
-    let branches = values()
-        .child(branch("pr-copy-head", &pr.head, cx))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(labels::BRANCH_JOINER),
-        )
-        .child(branch("pr-copy-base", &pr.base, cx));
     properties::group(cx)
-        .child(properties::row(labels::PROPERTY_STATE, state, cx))
         .children(reason_row)
         .child(properties::row(labels::PROPERTY_AUTHOR, author, cx))
-        .child(properties::row(labels::PROPERTY_BRANCHES, branches, cx))
         .child(properties::row(
             labels::PROPERTY_PROJECT,
             project_value(props, cx),
@@ -440,4 +490,52 @@ fn label_list(pr_labels: &[Label], cx: &App) -> Div {
             .iter()
             .map(|label| label_chip(&label.name, Some(label.color.as_str()), cx)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use argon_core::fixtures;
+
+    use super::*;
+
+    fn requested_from(login: &str) -> PullRequest {
+        let mut pr = fixtures::pr();
+        pr.requested_reviewers = vec![login.into()];
+        pr
+    }
+
+    #[test]
+    fn merge_wins_when_the_pr_can_be_merged() {
+        let pr = requested_from("me");
+        assert_eq!(primary_action(&pr, true, Some("me")), PrimaryAction::Merge);
+    }
+
+    #[test]
+    fn your_pending_review_comes_before_the_agent() {
+        let pr = requested_from("Me");
+        assert_eq!(
+            primary_action(&pr, false, Some("me")),
+            PrimaryAction::Review
+        );
+    }
+
+    #[test]
+    fn someone_elses_review_request_leaves_the_agent_first() {
+        let pr = requested_from("ana");
+        assert_eq!(
+            primary_action(&pr, false, Some("me")),
+            PrimaryAction::AgentReview
+        );
+        assert_eq!(primary_action(&pr, false, None), PrimaryAction::AgentReview);
+    }
+
+    #[test]
+    fn a_closed_pr_has_no_review_or_merge_to_push() {
+        let mut pr = requested_from("me");
+        pr.state = PrState::Merged;
+        assert_eq!(
+            primary_action(&pr, true, Some("me")),
+            PrimaryAction::AgentReview
+        );
+    }
 }

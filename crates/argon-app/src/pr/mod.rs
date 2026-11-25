@@ -1,4 +1,6 @@
 mod actions;
+mod activity;
+mod activity_view;
 mod comment_check;
 mod commits;
 mod conversation;
@@ -7,6 +9,8 @@ pub(crate) mod labels;
 mod merge_dialog;
 mod pr_view;
 mod properties;
+mod readiness;
+mod readiness_card;
 mod timeline_item;
 
 pub(crate) use comment_check::{SentComment, may_have_landed};

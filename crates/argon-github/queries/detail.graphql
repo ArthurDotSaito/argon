@@ -84,6 +84,7 @@ query PrDetail($id: ID!) {
           ... on IssueComment {
             id
             author {
+              __typename
               login
             }
             body
@@ -92,6 +93,7 @@ query PrDetail($id: ID!) {
           ... on PullRequestReview {
             id
             author {
+              __typename
               login
             }
             state

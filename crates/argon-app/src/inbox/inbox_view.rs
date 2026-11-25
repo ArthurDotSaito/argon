@@ -5,19 +5,23 @@ use gpui_kit::assets::IconName as AppIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::resize_handle;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Side, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ListAlignment, ListOffset, ListState, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
-    WeakEntity, Window, div, list, px,
+    AnyElement, App, AppContext as _, Axis, Canvas, ClickEvent, Context, Div, DragMoveEvent, Empty,
+    Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement, ListAlignment,
+    ListOffset, ListState, MouseButton, MouseDownEvent, ParentElement as _, Pixels, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Task, WeakEntity,
+    Window, canvas, div, list, px,
 };
 
 use super::browse::IssueScope;
+use super::columns::{self, Column, ColumnLayout, ColumnWidths};
+use super::columns_store::{self, ColumnsSaver};
 use super::filter::{self, KindFilter};
 use super::labels;
 use super::model::InboxModel;
@@ -29,8 +33,10 @@ use crate::actions::{
 use crate::keymap::{INBOX_CONTEXT, INBOX_LIST_CONTEXT};
 use crate::pr::labels as pr_labels;
 use crate::theme::density;
+use crate::ui::columns::ROW_HORIZONTAL_PADDING;
 
 const LIST_OVERDRAW: f32 = 260.;
+const LIST_WIDTH_TOLERANCE: f32 = 0.5;
 const FILTER_WIDTH: f32 = 320.;
 const KIND_SEGMENT_HEIGHT: f32 = 24.;
 const KIND_OPTIONS: [(KindFilter, &str, Option<AppIconName>); 3] = [
@@ -48,6 +54,21 @@ const KIND_OPTIONS: [(KindFilter, &str, Option<AppIconName>); 3] = [
 ];
 const SINGLE_CLICK_DELAY: Duration = Duration::from_millis(300);
 
+#[derive(Clone)]
+struct ResizeColumn(Column);
+
+impl Render for ResizeColumn {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+struct ResizeOrigin {
+    column: Column,
+    x: Pixels,
+    width: f32,
+}
+
 pub struct InboxPane {
     model: Entity<InboxModel>,
     filter: Entity<InputState>,
@@ -57,6 +78,10 @@ pub struct InboxPane {
     rows_revision: u64,
     selected_row: Option<usize>,
     pending_click: Option<Task<()>>,
+    column_widths: ColumnWidths,
+    list_width: Option<f32>,
+    resize_origin: Option<ResizeOrigin>,
+    columns_saver: ColumnsSaver,
     _subscriptions: [Subscription; 3],
 }
 
@@ -87,6 +112,10 @@ impl InboxPane {
             rows_revision,
             selected_row,
             pending_click: None,
+            column_widths: columns_store::load(),
+            list_width: None,
+            resize_origin: None,
+            columns_saver: ColumnsSaver::default(),
             _subscriptions: [
                 filter_subscription,
                 model_subscription,
@@ -227,6 +256,104 @@ impl InboxPane {
             .update(cx, |filter, cx| filter.set_value("", window, cx));
         self.model.update(cx, |model, cx| model.set_query("", cx));
         self.focus_handle.focus(window, cx);
+    }
+
+    fn available_width(&self) -> Option<f32> {
+        self.list_width.map(|width| width - ROW_HORIZONTAL_PADDING)
+    }
+
+    fn column_layout(&self) -> ColumnLayout {
+        columns::fit(self.available_width(), &self.column_widths)
+    }
+
+    fn set_column_width(&mut self, column: Column, width: f32, cx: &mut Context<Self>) {
+        let widths = columns::resized(self.column_widths, column, width, self.available_width());
+        self.apply_column_widths(widths, cx);
+    }
+
+    fn apply_column_widths(&mut self, widths: ColumnWidths, cx: &mut Context<Self>) {
+        if widths == self.column_widths {
+            return;
+        }
+        self.column_widths = widths;
+        self.columns_saver.schedule(widths, cx);
+        cx.notify();
+    }
+
+    fn on_resize_press(&mut self, column: Column, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if event.click_count >= 2 {
+            self.resize_origin = None;
+            let widths = self.column_widths.with(column, column.default_width());
+            self.apply_column_widths(widths, cx);
+            return;
+        }
+        self.resize_origin = self
+            .column_layout()
+            .width(column)
+            .map(|width| ResizeOrigin {
+                column,
+                x: event.position.x,
+                width,
+            });
+    }
+
+    fn on_resize_drag(
+        &mut self,
+        event: &DragMoveEvent<ResizeColumn>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let column = event.drag(cx).0;
+        let Some(origin) = self
+            .resize_origin
+            .as_ref()
+            .filter(|origin| origin.column == column)
+        else {
+            return;
+        };
+        let moved = f32::from(event.event.position.x - origin.x);
+        let width = origin.width - moved;
+        self.set_column_width(column, width, cx);
+    }
+
+    fn resize_handle(&self, column: Column, cx: &Context<Self>) -> AnyElement {
+        resize_handle::<ResizeColumn, ResizeColumn>(
+            ("inbox-column-resize", column.index()),
+            Axis::Horizontal,
+        )
+        .on_drag(ResizeColumn(column), |drag, _, _, cx| {
+            cx.stop_propagation();
+            cx.new(|_| drag.clone())
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.on_resize_press(column, event, cx);
+            }),
+        )
+        .into_any_element()
+    }
+
+    fn width_probe(&self, cx: &Context<Self>) -> Canvas<()> {
+        let pane = cx.weak_entity();
+        let known = self.list_width;
+        canvas(
+            move |bounds, window, cx| {
+                let width = f32::from(bounds.size.width);
+                if known.is_some_and(|known| (known - width).abs() <= LIST_WIDTH_TOLERANCE) {
+                    return;
+                }
+                window.defer(cx, move |_, cx| {
+                    _ = pane.update(cx, |this, cx| {
+                        this.list_width = Some(width);
+                        cx.notify();
+                    });
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -455,18 +582,22 @@ impl InboxPane {
         let kinds = filter::shown_kinds(model.view(), model.kind_filter());
         let inbox = self.model.clone();
         let pane = cx.weak_entity();
+        let layout = self.column_layout();
+        let column_header =
+            row::column_header(kinds, &layout, |column| self.resize_handle(column, cx), cx);
         v_flex()
             .flex_1()
             .min_h_0()
-            .child(row::column_header(kinds, cx))
+            .child(column_header)
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .child(self.width_probe(cx))
                     .child(
                         list(self.list_state.clone(), move |ix, _, cx| {
-                            render_list_row(&inbox, &pane, ix, cx)
+                            render_list_row(&inbox, &pane, &layout, ix, cx)
                         })
                         .size_full(),
                     )
@@ -479,6 +610,7 @@ impl InboxPane {
 fn render_list_row(
     inbox: &Entity<InboxModel>,
     pane: &WeakEntity<InboxPane>,
+    layout: &ColumnLayout,
     ix: usize,
     cx: &mut App,
 ) -> AnyElement {
@@ -493,7 +625,8 @@ fn render_list_row(
                 return div().into_any_element();
             };
             let pane = pane.clone();
-            row::item_row(position, item, model.is_selected(position), Utc::now(), cx)
+            let selected = model.is_selected(position);
+            row::item_row(position, item, selected, layout, Utc::now(), cx)
                 .on_click(move |event: &ClickEvent, window, cx| {
                     _ = pane.update(cx, |pane, cx| {
                         pane.on_row_click(position, event.click_count(), window, cx)
@@ -590,6 +723,7 @@ impl Render for InboxPane {
             .size_full()
             .bg(theme.background)
             .on_action(cx.listener(Self::on_clear_filter))
+            .on_drag_move(cx.listener(Self::on_resize_drag))
             .child(self.header(cx))
             .children(error_banner)
             .children(browse_banner)

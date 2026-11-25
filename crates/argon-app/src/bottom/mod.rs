@@ -8,7 +8,7 @@ mod run_status;
 use gpui_kit::component::dock::{DockArea, DockPlacement, PanelId};
 use gpui_kit::{App, AppContext as _, Entity, KeyBinding};
 
-pub use log_lines::clean_line;
+pub use log_lines::{LineKind, classify, clean_line};
 pub use log_model::{JobLogEvent, JobLogHandle, JobLogModel, LogTarget};
 pub use log_panel::LogPanel;
 pub use run_status::{duration_label, is_running, run_status_icon};

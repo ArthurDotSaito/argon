@@ -17,6 +17,8 @@ use crate::detail_wire::{
 };
 use crate::wire::Actor;
 
+const BOT_TYPENAME: &str = "Bot";
+
 pub(crate) fn into_pr_detail(wire: WireDetail, host: &str) -> PrDetail {
     let pr = into_pull_request(wire.pr, host);
     let reviewers = reviewer_statuses(&pr);
@@ -161,6 +163,12 @@ fn actor_login(actor: Option<Actor>) -> String {
     login_or_ghost(actor.map(|actor| actor.login))
 }
 
+fn actor_is_bot(actor: &Option<Actor>) -> bool {
+    actor
+        .as_ref()
+        .is_some_and(|actor| actor.typename.as_deref() == Some(BOT_TYPENAME))
+}
+
 fn git_author_login(author: &Option<WireGitActor>) -> Option<String> {
     author
         .as_ref()
@@ -253,6 +261,7 @@ fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
     let item = match wire {
         WireTimelineItem::IssueComment(comment) => TimelineItem::Comment {
             id: comment.id,
+            author_is_bot: actor_is_bot(&comment.author),
             author: actor_login(comment.author),
             body: comment.body,
             created_at: comment.created_at,
@@ -260,6 +269,7 @@ fn timeline_item(wire: WireTimelineItem) -> Option<TimelineItem> {
         },
         WireTimelineItem::PullRequestReview(review) => TimelineItem::Review {
             id: review.id,
+            author_is_bot: actor_is_bot(&review.author),
             author: actor_login(review.author),
             state: review_state(review.state),
             body: review.body,
@@ -358,6 +368,38 @@ mod tests {
         value.parse().unwrap()
     }
 
+    fn comment_by(author: &str) -> TimelineItem {
+        let json = format!(
+            r#"{{"__typename":"IssueComment","id":"c","author":{author},"body":"x","createdAt":"2026-10-27T13:10:00Z"}}"#
+        );
+        timeline_item(serde_json::from_str(&json).unwrap()).unwrap()
+    }
+
+    fn review_by(author: &str) -> TimelineItem {
+        let json = format!(
+            r#"{{"__typename":"PullRequestReview","id":"r","author":{author},"state":"COMMENTED","body":"x","submittedAt":null,"createdAt":"2026-10-27T13:10:00Z"}}"#
+        );
+        timeline_item(serde_json::from_str(&json).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn only_bot_authors_are_flagged_as_bots() {
+        let bot = r#"{"__typename":"Bot","login":"pullfrog"}"#;
+        let user = r#"{"__typename":"User","login":"mcouto"}"#;
+        let untyped = r#"{"login":"mcouto"}"#;
+        let flagged = |item: TimelineItem| match item {
+            TimelineItem::Comment { author_is_bot, .. }
+            | TimelineItem::Review { author_is_bot, .. } => author_is_bot,
+            other => panic!("unexpected item {other:?}"),
+        };
+        assert!(flagged(comment_by(bot)));
+        assert!(flagged(review_by(bot)));
+        for author in [user, untyped, "null"] {
+            assert!(!flagged(comment_by(author)), "comment by {author}");
+            assert!(!flagged(review_by(author)), "review by {author}");
+        }
+    }
+
     fn detail_from(json: &str) -> PrDetail {
         let envelope: Envelope<DetailData> = serde_json::from_str(json).unwrap();
         let wire = envelope.into_data(Utc::now()).unwrap().data.node.unwrap();
@@ -441,6 +483,7 @@ mod tests {
             TimelineItem::Comment {
                 id: "IC_kwDOOrbita01".into(),
                 author: "mcouto".into(),
+                author_is_bot: false,
                 body: "Ready for a first pass.".into(),
                 created_at: at("2026-10-27T13:10:00Z"),
                 url: None,
@@ -510,6 +553,7 @@ mod tests {
             body,
             submitted_at,
             comments,
+            ..
         } = &detail.timeline[6]
         else {
             panic!("expected a review, got {:?}", detail.timeline[6]);
@@ -849,6 +893,7 @@ mod tests {
             TimelineItem::Comment {
                 id: "IC_kwDOOrbita11".into(),
                 author: "lfarias".into(),
+                author_is_bot: false,
                 body: "I can take a look. cc @mcouto".into(),
                 created_at: at("2026-10-20T09:00:00Z"),
                 url: Some(

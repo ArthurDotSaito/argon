@@ -70,14 +70,17 @@ fn load() -> Option<DockAreaState> {
 }
 
 fn save(state: &DockAreaState) -> io::Result<()> {
-    let path = Paths::resolve().layout_file();
+    let content = serde_json::to_string_pretty(state).map_err(io::Error::other)?;
+    write_atomic(&Paths::resolve().layout_file(), &content)
+}
+
+pub fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let content = serde_json::to_string_pretty(state).map_err(io::Error::other)?;
-    let staging = staging_path(&path);
+    let staging = staging_path(path);
     fs::write(&staging, content)?;
-    fs::rename(&staging, &path).inspect_err(|_| {
+    fs::rename(&staging, path).inspect_err(|_| {
         _ = fs::remove_file(&staging);
     })
 }

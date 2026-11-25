@@ -1,5 +1,5 @@
 use argon_core::ReviewState;
-use argon_github::{Label, ReviewComment, TimelineItem};
+use argon_github::TimelineItem;
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::text::TextView;
@@ -9,17 +9,16 @@ use gpui_kit::{
     Styled as _, div, px,
 };
 
-use super::header::label_chip;
 use super::labels;
 use crate::ui;
 
-const ITEM_AVATAR: f32 = 20.;
 const CARD_AVATAR: f32 = 28.;
-const EVENT_ICON_BOX: f32 = 24.;
-const BODY_INDENT: f32 = 28.;
-const BODY_TOP_GAP: f32 = 6.;
-const DIVIDER_OPACITY: f32 = 0.45;
+pub const EVENT_ICON_BOX: f32 = 24.;
 const HUNK_TAIL_LINES: usize = 6;
+const COMMENT_OPEN: &str = "<!--";
+const COMMENT_CLOSE: &str = "-->";
+const FENCES: [&str; 2] = ["```", "~~~"];
+const INLINE_CODE: char = '`';
 
 pub fn timestamp(item: &TimelineItem) -> DateTime<Utc> {
     match item {
@@ -39,13 +38,6 @@ pub fn timestamp(item: &TimelineItem) -> DateTime<Utc> {
         | TimelineItem::CrossReferenced { at, .. }
         | TimelineItem::Milestoned { at, .. } => *at,
     }
-}
-
-pub fn is_conversation(item: &TimelineItem) -> bool {
-    matches!(
-        item,
-        TimelineItem::Comment { .. } | TimelineItem::Review { .. }
-    )
 }
 
 pub fn markdown(id: SharedString, body: SharedString) -> TextView {
@@ -70,214 +62,65 @@ impl MarkdownBlock {
     }
 }
 
-pub struct Entry {
-    pub ix: usize,
-    body: Option<MarkdownBlock>,
-    comments: Vec<MarkdownBlock>,
-}
-
-impl Entry {
-    pub fn new(ix: usize, item: &TimelineItem) -> Self {
-        let (body, comments) = match item {
-            TimelineItem::Comment { id, body, .. } => (
-                Some(MarkdownBlock::new(format!("pr-comment-{id}"), body)),
-                Vec::new(),
-            ),
-            TimelineItem::Review {
-                id, body, comments, ..
-            } => (
-                (!body.trim().is_empty())
-                    .then(|| MarkdownBlock::new(format!("pr-review-{id}"), body)),
-                comments
-                    .iter()
-                    .enumerate()
-                    .map(|(ix, comment)| {
-                        MarkdownBlock::new(format!("pr-review-{id}-comment-{ix}"), &comment.body)
-                    })
-                    .collect(),
-            ),
-            _ => (None, Vec::new()),
-        };
-        Self { ix, body, comments }
+pub fn strip_html_comments(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut in_fence = false;
+    let mut in_block = false;
+    for line in body.split_inclusive('\n') {
+        if in_block {
+            if let Some(end) = line.find(COMMENT_CLOSE) {
+                let (text, opened) = strip_line(&line[end + COMMENT_CLOSE.len()..]);
+                out.push_str(&text);
+                in_block = opened;
+            }
+            continue;
+        }
+        let fence = FENCES
+            .iter()
+            .any(|fence| line.trim_start().starts_with(fence));
+        if fence {
+            in_fence = !in_fence;
+        }
+        if fence || in_fence {
+            out.push_str(line);
+            continue;
+        }
+        let (text, opened) = strip_line(line);
+        out.push_str(&text);
+        in_block = opened;
     }
+    out
 }
 
-pub fn timeline_item(
-    item: &TimelineItem,
-    entry: &Entry,
-    pr_labels: &[Label],
-    now: DateTime<Utc>,
-    cx: &App,
-) -> Option<Div> {
-    let theme = cx.theme();
-    let element = match item {
-        TimelineItem::Comment {
-            author, created_at, ..
-        } => flat_item(
-            author,
-            labels::COMMENTED,
-            *created_at,
-            now,
-            entry
-                .body
-                .as_ref()
-                .map(|body| body.view().into_any_element()),
-            cx,
-        ),
-        TimelineItem::Review {
-            author,
-            state,
-            submitted_at,
-            comments,
-            ..
-        } => {
-            let action = h_flex()
-                .gap_1p5()
-                .items_center()
-                .child(labels::REVIEWED)
-                .child(review_pill(*state, cx));
-            let quotes: Vec<Div> = comments
-                .iter()
-                .zip(&entry.comments)
-                .map(|(comment, body)| review_comment(author, comment, body, cx))
-                .collect();
-            let body = (entry.body.is_some() || !quotes.is_empty()).then(|| {
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .children(entry.body.as_ref().map(MarkdownBlock::view))
-                    .children(quotes)
-                    .into_any_element()
-            });
-            flat_item(author, action, *submitted_at, now, body, cx)
+fn strip_line(line: &str) -> (String, bool) {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    let mut in_code = false;
+    loop {
+        let next = rest.char_indices().find(|(ix, ch)| {
+            *ch == INLINE_CODE || (!in_code && rest[*ix..].starts_with(COMMENT_OPEN))
+        });
+        let Some((ix, ch)) = next else {
+            out.push_str(rest);
+            return (out, false);
+        };
+        out.push_str(&rest[..ix]);
+        if ch == INLINE_CODE {
+            in_code = !in_code;
+            out.push(ch);
+            rest = &rest[ix + ch.len_utf8()..];
+            continue;
         }
-        TimelineItem::Commit {
-            oid,
-            headline,
-            author,
-            committed_at,
-        } => flat_item(
-            author,
-            h_flex()
-                .gap_2()
-                .min_w_0()
-                .child(
-                    div()
-                        .flex_none()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_xs()
-                        .text_color(theme.link)
-                        .child(labels::short_sha(oid).to_string()),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.foreground)
-                        .child(headline.clone()),
-                ),
-            *committed_at,
-            now,
-            None,
-            cx,
-        ),
-        TimelineItem::ReviewRequested {
-            actor,
-            reviewer,
-            at,
-        } => flat_item(
-            actor,
-            labels::review_requested(reviewer),
-            *at,
-            now,
-            None,
-            cx,
-        ),
-        TimelineItem::Labeled { actor, label, at } => {
-            let color = pr_labels
-                .iter()
-                .find(|known| known.name.eq_ignore_ascii_case(label))
-                .map(|known| known.color.as_str());
-            flat_item(
-                actor,
-                h_flex()
-                    .gap_1p5()
-                    .items_center()
-                    .child(labels::LABELED)
-                    .child(label_chip(label, color, cx)),
-                *at,
-                now,
-                None,
-                cx,
-            )
+        let after = &rest[ix + COMMENT_OPEN.len()..];
+        match after.find(COMMENT_CLOSE) {
+            Some(end) => rest = &after[end + COMMENT_CLOSE.len()..],
+            None if out.trim().is_empty() => return (out, true),
+            None => {
+                out.push_str(&rest[ix..]);
+                return (out, false);
+            }
         }
-        TimelineItem::HeadRefForcePushed { actor, at } => {
-            flat_item(actor, labels::FORCE_PUSHED, *at, now, None, cx)
-        }
-        TimelineItem::Merged { actor, at } => flat_item(actor, labels::MERGED, *at, now, None, cx),
-        TimelineItem::Closed { actor, at } => flat_item(actor, labels::CLOSED, *at, now, None, cx),
-        TimelineItem::ReadyForReview { actor, at } => {
-            flat_item(actor, labels::READY_FOR_REVIEW, *at, now, None, cx)
-        }
-        TimelineItem::Assigned { .. }
-        | TimelineItem::Unassigned { .. }
-        | TimelineItem::Unlabeled { .. }
-        | TimelineItem::Reopened { .. }
-        | TimelineItem::CrossReferenced { .. }
-        | TimelineItem::Milestoned { .. } => return None,
-    };
-    Some(element)
-}
-
-pub fn flat_item(
-    author: &str,
-    action: impl IntoElement,
-    at: DateTime<Utc>,
-    now: DateTime<Utc>,
-    body: Option<AnyElement>,
-    cx: &App,
-) -> Div {
-    let theme = cx.theme();
-    let header = h_flex()
-        .w_full()
-        .min_w_0()
-        .gap_2()
-        .items_center()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child(ui::avatar(author, ITEM_AVATAR))
-        .child(
-            div()
-                .flex_none()
-                .font_semibold()
-                .text_color(theme.foreground)
-                .child(author.to_string()),
-        )
-        .child(div().min_w_0().overflow_hidden().child(action))
-        .child(div().flex_1())
-        .child(
-            div()
-                .flex_none()
-                .font_family(theme.mono_font_family.clone())
-                .text_xs()
-                .child(ui::age_label(now, at)),
-        );
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .py_3()
-        .border_b_1()
-        .border_color(theme.border.opacity(DIVIDER_OPACITY))
-        .child(header)
-        .children(body.map(|body| {
-            div()
-                .w_full()
-                .min_w_0()
-                .pl(px(BODY_INDENT))
-                .pt(px(BODY_TOP_GAP))
-                .text_sm()
-                .child(body)
-        }))
+    }
 }
 
 pub fn card(author: &str, body: Div) -> Div {
@@ -395,10 +238,9 @@ pub fn review_style(state: ReviewState, cx: &App) -> (IconName, Hsla) {
     }
 }
 
-fn review_pill(state: ReviewState, cx: &App) -> Div {
-    let theme = cx.theme();
-    let (icon, color) = review_style(state, cx);
+pub fn status_pill(icon: Option<IconName>, label: &'static str, color: Hsla, text: Hsla) -> Div {
     h_flex()
+        .flex_none()
         .gap_1()
         .px_1p5()
         .h(px(18.))
@@ -408,23 +250,28 @@ fn review_pill(state: ReviewState, cx: &App) -> Div {
         .border_color(color.opacity(0.5))
         .bg(color.opacity(0.12))
         .text_xs()
-        .text_color(if state == ReviewState::Commented {
-            theme.foreground
-        } else {
-            color
-        })
-        .child(Icon::new(icon).xsmall())
-        .child(labels::review_state(state))
+        .text_color(text)
+        .children(icon.map(|icon| Icon::new(icon).xsmall()))
+        .child(label)
 }
 
-fn review_comment(author: &str, comment: &ReviewComment, body: &MarkdownBlock, cx: &App) -> Div {
+pub fn review_pill(state: ReviewState, cx: &App) -> Div {
+    let (icon, color) = review_style(state, cx);
+    let text = if state == ReviewState::Commented {
+        cx.theme().foreground
+    } else {
+        color
+    };
+    status_pill(Some(icon), labels::review_state(state), color, text)
+}
+
+pub fn file_line(path: &str, line: Option<u32>, cx: &App) -> Div {
     let theme = cx.theme();
-    let file = h_flex()
-        .px_2()
+    h_flex()
+        .px_3()
         .py_1()
         .gap_1p5()
         .items_center()
-        .bg(theme.muted)
         .border_b_1()
         .border_color(theme.border)
         .font_family(theme.mono_font_family.clone())
@@ -435,35 +282,18 @@ fn review_comment(author: &str, comment: &ReviewComment, body: &MarkdownBlock, c
             div()
                 .min_w_0()
                 .truncate()
-                .child(labels::line_ref(&comment.path, comment.line)),
-        );
-    let reply = h_flex()
-        .px_2()
-        .py_1p5()
-        .gap_2()
-        .items_start()
-        .border_t_1()
-        .border_color(theme.border)
-        .child(ui::avatar(author, 18.))
-        .child(div().flex_1().min_w_0().text_sm().child(body.view()));
-    v_flex()
-        .w_full()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .overflow_hidden()
-        .child(file)
-        .child(diff_hunk(&comment.diff_hunk, cx))
-        .child(reply)
+                .child(labels::line_ref(path, line)),
+        )
 }
 
-fn diff_hunk(hunk: &str, cx: &App) -> Div {
+pub fn diff_hunk(hunk: &str, cx: &App) -> Div {
     let theme = cx.theme();
     let lines: Vec<&str> = hunk.lines().collect();
     let tail = lines.len().saturating_sub(HUNK_TAIL_LINES);
     v_flex()
         .py_1()
-        .bg(theme.background)
+        .border_b_1()
+        .border_color(theme.border)
         .font_family(theme.mono_font_family.clone())
         .text_xs()
         .children(lines[tail..].iter().map(|line| {
@@ -474,7 +304,7 @@ fn diff_hunk(hunk: &str, cx: &App) -> Div {
                 _ => (theme.foreground, None),
             };
             let row = div()
-                .px_2()
+                .px_3()
                 .whitespace_nowrap()
                 .truncate()
                 .text_color(color)
@@ -492,5 +322,62 @@ fn display_line(line: &str) -> String {
         " ".to_string()
     } else {
         line
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_comments_disappear_from_the_text() {
+        assert_eq!(
+            strip_html_comments("antes <!-- marcador --> depois"),
+            "antes  depois"
+        );
+        assert_eq!(strip_html_comments("a<!--x-->b<!--y-->c"), "abc");
+    }
+
+    #[test]
+    fn a_comment_spanning_lines_is_removed_whole() {
+        assert_eq!(
+            strip_html_comments("linha 1\n<!-- DIVIDER\ncontinua\n--> fim\nlinha 2"),
+            "linha 1\n fim\nlinha 2"
+        );
+    }
+
+    #[test]
+    fn code_fences_keep_their_comments() {
+        let body = "```html\n<!-- fica -->\n```\n<!-- sai -->texto";
+        assert_eq!(
+            strip_html_comments(body),
+            "```html\n<!-- fica -->\n```\ntexto"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_comment_opening_a_line_hides_the_rest() {
+        assert_eq!(
+            strip_html_comments("início\n<!-- sem fim\nmais"),
+            "início\n"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_marker_in_the_middle_of_a_line_stays_as_text() {
+        let body = "visível <!-- sem fim\nmais";
+        assert_eq!(strip_html_comments(body), body);
+    }
+
+    #[test]
+    fn inline_code_keeps_its_markers() {
+        let body = "remova o `<!--` da linha 3 e o `-->` da 9";
+        assert_eq!(strip_html_comments(body), body);
+    }
+
+    #[test]
+    fn text_without_comments_is_untouched() {
+        let body = "# Título\n\ntexto com -> seta e <b>html</b>\n";
+        assert_eq!(strip_html_comments(body), body);
     }
 }

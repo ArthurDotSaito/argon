@@ -17,7 +17,8 @@ use gpui_kit::{
     Window, div, px,
 };
 
-use self::grouping::{DayGroup, day_label, group_by_day, local_day};
+pub(super) use self::grouping::day_label;
+use self::grouping::{DayGroup, group_by_day, local_day};
 use super::conversation::CONTENT_MAX_WIDTH;
 use row::{CommitRow, commit_row};
 

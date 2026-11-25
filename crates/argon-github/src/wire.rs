@@ -334,6 +334,8 @@ pub(crate) enum WireIssueStateReason {
 #[derive(Deserialize)]
 pub(crate) struct Actor {
     pub(crate) login: String,
+    #[serde(rename = "__typename", default)]
+    pub(crate) typename: Option<String>,
 }
 
 #[derive(Deserialize)]

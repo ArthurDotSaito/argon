@@ -95,6 +95,7 @@ mod tests {
             TimelineItem::Comment {
                 id: "c1".into(),
                 author: "bruno".into(),
+                author_is_bot: false,
                 body: "Acontece no Windows.".into(),
                 created_at: at,
                 url: None,
@@ -107,6 +108,7 @@ mod tests {
             TimelineItem::Comment {
                 id: "c2".into(),
                 author: "carla".into(),
+                author_is_bot: false,
                 body: "Confirmo.".into(),
                 created_at: at + Duration::minutes(5),
                 url: None,

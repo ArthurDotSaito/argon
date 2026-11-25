@@ -77,6 +77,9 @@ impl PrView {
             let login = viewer_login.clone();
             self.review
                 .update(cx, |tab, cx| tab.set_viewer_login(login, cx));
+            let login = viewer_login.clone();
+            self.conversation
+                .update(cx, |tab, cx| tab.set_viewer(login, cx));
         }
         self.viewer_login = viewer_login;
         let current = self.store_pr.as_ref().map(|pr| pr.updated_at);

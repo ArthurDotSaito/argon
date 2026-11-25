@@ -1,48 +1,55 @@
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use argon_core::{PrKey, SubjectKind};
-use argon_github::{PrDetail, TimelineItem};
+use argon_core::{PrKey, Side, SubjectKind};
+use argon_github::{PrDetail, TimelineItem, WorkflowRun};
 use chrono::{DateTime, Utc};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     App, AppContext as _, ClickEvent, Context, Div, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, Window, div, px,
 };
 
+use super::activity::{ActivityFilter, ActivityOrder};
+use super::activity_view::link;
 use super::comment_check::{SentComment, may_have_landed};
 use super::labels;
-use super::timeline_item::{self, Entry, MarkdownBlock, flat_item, timeline_item};
+use super::timeline_item::{MarkdownBlock, strip_html_comments};
 use crate::services::AppServices;
+use crate::ui;
 
 pub const CONTENT_MAX_WIDTH: f32 = 920.;
 const TIMELINE_MAX_WIDTH: f32 = 760.;
 const COMMENT_MIN_ROWS: usize = 3;
 const COMMENT_MAX_ROWS: usize = 12;
+const DESCRIPTION_AVATAR: f32 = 20.;
+const DESCRIPTION_FOLDED_HEIGHT: f32 = 140.;
+const LONG_DESCRIPTION_LINES: usize = 8;
+const LONG_DESCRIPTION_CHARS: usize = 600;
 
 pub enum ConversationEvent {
     Commented,
     CommentConfirmed,
     Recheck,
     OpenOnGithub,
+    OpenCommits,
+    OpenChecks,
+    RerunFailed,
+    StartReview,
+    Reveal { path: String, line: u32, side: Side },
 }
 
 pub enum ComposerEvent {
     Commented,
     CommentConfirmed,
     Recheck,
-}
-
-pub fn count(detail: &PrDetail) -> usize {
-    detail
-        .timeline
-        .iter()
-        .filter(|item| timeline_item::is_conversation(item))
-        .count()
 }
 
 pub struct Composer {
@@ -214,8 +221,18 @@ impl Render for Composer {
 pub struct Conversation {
     detail: Option<Rc<PrDetail>>,
     description: Option<MarkdownBlock>,
-    timeline: Vec<Entry>,
-    composer: Entity<Composer>,
+    description_open: bool,
+    description_long: bool,
+    pub(super) bodies: Vec<Option<MarkdownBlock>>,
+    pub(super) thread_bodies: Vec<Vec<MarkdownBlock>>,
+    pub(super) hunks: Vec<Option<String>>,
+    pub(super) filter: ActivityFilter,
+    pub(super) order: ActivityOrder,
+    pub(super) open_folds: HashSet<SharedString>,
+    pub(super) runs: Option<Rc<Vec<WorkflowRun>>>,
+    pub(super) error_line: Option<SharedString>,
+    pub(super) viewer: Option<String>,
+    pub(super) composer: Entity<Composer>,
     scroll: ScrollHandle,
     _composer_events: Subscription,
 }
@@ -223,7 +240,12 @@ pub struct Conversation {
 impl EventEmitter<ConversationEvent> for Conversation {}
 
 impl Conversation {
-    pub fn new(key: PrKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        key: PrKey,
+        viewer: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let composer = cx.new(|cx| Composer::new(key, SubjectKind::Pr, window, cx));
         let composer_events = cx.subscribe(&composer, |_, _, event, cx| {
             cx.emit(match event {
@@ -235,7 +257,17 @@ impl Conversation {
         Self {
             detail: None,
             description: None,
-            timeline: Vec::new(),
+            description_open: false,
+            description_long: false,
+            bodies: Vec::new(),
+            thread_bodies: Vec::new(),
+            hunks: Vec::new(),
+            filter: ActivityFilter::default(),
+            order: ActivityOrder::default(),
+            open_folds: HashSet::new(),
+            runs: None,
+            error_line: None,
+            viewer,
             composer,
             scroll: ScrollHandle::new(),
             _composer_events: composer_events,
@@ -243,14 +275,37 @@ impl Conversation {
     }
 
     pub fn set_detail(&mut self, detail: Rc<PrDetail>, cx: &mut Context<Self>) {
-        let mut order: Vec<usize> = (0..detail.timeline.len()).collect();
-        order.sort_by_key(|ix| timeline_item::timestamp(&detail.timeline[*ix]));
-        self.timeline = order
-            .into_iter()
-            .map(|ix| Entry::new(ix, &detail.timeline[ix]))
+        self.bodies = detail
+            .timeline
+            .iter()
+            .map(|item| match item {
+                TimelineItem::Comment { id, body, .. } => {
+                    Some(visible_block(format!("pr-comment-{id}"), body))
+                }
+                TimelineItem::Review { id, body, .. } if !body.trim().is_empty() => {
+                    Some(visible_block(format!("pr-review-{id}"), body))
+                }
+                _ => None,
+            })
             .collect();
-        self.description = (!detail.body.trim().is_empty())
-            .then(|| MarkdownBlock::new("pr-description".to_string(), &detail.body));
+        self.thread_bodies = detail
+            .threads
+            .iter()
+            .map(|thread| {
+                thread
+                    .comments
+                    .iter()
+                    .map(|comment| {
+                        visible_block(format!("pr-thread-comment-{}", comment.id), &comment.body)
+                    })
+                    .collect()
+            })
+            .collect();
+        self.hunks = thread_hunks(&detail);
+        let description = strip_html_comments(&detail.body);
+        self.description_long = is_long_description(&description);
+        self.description = (!description.trim().is_empty())
+            .then(|| MarkdownBlock::new("pr-description".to_string(), &description));
         self.composer.update(cx, |composer, cx| {
             composer.set_timeline(&detail.timeline, cx)
         });
@@ -258,26 +313,155 @@ impl Conversation {
         cx.notify();
     }
 
+    pub fn set_checks(
+        &mut self,
+        runs: Option<Rc<Vec<WorkflowRun>>>,
+        error_line: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let same_runs = match (&self.runs, &runs) {
+            (Some(known), Some(new)) => Rc::ptr_eq(known, new),
+            (None, None) => true,
+            _ => false,
+        };
+        if same_runs && self.error_line == error_line {
+            return;
+        }
+        self.runs = runs;
+        self.error_line = error_line;
+        cx.notify();
+    }
+
+    pub fn set_viewer(&mut self, viewer: Option<String>, cx: &mut Context<Self>) {
+        if self.viewer != viewer {
+            self.viewer = viewer;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_order(&mut self, cx: &mut Context<Self>) {
+        self.order = match self.order {
+            ActivityOrder::NewestFirst => ActivityOrder::OldestFirst,
+            ActivityOrder::OldestFirst => ActivityOrder::NewestFirst,
+        };
+        cx.notify();
+    }
+
+    pub(super) fn set_filter(&mut self, filter: ActivityFilter, cx: &mut Context<Self>) {
+        if self.filter != filter {
+            self.filter = filter;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_fold(&mut self, key: SharedString, cx: &mut Context<Self>) {
+        if !self.open_folds.remove(&key) {
+            self.open_folds.insert(key);
+        }
+        cx.notify();
+    }
+
     fn description(&self, detail: &PrDetail, now: DateTime<Utc>, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let pr = &detail.pr;
-        let body = match &self.description {
-            Some(description) => description.view().into_any_element(),
-            None => div()
-                .italic()
-                .text_color(theme.muted_foreground)
-                .child(labels::NO_DESCRIPTION)
-                .into_any_element(),
+        let header = h_flex()
+            .w_full()
+            .gap_2()
+            .items_center()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(ui::avatar(&pr.author, DESCRIPTION_AVATAR))
+            .child(
+                div()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child(labels::DESCRIPTION),
+            )
+            .child(labels::opened_ago(&pr.author, &ui::ago(now, pr.created_at)));
+        let Some(description) = &self.description else {
+            return v_flex().w_full().gap_2().child(header).child(
+                div()
+                    .italic()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(labels::NO_DESCRIPTION),
+            );
         };
-        flat_item(
-            &pr.author,
-            labels::OPENED_THIS_PR,
-            pr.created_at,
-            now,
-            Some(body),
-            cx,
-        )
+        let long = self.description_long;
+        let folded = long && !self.description_open;
+        let body = div().w_full().min_w_0().text_sm().child(description.view());
+        let body = if folded {
+            body.max_h(px(DESCRIPTION_FOLDED_HEIGHT)).overflow_hidden()
+        } else {
+            body
+        };
+        let toggle = long.then(|| {
+            let label = if folded {
+                labels::SHOW_DESCRIPTION
+            } else {
+                labels::HIDE_DESCRIPTION
+            };
+            h_flex().child(
+                link("pr-description-toggle", label, cx).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.description_open = !this.description_open;
+                        cx.notify();
+                    },
+                )),
+            )
+        });
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(header)
+            .child(body)
+            .children(toggle)
     }
+}
+
+pub fn is_long_description(body: &str) -> bool {
+    let body = body.trim();
+    body.lines().count() > LONG_DESCRIPTION_LINES || body.chars().count() > LONG_DESCRIPTION_CHARS
+}
+
+fn visible_block(id: String, body: &str) -> MarkdownBlock {
+    MarkdownBlock::new(id, &strip_html_comments(body))
+}
+
+fn thread_hunks(detail: &PrDetail) -> Vec<Option<String>> {
+    let mut known: HashMap<(&str, &str), Option<&str>> = HashMap::new();
+    let comments = detail
+        .timeline
+        .iter()
+        .filter_map(|item| match item {
+            TimelineItem::Review { comments, .. } => Some(comments),
+            _ => None,
+        })
+        .flatten();
+    for comment in comments {
+        let hunk = comment.diff_hunk.as_str();
+        known
+            .entry((comment.path.as_str(), comment.body.as_str()))
+            .and_modify(|seen| {
+                if *seen != Some(hunk) {
+                    *seen = None;
+                }
+            })
+            .or_insert(Some(hunk));
+    }
+    detail
+        .threads
+        .iter()
+        .map(|thread| {
+            let first = thread.comments.first()?;
+            known
+                .get(&(thread.path.as_str(), first.body.as_str()))
+                .copied()
+                .flatten()
+                .filter(|hunk| !hunk.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 impl Render for Conversation {
@@ -292,33 +476,18 @@ impl Render for Conversation {
             return scroller;
         };
         let now = Utc::now();
-        let notice = detail.truncated_timeline.then(|| {
-            let open =
-                cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ConversationEvent::OpenOnGithub));
-            div()
-                .w_full()
-                .py_3()
-                .child(truncated_notice("pr-timeline-open-github", open, cx))
-        });
-        let timeline = v_flex()
-            .w_full()
-            .child(self.description(&detail, now, cx))
-            .children(notice)
-            .children(self.timeline.iter().filter_map(|entry| {
-                let item = detail.timeline.get(entry.ix)?;
-                timeline_item(item, entry, &detail.labels, now, cx)
-            }));
         let content = v_flex()
             .w_full()
             .min_w_0()
             .max_w(px(TIMELINE_MAX_WIDTH))
             .mx_auto()
             .px_4()
-            .pb_4()
-            .gap_4()
+            .py_4()
+            .gap_5()
             .text_color(cx.theme().foreground)
-            .child(timeline)
-            .child(self.composer.clone());
+            .children(self.readiness_card(&detail, cx))
+            .child(self.description(&detail, now, cx))
+            .child(self.activity_section(&detail, now, cx));
         scroller.child(content)
     }
 }
@@ -357,4 +526,29 @@ pub fn truncated_notice(
                 .child(labels::OPEN_ON_GITHUB)
                 .on_click(on_open),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_descriptions_stay_open() {
+        assert!(!is_long_description(""));
+        assert!(!is_long_description("Uma frase.\n\nOutra frase."));
+    }
+
+    #[test]
+    fn many_lines_make_a_description_long() {
+        let body = (0..9)
+            .map(|ix| format!("linha {ix}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(is_long_description(&body));
+    }
+
+    #[test]
+    fn one_very_long_paragraph_is_long() {
+        assert!(is_long_description(&"palavra ".repeat(80)));
+    }
 }
