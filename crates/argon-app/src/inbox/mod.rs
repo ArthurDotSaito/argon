@@ -1,4 +1,6 @@
 mod browse;
+mod columns;
+mod columns_store;
 mod filter;
 mod inbox_view;
 mod items;

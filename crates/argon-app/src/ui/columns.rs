@@ -10,7 +10,10 @@ pub const COLUMN_HEADER_HEIGHT: f32 = 30.;
 pub const LIST_ROW_HEIGHT: f32 = 38.;
 pub const GROUP_ROW_HEIGHT: f32 = 28.;
 const ROW_BORDER_OPACITY: f32 = 0.45;
+pub const COLUMN_GAP: f32 = 12.;
+pub const ROW_HORIZONTAL_PADDING: f32 = ROW_PADDING_LEFT + ROW_SELECTION_BORDER + ROW_PADDING_RIGHT;
 const ROW_PADDING_LEFT: f32 = 8.;
+const ROW_PADDING_RIGHT: f32 = 12.;
 const ROW_SELECTION_BORDER: f32 = 2.;
 
 pub fn column_header(cx: &App) -> Div {
@@ -20,9 +23,9 @@ pub fn column_header(cx: &App) -> Div {
         .flex_none()
         .w_full()
         .items_center()
-        .gap_3()
+        .gap(px(COLUMN_GAP))
         .pl(px(ROW_PADDING_LEFT + ROW_SELECTION_BORDER))
-        .pr_3()
+        .pr(px(ROW_PADDING_RIGHT))
         .text_xs()
         .font_medium()
         .text_color(theme.muted_foreground)
@@ -38,9 +41,9 @@ pub fn list_row(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<
         .flex_none()
         .w_full()
         .items_center()
-        .gap_3()
+        .gap(px(COLUMN_GAP))
         .pl(px(ROW_PADDING_LEFT))
-        .pr_3()
+        .pr(px(ROW_PADDING_RIGHT))
         .overflow_hidden()
         .relative()
         .border_l_2()
