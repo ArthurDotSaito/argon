@@ -21,6 +21,7 @@ gpui_kit::actions!(
         CheckForUpdates,
         ToggleDiffMode,
         CancelComment,
+        CollapseReview,
         StartReview,
         ReviewWithAi,
         SummarizePr,

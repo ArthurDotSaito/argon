@@ -8,4 +8,4 @@ mod summary;
 pub use bus::{DraftsBus, DraftsChanged, ProjectsChanged};
 pub use card::{DraftActions, draft_blocks};
 pub use model::{DraftsEvent, DraftsModel, SubmitState};
-pub use summary::{EventOptions, comment_body, summarize};
+pub use summary::{DraftSummary, EventOptions, comment_body, summarize};

@@ -54,13 +54,15 @@ pub const EVENT_COMMENT: &str = "Comment";
 pub const EVENT_APPROVE: &str = "Approve";
 pub const EVENT_REQUEST_CHANGES: &str = "Request changes";
 pub const EVENT_COMMENT_HINT: &str = "Feedback geral, sem aprovar";
-pub const EVENT_APPROVE_HINT: &str = "Aprovar o merge destas mudanças";
-pub const EVENT_REQUEST_CHANGES_HINT: &str = "Feedback que precisa ser resolvido antes do merge";
+pub const EVENT_APPROVE_HINT: &str = "Libera o merge destas mudanças";
+pub const EVENT_REQUEST_CHANGES_HINT: &str = "Precisa ser resolvido antes do merge";
 pub const OWN_PR: &str = "O GitHub não permite aprovar ou pedir mudanças no seu próprio PR";
-pub const PENDING_COMMENTS: &str = "Comentários pendentes";
-pub const NO_PENDING: &str = "Nenhum comentário nas linhas.";
-pub const SUBMIT_REVIEW: &str = "Submit review";
-pub const DISCARD_REVIEW: &str = "Descartar review";
+pub const YOUR_REVIEW: &str = "Sua review";
+pub const COLLAPSE: &str = "Recolher";
+pub const WRITE: &str = "Escrever";
+pub const PREVIEW: &str = "Pré-visualizar";
+pub const PREVIEW_EMPTY: &str = "Nada para pré-visualizar.";
+pub const SUBMIT_SHORTCUT: &str = "Enviar (Ctrl+Enter)";
 pub const DISCARD_REVIEW_TITLE: &str = "Descartar review?";
 pub const REVIEW_SENT: &str = "Review enviada";
 pub const DIFF_STALE: &str = "O diff exibido está desatualizado — recarregue antes de enviar";
@@ -122,6 +124,13 @@ pub fn pending_count(count: usize) -> String {
     match count {
         1 => "1 comentário pendente".to_string(),
         count => format!("{count} comentários pendentes"),
+    }
+}
+
+pub fn line_comments(count: usize) -> String {
+    match count {
+        1 => "1 comentário nas linhas".to_string(),
+        count => format!("{count} comentários nas linhas"),
     }
 }
 

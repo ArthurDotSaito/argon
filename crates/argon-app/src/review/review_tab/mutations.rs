@@ -4,11 +4,11 @@ use std::sync::Arc;
 use argon_github::{GithubClient, GithubError};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{Context, Window};
+use gpui_kit::{AppContext as _, Context, Window};
 
 use super::{ReviewScope, ReviewTab, ReviewTabEvent};
+use crate::review::composer::{ComposerEvent, ReviewComposer};
 use crate::review::drafts::{DraftsEvent, EventOptions};
-use crate::review::finish_popover::{self, FinishEvent};
 use crate::review::labels;
 use crate::review::mutation::run_detached;
 use crate::services::ServiceError;
@@ -82,28 +82,60 @@ impl ReviewTab {
     }
 
     pub fn open_finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .finish
-            .as_ref()
-            .is_some_and(|(finish, _)| finish.upgrade().is_some())
-        {
+        self.open_composer(true, window, cx);
+    }
+
+    fn open_composer(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if focus {
+            self.focus_pending = false;
+        }
+        if let Some((composer, _)) = &self.composer {
+            if focus {
+                composer.update(cx, |composer, cx| composer.focus(cx));
+            }
             return;
         }
         let Some(author) = self.detail.as_ref().map(|detail| detail.pr.author.clone()) else {
             return;
         };
         let options = EventOptions::for_viewer(&author, self.viewer_login.as_deref());
-        let finish = finish_popover::open(self.drafts.clone(), options, window, cx);
-        let subscription = cx.subscribe(&finish, |this, _, event, cx| match event {
-            FinishEvent::Reload => this.reload_diff(cx),
-            FinishEvent::Reveal { path, line, side } => {
-                if this.scope != ReviewScope::All {
-                    this.set_scope(ReviewScope::All, cx);
-                }
-                this.reveal(path, *line, *side, cx);
+        let drafts = self.drafts.clone();
+        let composer = cx.new(|cx| {
+            let mut composer = ReviewComposer::new(drafts, options, window, cx);
+            if !focus {
+                composer.without_focus();
             }
+            composer
         });
-        self.finish = Some((finish.downgrade(), subscription));
+        let subscription =
+            cx.subscribe_in(
+                &composer,
+                window,
+                |this, _, event, window, cx| match event {
+                    ComposerEvent::Reload => this.reload_diff(cx),
+                    ComposerEvent::Reveal { path, line, side } => {
+                        if this.scope != ReviewScope::All {
+                            this.set_scope(ReviewScope::All, cx);
+                        }
+                        this.reveal(path, *line, *side, cx);
+                    }
+                    ComposerEvent::Collapse => this.collapse_composer(Some(window), cx),
+                },
+            );
+        self.composer = Some((composer, subscription));
+        cx.notify();
+    }
+
+    pub(super) fn collapse_composer(&mut self, window: Option<&Window>, cx: &mut Context<Self>) {
+        let Some((composer, _)) = self.composer.take() else {
+            return;
+        };
+        if let Some(window) = window
+            && composer.read(cx).contains_focus(window, cx)
+        {
+            self.focus_pending = true;
+        }
+        cx.notify();
     }
 
     pub(super) fn on_drafts_event(
@@ -114,15 +146,14 @@ impl ReviewTab {
     ) {
         match event {
             DraftsEvent::Submitted => {
-                let open = self
-                    .finish
-                    .take()
-                    .is_some_and(|(finish, _)| finish.upgrade().is_some());
-                if open && window.has_active_dialog(cx) {
-                    window.close_dialog(cx);
-                }
+                self.collapse_composer(Some(window), cx);
                 window.push_notification(Notification::success(labels::REVIEW_SENT), cx);
                 cx.emit(ReviewTabEvent::Reload);
+            }
+            DraftsEvent::SubmitFailed => {
+                if self.composer.is_none() && self.dock_visible(cx) {
+                    self.open_composer(false, window, cx);
+                }
             }
             DraftsEvent::Failed(error) => {
                 self.error = Some(error.clone());

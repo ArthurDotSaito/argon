@@ -1,10 +1,10 @@
 mod comment_editor;
+mod composer;
 mod confirm;
 mod diff_view;
 mod drafts;
 mod file_diff;
 mod file_tree;
-mod finish_popover;
 mod labels;
 mod mutation;
 mod review_bar;

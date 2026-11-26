@@ -1,10 +1,11 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    App, ClickEvent, Context, Div, Focusable as _, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    div, px,
+    AnyElement, App, ClickEvent, Context, Div, Focusable as _, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Window, div, px,
 };
 
 use super::{Files, ReviewScope, ReviewTab, ReviewTabEvent};
@@ -14,6 +15,9 @@ use crate::review::review_bar::{BarProps, review_bar};
 
 const TREE_WIDTH: f32 = 280.;
 const TOOLBAR_HEIGHT: f32 = 36.;
+const COMPOSER_HEIGHT: f32 = 320.;
+const COMPOSER_MIN: f32 = 220.;
+const COMPOSER_MAX: f32 = 600.;
 
 impl ReviewTab {
     fn commit_banner(&self, oid: &str, headline: &str, cx: &mut Context<Self>) -> Div {
@@ -134,11 +138,8 @@ impl ReviewTab {
         )
     }
 
-    fn bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+    fn bar(&self, cx: &mut Context<Self>) -> Div {
         let drafts = self.drafts.read(cx);
-        if !drafts.in_progress() && self.scope != ReviewScope::All {
-            return None;
-        }
         let props = BarProps {
             count: drafts.drafts().len(),
             in_progress: drafts.in_progress(),
@@ -147,7 +148,28 @@ impl ReviewTab {
         };
         let on_finish =
             cx.listener(|this, _: &ClickEvent, window, cx| this.open_finish(window, cx));
-        Some(review_bar(props, on_finish, cx))
+        review_bar(props, on_finish, cx)
+    }
+
+    fn content(&self, body: Div, cx: &mut Context<Self>) -> AnyElement {
+        match &self.composer {
+            Some((composer, _)) => v_resizable("review-composer-split")
+                .with_state(&self.split)
+                .child(resizable_panel().child(body))
+                .child(
+                    resizable_panel()
+                        .size(px(COMPOSER_HEIGHT))
+                        .size_range(px(COMPOSER_MIN)..px(COMPOSER_MAX))
+                        .fixed()
+                        .child(composer.clone()),
+                )
+                .into_any_element(),
+            None => v_flex()
+                .size_full()
+                .child(div().flex_1().min_h_0().child(body))
+                .children(self.dock_visible(cx).then(|| self.bar(cx)))
+                .into_any_element(),
+        }
     }
 
     fn body(&self, cx: &mut Context<Self>) -> Div {
@@ -254,7 +276,7 @@ impl Render for ReviewTab {
         };
         let stale = self.stale_banner(cx);
         let body = self.body(cx);
-        let bar = self.bar(cx);
+        let content = self.content(body, cx);
         v_flex()
             .size_full()
             .children(notice)
@@ -262,7 +284,6 @@ impl Render for ReviewTab {
             .children(commit)
             .children(error)
             .children(outside)
-            .child(div().flex_1().min_h_0().child(body))
-            .children(bar)
+            .child(div().flex_1().min_h_0().child(content))
     }
 }
