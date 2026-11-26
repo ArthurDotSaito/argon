@@ -9,15 +9,15 @@ use std::rc::Rc;
 
 use argon_core::Side;
 use argon_github::PrDetail;
+use gpui_kit::component::resizable::ResizableState;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task,
-    WeakEntity, Window,
+    App, AppContext as _, Context, Entity, EventEmitter, SharedString, Subscription, Task, Window,
 };
 
+use super::composer::ReviewComposer;
 use super::diff_view::{BlockSource, DiffView, DiffViewEvent};
 use super::drafts::DraftsModel;
 use super::file_tree::{FileTree, FileTreeEvent};
-use super::finish_popover::FinishReview;
 use super::labels;
 use super::threads::{ThreadUi, ThreadUiEvent, file_threads};
 use crate::services::{AppServices, Services};
@@ -64,7 +64,8 @@ pub struct ReviewTab {
     drafts: Entity<DraftsModel>,
     editor: Option<OpenEditor>,
     viewer_login: Option<String>,
-    finish: Option<(WeakEntity<FinishReview>, Subscription)>,
+    composer: Option<(Entity<ReviewComposer>, Subscription)>,
+    split: Entity<ResizableState>,
     services: Option<Services>,
     load_task: Option<Task<()>>,
     viewed_inflight: HashSet<String>,
@@ -149,7 +150,8 @@ impl ReviewTab {
             drafts,
             editor: None,
             viewer_login: None,
-            finish: None,
+            composer: None,
+            split: cx.new(|_| ResizableState::default()),
             services: cx
                 .try_global::<AppServices>()
                 .map(|global| global.0.clone()),
@@ -233,6 +235,9 @@ impl ReviewTab {
             self.scope = scope;
         }
         self.notice = None;
+        if !self.dock_visible(cx) {
+            self.collapse_composer(None, cx);
+        }
         if self.active && matches!(self.files, Files::Idle | Files::Failed(_)) {
             self.load_files(false, cx);
         }
@@ -256,6 +261,10 @@ impl ReviewTab {
             Some(EditorTarget::Line { path, anchor, .. }) => Some((path.clone(), anchor.0)),
             _ => None,
         }
+    }
+
+    fn dock_visible(&self, cx: &App) -> bool {
+        self.scope == ReviewScope::All || self.drafts.read(cx).in_progress()
     }
 
     fn diff_paths(&self, cx: &Context<Self>) -> Vec<String> {

@@ -23,6 +23,7 @@ pub enum SubmitState {
 
 pub enum DraftsEvent {
     Submitted,
+    SubmitFailed,
     Failed(SharedString),
 }
 
@@ -337,6 +338,7 @@ impl DraftsModel {
                         tracing::warn!(%error, "failed to submit review");
                         this.suspects = suspect_drafts(&error, &this.drafts);
                         this.submit = SubmitState::Failed(labels::submit_failed(&error).into());
+                        cx.emit(DraftsEvent::SubmitFailed);
                     }
                 }
                 cx.notify();

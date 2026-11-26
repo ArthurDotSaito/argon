@@ -9,7 +9,10 @@ pub struct DraftSummary {
     pub line: u32,
     pub side: Side,
     pub label: String,
+    pub excerpt: String,
 }
+
+const EXCERPT_CHARS: usize = 80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EventOptions {
@@ -46,6 +49,19 @@ pub fn location(draft: &DraftComment) -> String {
     }
 }
 
+pub fn excerpt(body: &str) -> String {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if line.chars().count() <= EXCERPT_CHARS {
+        return line.to_string();
+    }
+    let cut: String = line.chars().take(EXCERPT_CHARS).collect();
+    format!("{}…", cut.trim_end())
+}
+
 pub fn summarize(drafts: &[DraftComment]) -> Vec<DraftSummary> {
     let mut items: Vec<DraftSummary> = drafts
         .iter()
@@ -55,6 +71,7 @@ pub fn summarize(drafts: &[DraftComment]) -> Vec<DraftSummary> {
             line: draft.line,
             side: draft.side,
             label: location(draft),
+            excerpt: excerpt(&draft.body),
         })
         .collect();
     items.sort_by(|a, b| {
@@ -192,6 +209,30 @@ mod tests {
                 "src/b.ts:4".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn excerpt_takes_the_first_non_blank_line() {
+        assert_eq!(excerpt("  curto  "), "curto");
+        assert_eq!(excerpt("\n  \n  segunda linha\nterceira"), "segunda linha");
+        assert_eq!(excerpt(" \n\t"), "");
+    }
+
+    #[test]
+    fn excerpt_cuts_long_lines_on_char_boundaries() {
+        let long = "ação ".repeat(30);
+        let cut = excerpt(&long);
+        assert!(cut.ends_with('…'));
+        assert!(cut.chars().count() <= EXCERPT_CHARS + 1);
+        assert!(long.starts_with(cut.trim_end_matches('…')));
+        let exact = "é".repeat(EXCERPT_CHARS);
+        assert_eq!(excerpt(&exact), exact);
+    }
+
+    #[test]
+    fn summary_carries_the_draft_excerpt() {
+        let drafts = vec![draft(1, "a.ts", 3, Side::Right, None)];
+        assert_eq!(summarize(&drafts)[0].excerpt, "body 1");
     }
 
     #[test]
