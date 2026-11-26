@@ -117,4 +117,27 @@ mod tests {
         assert!(dark.mode.is_dark());
         assert!(!light.mode.is_dark());
     }
+
+    #[test]
+    fn syntax_colors_follow_the_applied_theme() {
+        let dark = Rc::new(parse_theme("one-dark", ONE_DARK).expect("one dark parses"));
+        let light = Rc::new(parse_theme("one-light", ONE_LIGHT).expect("one light parses"));
+        let mut theme = Theme::default();
+        theme.apply_config(&dark);
+        assert!(theme.highlight_theme.appearance.is_dark());
+        theme.apply_config(&light);
+        assert!(!theme.highlight_theme.appearance.is_dark());
+    }
+
+    #[test]
+    fn both_embedded_themes_color_the_common_tokens() {
+        for (name, source) in [("one-dark", ONE_DARK), ("one-light", ONE_LIGHT)] {
+            let config = parse_theme(name, source).expect("theme parses");
+            let syntax = config.highlight.expect("theme has syntax colors").syntax;
+            for token in ["keyword", "string", "comment", "property", "type", "number"] {
+                assert!(syntax.style(token).is_some(), "{name} misses {token}");
+            }
+            assert!(syntax.comment_doc.is_some(), "{name} misses comment_doc");
+        }
+    }
 }
